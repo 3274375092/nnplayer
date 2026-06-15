@@ -28,9 +28,11 @@ pub fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
 
-    // 启动前先读取持久化的 session，准备初始 cookie
-    let initial_cookie = commands::load_session_meta().map(|r| r.cookie);
-    let initial_app_state = AppState::new(initial_cookie)
+    // 启动前先读取持久化的 session，准备初始 cookie 和 AuthState
+    let record = commands::load_session_meta();
+    let initial_cookie = record.as_ref().map(|r| r.cookie.clone());
+    let initial_auth = record.as_ref().map(commands::session_to_auth).unwrap_or_default();
+    let initial_app_state = AppState::new(initial_cookie, initial_auth)
         .expect("创建 AppState 失败");
 
     tauri::Builder::default()

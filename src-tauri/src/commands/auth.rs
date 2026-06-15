@@ -509,6 +509,17 @@ pub fn load_session_meta() -> Option<SessionRecord> {
     toml::from_str(&raw).ok()
 }
 
+/// 从 session 记录中提取 AuthState 的初始值（同步，用于 AppState::new）。
+pub fn session_to_auth(record: &SessionRecord) -> crate::state::AuthState {
+    crate::state::AuthState {
+        user_id: Some(record.user_id),
+        nickname: Some(record.nickname.clone()),
+        cookie: Some(record.cookie.clone()),
+        login_method: Some(record.login_method.clone()),
+        avatar_url: record.avatar_url.clone(),
+    }
+}
+
 fn session_path() -> Option<PathBuf> {
     dirs_auth_session()
 }

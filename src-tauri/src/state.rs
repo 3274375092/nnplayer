@@ -57,7 +57,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(cookie: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(cookie: Option<String>, auth: AuthState) -> anyhow::Result<Self> {
         let http = Client::builder()
             .user_agent(concat!(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ",
@@ -70,7 +70,7 @@ impl AppState {
 
         Ok(Self {
             api: Arc::new(Mutex::new(api)),
-            auth: Arc::new(Mutex::new(AuthState::default())),
+            auth: Arc::new(Mutex::new(auth)),
         })
     }
 

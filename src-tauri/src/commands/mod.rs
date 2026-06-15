@@ -12,8 +12,9 @@ pub mod user;
 
 // 暴露给 lib.rs 的命令函数
 pub use auth::{
-    get_auth_state, login_qr_check, login_qr_key, login_send_captcha, login_with_account,
-    login_with_captcha, logout, save_cookie, clear_session_meta, load_session_meta,
+    clear_session_meta, get_auth_state, load_session_meta, login_qr_check, login_qr_key,
+    login_send_captcha, login_with_account, login_with_captcha, logout, save_cookie,
+    session_to_auth,
 };
 pub use lyric::get_lyric;
 pub use music::{get_daily_recommend, get_song_url, search_songs, search_suggest};
