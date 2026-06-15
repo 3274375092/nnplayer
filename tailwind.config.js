@@ -32,6 +32,22 @@ export default {
         // 让过渡更平滑
         DEFAULT: "color, background-color, border-color, transform, opacity",
       },
+      keyframes: {
+        // 阶段4：播放栏封面旋转
+        "spin-slow": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+        // 阶段4：骨架屏微光闪烁
+        shimmer: {
+          "0%": { backgroundPosition: "-400px 0" },
+          "100%": { backgroundPosition: "400px 0" },
+        },
+      },
+      animation: {
+        "spin-slow": "spin-slow 8s linear infinite",
+        shimmer: "shimmer 1.6s linear infinite",
+      },
     },
   },
   plugins: [],

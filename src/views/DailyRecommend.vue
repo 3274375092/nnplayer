@@ -1,9 +1,10 @@
 <script setup lang="ts">
-// 每日推荐页：调用 get_daily_recommend，展示列表。
+// 每日推荐页：调用 get_daily_recommend，展示列表 + 歌词面板。
 // 鉴权接口：未登录会被路由守卫拦截。
 
 import { onMounted, ref } from "vue";
 import SongList from "@/components/SongList.vue";
+import LyricPanel from "@/components/LyricPanel.vue";
 import { getDailyRecommend } from "@/composables/useNcmApi";
 import type { DailyRecommend } from "@/types/music";
 
@@ -44,10 +45,15 @@ onMounted(load);
       <button class="btn btn-primary" @click="load">重试</button>
     </div>
 
-    <SongList
+    <div
       v-else-if="data"
-      :songs="data.songs"
-      title="今日推荐"
-    />
+      class="grid gap-4"
+      style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
+    >
+      <SongList :songs="data.songs" title="今日推荐" />
+      <div class="self-start sticky top-4">
+        <LyricPanel />
+      </div>
+    </div>
   </div>
 </template>

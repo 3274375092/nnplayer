@@ -5,6 +5,7 @@
 //   - 底部 80px 播放栏（固定）
 //
 // 中间内容区使用 calc 减去底部高度，保证不被播放器遮挡。
+// （阶段4）路由切换使用 fade-slide 过渡。
 
 import { onMounted } from "vue";
 import Sidebar from "@/components/Sidebar.vue";
@@ -30,7 +31,7 @@ onMounted(() => {
       style="height: calc(100% - 80px)"
     >
       <router-view v-slot="{ Component }">
-        <transition name="fade" mode="out-in">
+        <transition name="fade-slide" mode="out-in">
           <component :is="Component" />
         </transition>
       </router-view>
@@ -42,7 +43,21 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* 路由切换淡入淡出 */
+/* 阶段4：路由切换 fade + 轻微 slide */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 兼容旧的 fade 名称，避免破坏潜在引用 */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.18s ease;

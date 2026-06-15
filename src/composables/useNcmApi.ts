@@ -8,9 +8,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AuthState,
   DailyRecommend,
+  LyricResult,
   Playlist,
   PlaylistDetail,
   SearchResult,
+  SearchSuggestion,
   Song,
   SongUrl,
 } from "@/types/music";
@@ -31,10 +33,13 @@ export const Commands = {
   Logout: "logout",
   // 业务
   SearchSongs: "search_songs",
+  SearchSuggest: "search_suggest",
   GetDailyRecommend: "get_daily_recommend",
   GetSongUrl: "get_song_url",
   GetUserPlaylists: "get_user_playlists",
   GetPlaylistDetail: "get_playlist_detail",
+  // 歌词
+  GetLyric: "get_lyric",
 } as const;
 
 /**
@@ -119,6 +124,14 @@ export function searchSongs(keyword: string, limit = 30) {
   return call<SearchResult>(Commands.SearchSongs, { keyword, limit });
 }
 
+/**
+ * 搜索建议（下拉浮层用，NCM 接口 /search/suggest/web）。
+ * 返回精简后的 [{ keyword, song? }, ...]
+ */
+export function searchSuggest(keyword: string) {
+  return call<SearchSuggestion[]>(Commands.SearchSuggest, { keyword });
+}
+
 export function getDailyRecommend() {
   return call<DailyRecommend>(Commands.GetDailyRecommend);
 }
@@ -137,4 +150,13 @@ export function getPlaylistDetail(playlistId: number) {
 
 export function pickSongIds(songs: Song[]): number[] {
   return songs.map((s) => s.id);
+}
+
+// =============== 歌词（阶段3） ===============
+
+/**
+ * 获取歌词。返回 { lrc, tLrc }。
+ */
+export function getLyric(songId: number) {
+  return call<LyricResult>(Commands.GetLyric, { songId });
 }

@@ -106,12 +106,13 @@ export const useUserStore = defineStore("user", () => {
   async function logout() {
     try {
       await apiLogout();
-    } finally {
-      loggedIn.value = false;
-      nickname.value = "";
-      userId.value = null;
-      loginMethod.value = "unknown";
+    } catch (e) {
+      console.warn("[user] 后端 logout 失败，继续清本地状态", e);
     }
+    loggedIn.value = false;
+    nickname.value = "";
+    userId.value = null;
+    loginMethod.value = "unknown";
   }
 
   return {

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 // 歌单详情页：动态路由 /playlist/:id
-// 头部展示封面与简介，下方展示歌曲列表。
+// 头部展示封面与简介，下方展示歌曲列表 + 歌词面板。
+// （阶段4）加载中显示 SkeletonCard。
 
 import { onMounted, ref, watch } from "vue";
 import SongList from "@/components/SongList.vue";
+import LyricPanel from "@/components/LyricPanel.vue";
+import SkeletonCard from "@/components/SkeletonCard.vue";
 import { getPlaylistDetail } from "@/composables/useNcmApi";
 import type { PlaylistDetail } from "@/types/music";
 
@@ -37,9 +40,18 @@ onMounted(load);
 
 <template>
   <div class="px-8 py-6">
-    <div v-if="loading" class="text-text-secondary py-10 text-center">
-      加载中…
-    </div>
+    <!-- 阶段4：骨架屏（头 + 列表） -->
+    <template v-if="loading">
+      <header class="flex gap-6 mb-6 items-end">
+        <div class="w-44 h-44 rounded-card skeleton" />
+        <div class="flex-1 min-w-0">
+          <div class="skeleton h-3 w-12 rounded mb-2" />
+          <div class="skeleton h-7 w-2/3 rounded mb-3" />
+          <div class="skeleton h-3 w-1/3 rounded" />
+        </div>
+      </header>
+      <SkeletonCard variant="list" :rows="8" />
+    </template>
 
     <div v-else-if="error" class="card p-6 text-center">
       <div class="text-accent mb-3">{{ error }}</div>
@@ -73,8 +85,16 @@ onMounted(load);
         </div>
       </header>
 
-      <!-- 歌曲列表 -->
-      <SongList :songs="detail.songs" :show-index="true" />
+      <!-- 歌曲列表 + 歌词面板 -->
+      <div
+        class="grid gap-4"
+        style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
+      >
+        <SongList :songs="detail.songs" :show-index="true" />
+        <div class="self-start sticky top-4">
+          <LyricPanel />
+        </div>
+      </div>
     </template>
   </div>
 </template>

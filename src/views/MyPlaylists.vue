@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // 我的歌单页：网格展示用户歌单封面，点击进入详情。
+// （阶段4）数据未到达时展示 SkeletonCard 骨架屏。
 
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import SongListItem from "@/components/SongListItem.vue";
+import SkeletonCard from "@/components/SkeletonCard.vue";
 import { getUserPlaylists } from "@/composables/useNcmApi";
 import type { Playlist } from "@/types/music";
 
@@ -37,8 +39,17 @@ onMounted(load);
       <h1 class="text-2xl font-semibold">我的歌单</h1>
     </header>
 
-    <div v-if="loading" class="text-text-secondary py-10 text-center">
-      加载中…
+    <!-- 阶段4：骨架屏 -->
+    <div
+      v-if="loading"
+      class="grid gap-4"
+      style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))"
+    >
+      <SkeletonCard
+        v-for="i in 8"
+        :key="i"
+        variant="grid"
+      />
     </div>
 
     <div v-else-if="error" class="card p-6 text-center">

@@ -60,10 +60,13 @@ pub fn run() {
             commands::auth::logout,
             // === 业务接口 ===
             commands::music::search_songs,
+            commands::music::search_suggest,
             commands::music::get_daily_recommend,
             commands::music::get_song_url,
             commands::user::get_user_playlists,
             commands::user::get_playlist_detail,
+            // === 歌词 ===
+            commands::lyric::get_lyric,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

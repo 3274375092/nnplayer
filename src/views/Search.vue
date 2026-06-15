@@ -3,10 +3,12 @@
 //   1. 防抖输入 500ms
 //   2. 监听路由 query.q 自动触发搜索
 //   3. 支持手动回车立即触发
+//   4. （阶段3）右侧展示歌词面板
 
 import { onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
+import LyricPanel from "@/components/LyricPanel.vue";
 import { searchSongs } from "@/composables/useNcmApi";
 import type { Song } from "@/types/music";
 
@@ -96,11 +98,16 @@ onMounted(() => {
       {{ error }}
     </div>
 
-    <SongList
+    <div
       v-else-if="results.length > 0"
-      :songs="results"
-      title="搜索结果"
-    />
+      class="grid gap-4"
+      style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
+    >
+      <SongList :songs="results" title="搜索结果" />
+      <div class="self-start sticky top-4">
+        <LyricPanel />
+      </div>
+    </div>
 
     <div
       v-else-if="keyword"

@@ -49,6 +49,18 @@ export interface DailyRecommend {
   date: string;
 }
 
+// 搜索建议（阶段1）
+export interface SearchSuggestion {
+  keyword: string;
+  song?: Song;
+}
+
+// 歌词（阶段3）
+export interface LyricResult {
+  lrc: string | null;
+  tLrc: string | null;
+}
+
 // 登录态
 export interface AuthState {
   loggedIn: boolean;

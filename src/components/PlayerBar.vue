@@ -58,9 +58,10 @@ const modeIcon = computed(() => {
     style="--tw-bg-opacity: 0.85"
   >
     <!-- 左侧：当前歌曲信息 -->
-    <div class="flex items-center gap-3 w-[260px] shrink-0">
+    <div class="flex items-center gap-3 w-[300px] shrink-0">
       <div
-        class="w-12 h-12 rounded-btn bg-hover flex items-center justify-center text-text-secondary text-xs shrink-0 overflow-hidden"
+        class="w-12 h-12 rounded-full bg-hover flex items-center justify-center text-text-secondary text-xs shrink-0 overflow-hidden"
+        :class="{ 'animate-spin-slow': player.audioState.playing }"
       >
         <img
           v-if="player.currentSong?.picUrl"
@@ -70,7 +71,7 @@ const modeIcon = computed(() => {
         />
         <span v-else>♪</span>
       </div>
-      <div class="min-w-0">
+      <div class="min-w-0 flex-1">
         <div class="text-sm font-medium truncate">
           {{ player.currentSong?.name ?? "尚未播放" }}
         </div>

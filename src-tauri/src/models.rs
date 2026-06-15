@@ -62,3 +62,23 @@ pub struct DailyRecommend {
     pub songs: Vec<Song>,
     pub date: String,
 }
+
+/// 搜索建议单条结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSuggestion {
+    /// 建议关键词
+    pub keyword: String,
+    /// 命中歌曲（可能为空，NCM 接口字段为 order / songs，前端只关心 songs）
+    pub song: Option<Song>,
+}
+
+/// 歌词响应（仅返回精简的两个字段，避免大 JSON 整坨返回前端）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricResult {
+    /// 原文 LRC
+    pub lrc: Option<String>,
+    /// 翻译 LRC（若存在）
+    pub t_lrc: Option<String>,
+}

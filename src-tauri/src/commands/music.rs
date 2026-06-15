@@ -5,7 +5,7 @@ use ncm_api::Query;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::models::{DailyRecommend, SearchResult, SongUrl};
+use crate::models::{DailyRecommend, SearchResult, SearchSuggestion, Song, SongUrl};
 use crate::state::AppState;
 
 /// 搜索歌曲。
@@ -172,6 +172,109 @@ pub async fn get_song_url(
         .unwrap_or(320_000) as u32;
 
     Ok(SongUrl { id: song_id, url, bitrate: br })
+}
+
+/// 搜索建议（自动补全下拉浮层用）。
+/// NCM 接口 `/search/suggest/web` 返回结构：
+///   result.order: ["xxx", "yyy"]（关键词）
+///   result.songs: [{...}, ...]（命中歌曲，按 order 同序对齐）
+#[tauri::command]
+pub async fn search_suggest(
+    state: State<'_, AppState>,
+    keyword: String,
+) -> AppResult<Vec<SearchSuggestion>> {
+    state.auth.lock().await.require_login()?;
+
+    if keyword.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let api = state.api.lock().await;
+    let cookie = state.auth.lock().await.cookie.clone().unwrap_or_default();
+
+    let resp = api
+        .search_suggest(
+            &Query::new()
+                .cookie(&cookie)
+                .param("keywords", &keyword)
+                .param("type", "web"),
+        )
+        .await
+        .map_err(crate::commands::auth::map_ncm_err)?;
+
+    // 抽取 result.order + result.songs
+    let orders: Vec<String> = resp
+        .body
+        .pointer("/result/order")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|t| t.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let raw_songs = resp
+        .body
+        .pointer("/result/songs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // 解析候选歌曲（按 NCM 文档：songs 与 order 顺序对应；缺失部分降级为空 song）
+    let songs: Vec<Song> = raw_songs
+        .into_iter()
+        .filter_map(|s| {
+            let id = s.get("id")?.as_u64()?;
+            let name = s.get("name")?.as_str()?.to_string();
+            let artists = s
+                .pointer("/ar")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                })
+                .unwrap_or_default();
+            let album = s
+                .pointer("/al/name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let duration = s
+                .get("duration")
+                .or_else(|| s.get("dt"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let pic_url = s
+                .pointer("/al/picUrl")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Some(Song { id, name, artists, album, duration, pic_url })
+        })
+        .collect();
+
+    // 合并：先按 order 顺序输出（用 songs 中位置匹配的 song），末尾追加多余 songs
+    let mut out: Vec<SearchSuggestion> = Vec::with_capacity(orders.len().max(songs.len()));
+    for (idx, kw) in orders.iter().enumerate() {
+        let song = songs.get(idx).cloned();
+        out.push(SearchSuggestion {
+            keyword: kw.clone(),
+            song,
+        });
+    }
+    // 防御：若 songs 比 order 长，把多出的歌曲作为 keyword="" 追加
+    if songs.len() > orders.len() {
+        for s in songs.into_iter().skip(orders.len()) {
+            out.push(SearchSuggestion {
+                keyword: String::new(),
+                song: Some(s),
+            });
+        }
+    }
+
+    Ok(out)
 }
 
 // ============================================================
