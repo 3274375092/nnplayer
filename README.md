@@ -4,7 +4,13 @@
 > Rust 端通过本地 crate `ncm-api-rs` 调用网易云 API,前端用 `@tauri-apps/api` 通过 `invoke` 桥接。
 > 主题色由当前播放的封面自动抽取(柔和米黄 / 暖橘红 accent 体系)。
 
-![daily recommend](docs/screenshots/phase-5-daily-recommend.png)
+![NowPlaying 全屏播放页](screenshots/now-playing.png)
+
+## 预览
+
+| 每日推荐 + 歌词面板 | 我的歌单(网格) | 播放队列抽屉 |
+| --- | --- | --- |
+| ![](screenshots/daily-recommend.png) | ![](screenshots/my-playlists.png) | ![](screenshots/queue-drawer.png) |
 
 ## 特性
 
@@ -128,6 +134,7 @@ nnplayer/
 │   ├── src/models.rs     # 精简 DTO
 │   └── capabilities/     # 窗口权限
 ├── ncm-api-rs/           # 网易云 API 本地 crate
+├── screenshots/          # README 用图(本目录)
 ├── docs/                 # 设计文档(本地,gitignored)
 └── app-icon.svg          # 应用图标源文件
 ```
