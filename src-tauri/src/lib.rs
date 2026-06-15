@@ -177,6 +177,7 @@ async fn restore_session(app: &tauri::AppHandle) {
 // - Rust emit 是单向信号，UI 与 store 同步由 Vue 负责
 // - 若 Rust 端持有 audio 状态会引入双份状态同步问题
 
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -194,7 +195,11 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         &[&toggle_item, &prev_item, &next_item, &lyrics_item, &separator, &quit_item],
     )?;
 
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
+        .expect("加载托盘图标失败");
+
     let _tray = TrayIconBuilder::with_id("main")
+        .icon(icon)
         .menu(&menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();

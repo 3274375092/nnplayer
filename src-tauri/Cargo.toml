@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 # - brotli 8.0.3 用了 nightly-only `impl Allocator for StandardAlloc`，在
 #   stable 1.96 / nightly 1.86+ 编译失败。详见
 #   https://github.com/dropbox/rust-brotli/issues/126
-tauri = { version = "2", default-features = false, features = ["wry", "tray-icon"] }
+tauri = { version = "2", default-features = false, features = ["wry", "tray-icon", "image-png"] }
 # 单独禁用 tauri-macros 的 compression，否则仍会拉入 brotli
 tauri-macros = { version = "2", default-features = false }
 
