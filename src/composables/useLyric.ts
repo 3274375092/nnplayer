@@ -13,6 +13,7 @@
 import {
   computed,
   ref,
+  shallowRef,
   watch,
   type ComputedRef,
   type Ref,
@@ -24,6 +25,7 @@ import {
   findActiveLineIndex,
   parseKaraokeLine,
   parseLrc,
+  parseYrc,
   type LyricLine,
 } from "@/utils/lrcParser";
 import { usePlayerStore } from "@/stores/player";
@@ -53,6 +55,7 @@ export function useLyric(): UseLyricReturn {
   const player = usePlayerStore();
 
   const lines = ref<LyricLine[]>([]);
+  const yrcLines = shallowRef<ReturnType<typeof parseYrc>>([]);
   const activeLineIndex = ref<number>(-1);
   const progressMs = ref<number>(0);
   const loading = ref<boolean>(false);
@@ -61,19 +64,32 @@ export function useLyric(): UseLyricReturn {
 
   const hasLyric = computed(() => lines.value.length > 0);
 
-  /**
-   * 当前行的卡拉OK 字符时间窗。
-   * 时间窗 = [上一行结束时间, 下一行开始时间]，按字符数等分。
-   */
   const karaokeTokens = computed(() => {
     const idx = activeLineIndex.value;
     if (idx < 0 || idx >= lines.value.length) return [];
     const cur = lines.value[idx];
-    const prev = idx > 0 ? lines.value[idx - 1] : null;
+
+    // 优先使用 YRC 逐字时间戳（转成行内相对偏移）
+    const yrcLine = yrcLines.value.find(
+      (yl) => Math.abs(yl.time - cur.time) < 20,
+    );
+    if (yrcLine && yrcLine.words.length > 0) {
+      return yrcLine.words.map((w) => ({
+        char: w.char,
+        startMs: w.startMs - cur.time,
+        endMs: w.startMs + w.duration - cur.time,
+      }));
+    }
+
+    // 回退：伪卡拉OK 等分
     const next = idx + 1 < lines.value.length ? lines.value[idx + 1] : null;
-    const prevMs = prev ? prev.time : -1;
     const nextMs = next ? next.time : -1;
-    return parseKaraokeLine(cur.text, prevMs, nextMs);
+    const tokens = parseKaraokeLine(cur.text, cur.time, nextMs);
+    return tokens.map((t) => ({
+      char: t.char,
+      startMs: t.startMs - cur.time,
+      endMs: t.endMs - cur.time,
+    }));
   });
 
   /** 拉取并解析歌词 */
@@ -87,9 +103,15 @@ export function useLyric(): UseLyricReturn {
     loading.value = true;
     try {
       const res = await getLyric(songId);
-      // 优先使用翻译 LRC（如果存在）；否则用原文
-      const raw = res.tLrc || res.lrc;
+      // 原文优先；无原文时退而求翻译
+      const raw = res.lrc || res.tLrc;
       lines.value = parseLrc(raw);
+      // 解析 YRC 逐字歌词
+      if (res.yLrc) {
+        yrcLines.value = parseYrc(res.yLrc);
+      } else {
+        yrcLines.value = [];
+      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : "歌词加载失败";
     } finally {

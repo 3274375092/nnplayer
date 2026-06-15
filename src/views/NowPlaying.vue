@@ -9,9 +9,8 @@
 
 import { onBeforeUnmount, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { Music2, Pause, Play, X } from "lucide-vue-next";
+import { Music2, X } from "lucide-vue-next";
 import LyricPanel from "@/components/LyricPanel.vue";
-import ProgressBar from "@/components/ProgressBar.vue";
 import { usePlayerStore } from "@/stores/player";
 
 const player = usePlayerStore();
@@ -35,10 +34,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey);
 });
-
-function onSeek(v: number) {
-  player.seek(v);
-}
 </script>
 
 <template>
@@ -89,24 +84,5 @@ function onSeek(v: number) {
         <LyricPanel />
       </div>
     </div>
-
-    <footer class="w-full max-w-3xl flex items-center gap-4">
-      <ProgressBar
-        :value="player.audioState.currentTime"
-        :max="player.audioState.duration || 0"
-        @change="onSeek"
-        class="flex-1"
-      />
-      <button
-        type="button"
-        class="btn btn-primary"
-        :disabled="!player.currentSong"
-        @click="player.togglePlay"
-      >
-        <Pause v-if="player.audioState.playing" :size="16" :stroke-width="1.75" class="mr-1" />
-        <Play v-else :size="16" :stroke-width="1.75" class="mr-1" />
-        <span>{{ player.audioState.playing ? "暂停" : "播放" }}</span>
-      </button>
-    </footer>
   </div>
 </template>

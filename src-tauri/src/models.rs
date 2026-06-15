@@ -73,7 +73,7 @@ pub struct SearchSuggestion {
     pub song: Option<Song>,
 }
 
-/// 歌词响应（仅返回精简的两个字段，避免大 JSON 整坨返回前端）。
+/// 歌词响应（仅返回精简字段，避免大 JSON 整坨返回前端）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricResult {
@@ -81,4 +81,6 @@ pub struct LyricResult {
     pub lrc: Option<String>,
     /// 翻译 LRC（若存在）
     pub t_lrc: Option<String>,
+    /// YRC 逐字歌词（若存在）
+    pub y_lrc: Option<String>,
 }

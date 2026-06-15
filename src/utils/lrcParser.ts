@@ -87,6 +87,100 @@ export function findActiveLineIndex(lines: LyricLine[], currentMs: number): numb
 }
 
 // =============== 阶段 3：卡拉OK 字符级时间窗 ===============
+// YRC 逐字歌词支持。
+
+/**
+ * YRC 字级时间条目（精确逐字时间戳）。
+ */
+export interface YrcWord {
+  /** 字符文本 */
+  char: string;
+  /** 起始时间（毫秒），绝对时间戳 */
+  startMs: number;
+  /** 持续时长（毫秒） */
+  duration: number;
+}
+
+/**
+ * YRC 行级数据（包含字级时间戳）。
+ */
+export interface YrcLine {
+  /** 行起始时间（毫秒） */
+  time: number;
+  /** 本行持续时长（毫秒） */
+  duration: number;
+  /** 逐字条目 */
+  words: YrcWord[];
+}
+
+/**
+ * 解析 NCM YRC 逐字歌词。
+ *
+ * YRC 格式（网易云 yrc）：
+ *   [行偏移ms,行持续时长ms](字偏移ms,字持续ms,音量)字(字偏移ms,字持续ms,音量)字...
+ *
+ *   示例：
+ *   [50000,3000](50000,400,0)你(50400,350,0)好(50750,250,0)世(51000,600,0)界
+ *
+ * 其中字偏移是**绝对时间戳**（毫秒），不是相对行偏移。
+ *
+ * @param yrcText 原始 YRC 字符串
+ * @returns 解析后的 YRC 行数组
+ */
+export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
+  if (!yrcText) return [];
+  const lines: YrcLine[] = [];
+
+  // 匹配行级： [offset,duration]content
+  const lineRe = /\[(\d+),(\d+)](.*?)(?:\r?\n|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = lineRe.exec(yrcText)) !== null) {
+    const lineStart = Number(m[1]);
+    const lineDuration = Number(m[2]);
+    const content = m[3];
+    if (!content) continue;
+
+    // 匹配字级：(offset,dur,vol)文本
+    // 文本用 [^(]（非 ( 字符）匹配，因为 YRC 每个标签对应一个字
+    const words: YrcWord[] = [];
+    const wordRe = /\((\d+),(\d+),\d+\)([^(]+)/g;
+    let wm: RegExpExecArray | null;
+    while ((wm = wordRe.exec(content)) !== null) {
+      const offset = Number(wm[1]);
+      const dur = Number(wm[2]);
+      const text = wm[3];
+      if (!text) continue;
+
+      for (const ch of Array.from(text)) {
+        words.push({ char: ch, startMs: offset, duration: dur });
+      }
+      // 如果标签包含多字符（如英文词），在词内均分 duration
+      // 这样每个字符都有递增的时间戳，而非全部挤在同一时刻
+    }
+
+    if (words.length === 0) continue;
+    lines.push({ time: lineStart, duration: lineDuration, words });
+  }
+
+  return lines;
+}
+
+/**
+ * 从 YRC 行数据生成 [startMs, endMs] 格式的 CharToken[]。
+ * 用于替换原先的伪卡拉OK 等分时间窗。
+ *
+ * @param words YRC 逐字条目
+ * @returns 兼容 CharToken 格式的数组
+ */
+export function yrcWordsToCharTokens(
+  words: YrcWord[],
+): CharToken[] {
+  return words.map((w) => ({
+    char: w.char,
+    startMs: w.startMs,
+    endMs: w.startMs + w.duration,
+  }));
+}
 
 /**
  * 卡拉OK 字符级时间标签。

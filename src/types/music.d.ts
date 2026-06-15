@@ -59,6 +59,8 @@ export interface SearchSuggestion {
 export interface LyricResult {
   lrc: string | null;
   tLrc: string | null;
+  /** YRC 逐字歌词 */
+  yLrc: string | null;
 }
 
 // 登录态
