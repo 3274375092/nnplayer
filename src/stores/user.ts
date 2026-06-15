@@ -64,6 +64,7 @@ export const useUserStore = defineStore("user", () => {
   /**
    * QR 登录第二步：轮询一次。
    * 返回 { code, ... }，code=803 表示登录成功。
+   * 登录成功时同步把后端返回的 avatarUrl 写入 store（避免额外 IPC 刷新）。
    */
   async function pollQrLogin(unikey: string) {
     const res = await loginQrCheck(unikey);
@@ -72,6 +73,7 @@ export const useUserStore = defineStore("user", () => {
       nickname.value = res.nickname ?? "网易云用户";
       userId.value = res.userId ?? null;
       loginMethod.value = "qr";
+      avatarUrl.value = res.avatarUrl ?? "";
     }
     return res;
   }
@@ -86,6 +88,7 @@ export const useUserStore = defineStore("user", () => {
     nickname.value = res.nickname;
     userId.value = res.userId;
     loginMethod.value = "account";
+    avatarUrl.value = res.avatarUrl ?? "";
     return res;
   }
 
@@ -101,6 +104,7 @@ export const useUserStore = defineStore("user", () => {
     nickname.value = res.nickname;
     userId.value = res.userId;
     loginMethod.value = "phone";
+    avatarUrl.value = res.avatarUrl ?? "";
     return res;
   }
 

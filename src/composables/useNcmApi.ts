@@ -69,6 +69,7 @@ export function loginQrKey() {
 /**
  * 轮询扫码状态。
  * 返回的 code: 800 过期 / 801 等待扫码 / 802 已扫码 / 803 成功
+ * 803 时 avatarUrl 一定有值（直接登录）或为空字符串（cookie 注入恢复）
  */
 export function loginQrCheck(unikey: string) {
   return call<{
@@ -76,6 +77,7 @@ export function loginQrCheck(unikey: string) {
     message: string;
     nickname?: string;
     userId?: number;
+    avatarUrl?: string;
   }>(Commands.LoginQrCheck, { unikey });
 }
 
@@ -84,9 +86,10 @@ export function loginQrCheck(unikey: string) {
  * md5Password 必须为 32 位小写 hex（前端 MD5 一次）。
  */
 export function loginWithAccount(account: string, md5Password: string) {
-  return call<{ userId: number; nickname: string }>(Commands.LoginWithAccount, {
-    payload: { account, md5Password },
-  });
+  return call<{ userId: number; nickname: string; avatarUrl?: string }>(
+    Commands.LoginWithAccount,
+    { payload: { account, md5Password } },
+  );
 }
 
 /** 发送手机验证码。*/
@@ -96,16 +99,18 @@ export function loginSendCaptcha(phone: string) {
 
 /** 手机验证码登录。*/
 export function loginWithCaptcha(phone: string, captcha: string) {
-  return call<{ userId: number; nickname: string }>(Commands.LoginWithCaptcha, {
-    payload: { phone, captcha },
-  });
+  return call<{ userId: number; nickname: string; avatarUrl?: string }>(
+    Commands.LoginWithCaptcha,
+    { payload: { phone, captcha } },
+  );
 }
 
 /** 直接粘贴 Cookie 登录（旧接口保留）。*/
 export function saveCookie(cookie: string) {
-  return call<{ userId: number; nickname: string }>(Commands.SaveCookie, {
-    payload: { cookie },
-  });
+  return call<{ userId: number; nickname: string; avatarUrl?: string }>(
+    Commands.SaveCookie,
+    { payload: { cookie } },
+  );
 }
 
 /** 获取当前登录状态。*/

@@ -73,6 +73,8 @@ pub struct QrCheckResponse {
     pub message: String,
     pub nickname: Option<String>,
     pub user_id: Option<u64>,
+    /// 用户头像 URL（已规整为可直接 <img src> 使用的形式）
+    pub avatar_url: Option<String>,
 }
 
 /// QR 登录 - 第一步：获取 unikey + 生成二维码。
@@ -122,13 +124,14 @@ pub async fn login_qr_check(
     let code = AppState::response_code(&resp) as i32;
 
     if code == 200 || code == 803 {
-        let LoginResult { user_id, nickname, avatar_url: _ } =
+        let LoginResult { user_id, nickname, avatar_url } =
             finalize_login(&app, &state, "qr", &resp).await?;
         return Ok(QrCheckResponse {
             code: 803,
             message: "登录成功".to_string(),
             nickname: Some(nickname),
             user_id: Some(user_id),
+            avatar_url,
         });
     }
 
@@ -144,6 +147,7 @@ pub async fn login_qr_check(
         message: message.to_string(),
         nickname: None,
         user_id: None,
+        avatar_url: None,
     })
 }
 
