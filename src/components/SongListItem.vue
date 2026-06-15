@@ -2,6 +2,7 @@
 // 单个歌单元（卡片网格视图）。
 // 用于"我的歌单"封面墙和歌单详情头部信息卡。
 
+import { Music2 } from "lucide-vue-next";
 import type { Playlist, Song } from "@/types/music";
 
 interface Props {
@@ -48,8 +49,8 @@ defineEmits<{
     class="card p-3 cursor-pointer hover:shadow-card transition-shadow"
     @click="$emit('click')"
   >
-    <div class="aspect-square rounded-btn bg-hover mb-3 flex items-center justify-center text-3xl">
-      ♪
+    <div class="aspect-square rounded-btn bg-hover mb-3 flex items-center justify-center">
+      <Music2 :size="48" :stroke-width="1.25" class="text-text-secondary" />
     </div>
     <div class="text-sm font-medium truncate">{{ song.name }}</div>
     <div class="text-xs text-text-secondary truncate">{{ song.artists }}</div>

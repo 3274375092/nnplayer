@@ -4,8 +4,10 @@
 //   2. 暴露 reactive 状态（当前时间、总时长、播放中、缓冲中）
 //   3. 提供 play/pause/seek/setVolume 等命令式方法
 //   4. 与 Pinia player store 解耦：store 负责状态，composable 负责 DOM 操作
+//   5. 阶段5：playSong(songId, song?) — 若传 song 则同步 MediaSession metadata
 
-import { onBeforeUnmount, reactive, readonly } from "vue";
+import { onBeforeUnmount, reactive, readonly, watch } from "vue";
+import type { Song } from "@/types/music";
 import { getSongUrl } from "./useNcmApi";
 
 export interface AudioState {
@@ -48,6 +50,84 @@ export function useAudioPlayer() {
 
   audio.volume = state.volume;
 
+  // 当前曲目的元信息（用于 MediaSession 同步）
+  let currentSongMeta: Song | null = null;
+
+  // =============== MediaSession 集成（阶段5） ===============
+  //
+  // 系统媒体键（Windows 11 / macOS / Android / iOS）会触发 MediaSession 的 action
+  // 我们注册 play/pause/seekto/previoustrack/nexttrack 回调到 player store。
+  //
+  // 注意：MediaSession action handler 必须在每次切歌时重新 setActionHandler，
+  // 因为浏览器某些实现会丢弃旧的 handler。
+
+  function syncMediaSession(song: Song | null) {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    if (song) {
+      const artwork = song.picUrl
+        ? [{ src: song.picUrl, sizes: "512x512" as const }]
+        : [];
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: song.name,
+          artist: song.artists,
+          album: song.album,
+          artwork,
+        });
+      } catch {
+        // 某些 WebView 不支持 MediaMetadata，忽略
+      }
+    } else {
+      try {
+        navigator.mediaSession.metadata = null;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function installMediaSessionHandlers() {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    // 通过自定义事件桥接到 player store（避免循环引用 store → composable → store）
+    ms.setActionHandler("play", () => {
+      window.dispatchEvent(new CustomEvent("nnplayer:media:play"));
+    });
+    ms.setActionHandler("pause", () => {
+      window.dispatchEvent(new CustomEvent("nnplayer:media:pause"));
+    });
+    ms.setActionHandler("seekto", (details) => {
+      if (typeof details.seekTime === "number") {
+        window.dispatchEvent(
+          new CustomEvent("nnplayer:media:seek", { detail: details.seekTime }),
+        );
+      }
+    });
+    ms.setActionHandler("previoustrack", () => {
+      window.dispatchEvent(new CustomEvent("nnplayer:media:prev"));
+    });
+    ms.setActionHandler("nexttrack", () => {
+      window.dispatchEvent(new CustomEvent("nnplayer:media:next"));
+    });
+  }
+
+  // 在文件加载时统一安装一次
+  installMediaSessionHandlers();
+
+  // 状态 → MediaSession.playbackState
+  watch(
+    () => state.playing,
+    (p) => {
+      if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
+        try {
+          navigator.mediaSession.playbackState = p ? "playing" : "paused";
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+  );
+
   // =============== 事件监听 ===============
 
   const onPlay = () => {
@@ -58,6 +138,24 @@ export function useAudioPlayer() {
   };
   const onTimeUpdate = () => {
     state.currentTime = audio.currentTime;
+    // 同步 MediaSession position state（部分平台会用来显示进度条）
+    if (
+      typeof navigator !== "undefined" &&
+      "mediaSession" in navigator &&
+      "setPositionState" in navigator.mediaSession
+    ) {
+      try {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          navigator.mediaSession.setPositionState({
+            duration: audio.duration,
+            playbackRate: audio.playbackRate,
+            position: Math.min(audio.currentTime, audio.duration),
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   };
   const onLoadedMetadata = () => {
     state.duration = Number.isFinite(audio.duration) ? audio.duration : 0;
@@ -95,11 +193,13 @@ export function useAudioPlayer() {
    * 加载并播放指定歌曲。
    * 1. 先调用 Rust get_song_url 拿到真实 url
    * 2. 设置 audio.src 并 play()
+   * 3. 阶段5：若有 song 元信息则同步 MediaSession metadata
    */
-  async function playSong(songId: number) {
+  async function playSong(songId: number, song?: Song) {
     try {
       state.loading = true;
       state.currentSongId = songId;
+      currentSongMeta = song ?? null;
 
       const res = await getSongUrl(songId);
       if (!res.url) {
@@ -109,6 +209,10 @@ export function useAudioPlayer() {
       // 切换歌曲前先暂停旧的，避免某些浏览器拒绝 autoplay
       audio.pause();
       audio.src = res.url;
+      // 切歌时更新 MediaSession metadata
+      if (song) {
+        syncMediaSession(song);
+      }
       await audio.play();
     } catch (e) {
       state.loading = false;

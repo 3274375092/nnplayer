@@ -1,15 +1,12 @@
 <script setup lang="ts">
-// 底部 80px 固定播放栏。
-// 包含：封面 + 歌名 + 艺人、进度条、播放控制、音量、播放模式。
-// 毛玻璃 backdrop-blur 效果。
+// 底部 80px 固定播放栏（已弃用,保留以便阶段 2 移动端回退）。
+// 当前默认使用 PlayerBarFloating.vue。本组件不再维护图标系统。
 
 import { computed } from "vue";
 import { usePlayerStore } from "@/stores/player";
 
 const player = usePlayerStore();
 
-// 格式化秒为 mm:ss（audioState 的 currentTime / duration 单位是秒，
-// 来自 HTML5 <audio> 标准，不是毫秒）
 function fmt(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
   const total = Math.floor(seconds);
@@ -21,14 +18,12 @@ function fmt(seconds: number): string {
 const cur = computed(() => fmt(player.audioState.currentTime));
 const dur = computed(() => fmt(player.audioState.duration));
 
-// 进度条百分比
 const progress = computed(() => {
   const d = player.audioState.duration;
   if (!d) return 0;
   return (player.audioState.currentTime / d) * 100;
 });
 
-// 拖拽进度条
 function onSeek(e: Event) {
   const target = e.target as HTMLInputElement;
   const ratio = Number(target.value) / 100;

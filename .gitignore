@@ -40,3 +40,6 @@ code.md
 code*.md
 CLAUDE.md
 ncm-api-rs/docs/*.md
+
+# 设计文档/截图不入库
+docs/

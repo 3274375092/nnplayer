@@ -4,6 +4,7 @@
 // 当前播放歌曲行高亮。
 
 import { computed } from "vue";
+import { Play } from "lucide-vue-next";
 import type { Song } from "@/types/music";
 import { usePlayerStore } from "@/stores/player";
 
@@ -88,9 +89,12 @@ function playAll() {
         @dblclick="playAt(idx)"
       >
         <div class="text-xs text-text-secondary">
-          <span v-if="currentId === song.id && player.audioState.playing">
-            ▶
-          </span>
+          <Play
+            v-if="currentId === song.id && player.audioState.playing"
+            :size="12"
+            :stroke-width="2"
+            class="text-accent"
+          />
           <span v-else>{{ idx + 1 }}</span>
         </div>
         <div class="min-w-0">

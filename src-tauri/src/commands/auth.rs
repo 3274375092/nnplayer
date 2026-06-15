@@ -26,6 +26,7 @@ use crate::state::AppState;
 pub struct LoginResult {
     pub user_id: u64,
     pub nickname: String,
+    pub avatar_url: Option<String>,
 }
 
 /// 登录状态 DTO（前端展示）。
@@ -36,6 +37,7 @@ pub struct AuthStateDto {
     pub nickname: Option<String>,
     pub user_id: Option<u64>,
     pub login_method: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 /// 持久化的会话记录（TOML 格式）。
@@ -43,6 +45,7 @@ pub struct AuthStateDto {
 pub struct SessionRecord {
     pub user_id: u64,
     pub nickname: String,
+    pub avatar_url: Option<String>,
     pub login_method: String,
     pub cookie: String,
     pub updated_at: i64,
@@ -119,7 +122,7 @@ pub async fn login_qr_check(
     let code = AppState::response_code(&resp) as i32;
 
     if code == 200 || code == 803 {
-        let LoginResult { user_id, nickname } =
+        let LoginResult { user_id, nickname, avatar_url: _ } =
             finalize_login(&app, &state, "qr", &resp).await?;
         return Ok(QrCheckResponse {
             code: 803,
@@ -266,42 +269,37 @@ async fn finalize_login(
     .ok_or_else(|| AppError::Internal("未拿到登录 cookie".to_string()))?;
 
     // 2. 拉取用户信息（/user/account）。强制带上合并后的 cookie
-    let (user_id, nickname) = {
+    let (user_id, nickname, avatar_url) = {
         let api = state.api.lock().await;
+        let fetch_profile = |r: &ApiResponse| -> (u64, String, Option<String>) {
+            let uid = r
+                .body
+                .pointer("/account/id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let nick = r
+                .body
+                .pointer("/profile/nickname")
+                .and_then(|v| v.as_str())
+                .unwrap_or("网易云用户")
+                .to_string();
+            let avatar = r
+                .body
+                .pointer("/profile/avatarUrl")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_avatar_url);
+            (uid, nick, avatar)
+        };
         match api
             .user_account(&Query::new().cookie(&merged_cookie))
             .await
         {
-            Ok(r) => {
-                let uid = r
-                    .body
-                    .pointer("/account/id")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let nick = r
-                    .body
-                    .pointer("/profile/nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("网易云用户")
-                    .to_string();
-                (uid, nick)
-            }
+            Ok(r) => fetch_profile(&r),
             Err(e) => {
                 log::warn!("[login] user_account 拉取失败: {e}");
-                // 兜底用登录响应 body
-                let uid = resp
-                    .body
-                    .pointer("/profile/userId")
-                    .or_else(|| resp.body.pointer("/account/id"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let nick = resp
-                    .body
-                    .pointer("/profile/nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("网易云用户")
-                    .to_string();
-                (uid, nick)
+                // 兜底用登录响应 body（多数情况没有 avatarUrl）
+                let (uid, nick, _) = fetch_profile(resp);
+                (uid, nick, None)
             }
         }
     };
@@ -313,13 +311,14 @@ async fn finalize_login(
         auth.nickname = Some(nickname.clone());
         auth.cookie = Some(merged_cookie.clone());
         auth.login_method = Some(method.to_string());
+        auth.avatar_url = avatar_url.clone();
     }
 
     // 4. 持久化（plugin-store + TOML 双份）
     persist_cookie(app, &merged_cookie)?;
-    persist_session_meta(app, user_id, &nickname, method, &merged_cookie)?;
+    persist_session_meta(app, user_id, &nickname, avatar_url.as_deref(), method, &merged_cookie)?;
 
-    Ok(LoginResult { user_id, nickname })
+    Ok(LoginResult { user_id, nickname, avatar_url })
 }
 
 /// 从 ApiResponse.cookie（Set-Cookie 数组）中合并出新的 cookie 字符串。
@@ -370,6 +369,7 @@ pub async fn get_auth_state(state: State<'_, AppState>) -> AppResult<AuthStateDt
         nickname: auth.nickname.clone(),
         user_id: auth.user_id,
         login_method: auth.login_method.clone(),
+        avatar_url: auth.avatar_url.clone(),
     })
 }
 
@@ -431,6 +431,11 @@ pub async fn save_cookie(
         .and_then(|v| v.as_str())
         .unwrap_or("网易云用户")
         .to_string();
+    let avatar_url = resp
+        .body
+        .pointer("/profile/avatarUrl")
+        .and_then(|v| v.as_str())
+        .and_then(normalize_avatar_url);
 
     {
         let mut auth = state.auth.lock().await;
@@ -438,12 +443,13 @@ pub async fn save_cookie(
         auth.nickname = Some(nickname.clone());
         auth.cookie = Some(payload.cookie.clone());
         auth.login_method = Some("cookie".to_string());
+        auth.avatar_url = avatar_url.clone();
     }
 
     persist_cookie(&app, &payload.cookie)?;
-    persist_session_meta(&app, user_id, &nickname, "cookie", &payload.cookie)?;
+    persist_session_meta(&app, user_id, &nickname, avatar_url.as_deref(), "cookie", &payload.cookie)?;
 
-    Ok(LoginResult { user_id, nickname })
+    Ok(LoginResult { user_id, nickname, avatar_url })
 }
 
 // ============================================================
@@ -463,6 +469,7 @@ fn persist_session_meta(
     app: &AppHandle,
     user_id: u64,
     nickname: &str,
+    avatar_url: Option<&str>,
     method: &str,
     cookie: &str,
 ) -> AppResult<()> {
@@ -473,6 +480,7 @@ fn persist_session_meta(
     let record = SessionRecord {
         user_id,
         nickname: nickname.to_string(),
+        avatar_url: avatar_url.map(|s| s.to_string()),
         login_method: method.to_string(),
         cookie: cookie.to_string(),
         updated_at: now_unix(),
@@ -534,6 +542,33 @@ fn build_anonymous_client(_cookie: Option<String>) -> AppResult<ncm_api::ApiClie
 
 pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
     AppError::Ncm(e.to_string())
+}
+
+// ============================================================
+// 工具：把 NCM avatarUrl 规整成可直接 <img src> 使用的 URL
+// ============================================================
+
+/// 把 NCM avatarUrl 规整成可直接 <img src> 使用的 URL。
+/// NCM 偶尔返回 protocol-relative URL（"//p1.music.126.net/..."）或缺 scheme 的相对路径。
+pub fn normalize_avatar_url(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // protocol-relative: //p1.music.126.net/...
+    if let Some(rest) = s.strip_prefix("//") {
+        return Some(format!("https://{rest}"));
+    }
+    // 完整 URL
+    if s.starts_with("http://") || s.starts_with("https://") {
+        return Some(s.to_string());
+    }
+    // 缺 scheme 但以 / 开头（p1.music.126.net 是 NCM 头像域名）
+    if let Some(rest) = s.strip_prefix('/') {
+        return Some(format!("https://p1.music.126.net/{rest}"));
+    }
+    // 兜底：当作相对路径
+    Some(format!("https://p1.music.126.net/{s}"))
 }
 
 // ============================================================

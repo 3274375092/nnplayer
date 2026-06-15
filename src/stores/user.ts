@@ -26,6 +26,7 @@ export const useUserStore = defineStore("user", () => {
   const nickname = ref<string>("");
   const userId = ref<number | null>(null);
   const loginMethod = ref<LoginMethod>("unknown");
+  const avatarUrl = ref<string>("");
 
   const displayName = computed(() =>
     loggedIn.value ? nickname.value || "网易云用户" : "未登录"
@@ -44,6 +45,7 @@ export const useUserStore = defineStore("user", () => {
       nickname.value = s.nickname ?? "";
       userId.value = s.userId ?? null;
       loginMethod.value = (s.loginMethod as LoginMethod) ?? "unknown";
+      avatarUrl.value = s.avatarUrl ?? "";
     } catch (e) {
       console.warn("[user] refresh 失败", e);
       loggedIn.value = false;
@@ -113,6 +115,7 @@ export const useUserStore = defineStore("user", () => {
     nickname.value = "";
     userId.value = null;
     loginMethod.value = "unknown";
+    avatarUrl.value = "";
   }
 
   return {
@@ -120,6 +123,7 @@ export const useUserStore = defineStore("user", () => {
     nickname,
     userId,
     loginMethod,
+    avatarUrl,
     displayName,
     refresh,
     startQrLogin,

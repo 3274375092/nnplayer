@@ -29,6 +29,8 @@ pub struct AuthState {
     pub cookie: Option<String>,
     /// 登录方式（用于 UI 展示最近登录路径）
     pub login_method: Option<String>,
+    /// 头像 URL（启动恢复 + 登录时写入,前端 <img> 直接使用）
+    pub avatar_url: Option<String>,
 }
 
 impl AuthState {

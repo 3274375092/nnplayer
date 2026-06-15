@@ -5,14 +5,16 @@ export default {
     extend: {
       colors: {
         // === UI 规范颜色（柔和米黄体系）===
-        bg: "#FAFCE4",          // 主背景
-        card: "#F5F7E1",        // 卡片 / 侧边栏
-        hover: "#EEF0D8",       // 悬浮态
+        // CSS 变量驱动：阶段1 主题色切换时由 stores/theme.ts 改写 :root
+        // 默认值在 src/styles.css 的 :root 块里定义
+        bg: "var(--color-bg)",
+        card: "var(--color-card)",
+        hover: "var(--color-hover)",
         text: {
-          primary: "#373737",  // 主要文字
-          secondary: "#8C8C8C",// 次要文字
+          primary: "var(--color-text-primary)",
+          secondary: "var(--color-text-secondary)",
         },
-        accent: "#E85D3A",      // 强调色 / 激活态
+        accent: "var(--color-accent)",
       },
       borderRadius: {
         // 大圆角

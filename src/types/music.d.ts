@@ -67,6 +67,7 @@ export interface AuthState {
   nickname?: string;
   userId?: number;
   loginMethod?: "qr" | "account" | "phone" | "cookie" | "unknown";
+  avatarUrl?: string;
 }
 
 // 后端错误结构

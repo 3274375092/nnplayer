@@ -20,13 +20,18 @@ tauri-build = { version = "2", features = [] }
 # - brotli 8.0.3 用了 nightly-only `impl Allocator for StandardAlloc`，在
 #   stable 1.96 / nightly 1.86+ 编译失败。详见
 #   https://github.com/dropbox/rust-brotli/issues/126
-tauri = { version = "2", default-features = false, features = ["wry"] }
+tauri = { version = "2", default-features = false, features = ["wry", "tray-icon"] }
 # 单独禁用 tauri-macros 的 compression，否则仍会拉入 brotli
 tauri-macros = { version = "2", default-features = false }
 
 # Tauri 官方插件
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
+# 阶段5：桌面集成
+# - tray 内置在 tauri 主 crate 中（tauri::tray 模块），无需独立插件
+# - global-shortcut / window-state 是独立插件
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-window-state = "2"
 
 # 网易云 API 客户端（与 CNMPlayer 共用同一 crate，保证加密/反爬/会话捕获逻辑一致）
 ncm-api = { path = "../ncm-api-rs" }

@@ -85,3 +85,44 @@ export function findActiveLineIndex(lines: LyricLine[], currentMs: number): numb
   }
   return ans;
 }
+
+// =============== 阶段 3：卡拉OK 字符级时间窗 ===============
+
+/**
+ * 卡拉OK 字符级时间标签。
+ * 按字符数等分 [prevMs, nextMs] 时间窗（伪卡拉OK，NCM LRC 无逐字时间戳）。
+ */
+export interface CharToken {
+  char: string;
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * 把一行歌词按字符数等分为 CharToken[]。
+ * - prevMs / nextMs：上一行结束 / 下一行开始（毫秒）
+ * - prevMs < 0 时退化为 nextMs - 5000
+ * - nextMs <= prevMs 时退化为 prevMs + 5000
+ * - 空文本返回 []
+ * - 字符可以是汉字、英文、标点、空格（空格保留可见宽度，不去掉）
+ */
+export function parseKaraokeLine(
+  text: string,
+  prevMs: number,
+  nextMs: number,
+): CharToken[] {
+  if (!text) return [];
+  // 退化窗口：边界缺失时给一个合理长度
+  let start = prevMs >= 0 ? prevMs : nextMs - 5000;
+  let end = nextMs > start ? nextMs : start + 5000;
+  if (end <= start) end = start + 1000;
+  const chars = Array.from(text); // 按 code point 切，避免 surrogate pair 错位
+  if (chars.length === 0) return [];
+  const span = end - start;
+  const per = span / chars.length;
+  return chars.map((c, i) => ({
+    char: c,
+    startMs: start + i * per,
+    endMs: start + (i + 1) * per,
+  }));
+}

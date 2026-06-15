@@ -42,6 +42,18 @@ const routes: RouteRecordRaw[] = [
     component: () => import("@/views/Login.vue"),
     meta: { title: "登录", public: true },
   },
+  {
+    path: "/now-playing",
+    name: "NowPlaying",
+    component: () => import("@/views/NowPlaying.vue"),
+    meta: { title: "正在播放" },
+  },
+  {
+    path: "/desktop-lyrics",
+    name: "DesktopLyrics",
+    component: () => import("@/views/DesktopLyrics.vue"),
+    meta: { title: "桌面歌词" },
+  },
   { path: "/:pathMatch(.*)*", redirect: "/daily" },
 ];
 
