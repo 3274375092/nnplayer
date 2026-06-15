@@ -1,0 +1,79 @@
+[package]
+name = "nnplayer"
+version = "0.1.0"
+description = "nnplayer - 网易云音乐桌面客户端"
+authors = ["nnplayer team"]
+edition = "2021"
+
+[lib]
+# lib 名称唯一，避免与 bin 名称冲突（Windows 上需要）
+name = "nnplayer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri v2 核心
+# - default-features = false: 关掉 tauri 默认的 `compression` 链（拉入 brotli 8.0.3），
+#   改用最小 features：wry（webview 后端）+ 平台无关 UI 集成
+# - brotli 8.0.3 用了 nightly-only `impl Allocator for StandardAlloc`，在
+#   stable 1.96 / nightly 1.86+ 编译失败。详见
+#   https://github.com/dropbox/rust-brotli/issues/126
+tauri = { version = "2", default-features = false, features = ["wry"] }
+# 单独禁用 tauri-macros 的 compression，否则仍会拉入 brotli
+tauri-macros = { version = "2", default-features = false }
+
+# Tauri 官方插件
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+
+# 网易云 API 客户端（与 CNMPlayer 共用同一 crate，保证加密/反爬/会话捕获逻辑一致）
+ncm-api = { path = "../ncm-api-rs" }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 错误处理
+thiserror = "1"
+anyhow = "1"
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+
+# HTTP（仅用于构造给 ApiClient 的 reqwest::Client）
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+# 二维码 PNG 生成（前端拿到 base64 data URI 直接展示）
+# - qrcode: 负责算模块矩阵（0.14 没有 png feature，PNG 由 image 手写）
+# - image: 负责把灰度 ImageBuffer 编码成 PNG 字节
+#   用 0.25 系列而非 0.4，因为 0.4 默认拉入 png 0.3.1 老 crate，
+#   跟新 Rust nightly 1.98+ 不兼容（macro 错误）。
+qrcode = { version = "0.14", default-features = false }
+image = "0.25"
+base64 = "0.22"
+
+# 跨平台配置目录（用于持久化 session TOML）
+directories = "6"
+toml = "1"
+
+# 临时 patch：tauri 默认 features 拉入 brotli 8.0.3，但 8.0.3 依赖
+# nightly-only 的 `impl Allocator for StandardAlloc`，在 stable/nightly 1.86+
+# 全部编译失败。详见 https://github.com/dropbox/rust-brotli/issues/126
+# 用本地 vendor 的 7.0.0 源码强制接管上游 8.0.3。
+# 移除条件：brotli 8.0.4 修复 / tauri 移除对 brotli 的传递依赖。
+[patch.crates-io]
+brotli = { path = "../vendor/brotli" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
