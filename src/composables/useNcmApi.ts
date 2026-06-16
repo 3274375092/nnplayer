@@ -40,6 +40,8 @@ export const Commands = {
   GetPlaylistDetail: "get_playlist_detail",
   // 歌词
   GetLyric: "get_lyric",
+  // 桌面歌词
+  IsPositionOnScreen: "is_position_on_screen",
 } as const;
 
 /**
@@ -164,4 +166,11 @@ export function pickSongIds(songs: Song[]): number[] {
  */
 export function getLyric(songId: number) {
   return call<LyricResult>(Commands.GetLyric, { songId });
+}
+
+// =============== 桌面歌词 ===============
+
+/** 校验坐标是否在任意显示器范围内。*/
+export function isPositionOnScreen(x: number, y: number) {
+  return call<boolean>(Commands.IsPositionOnScreen, { x, y });
 }

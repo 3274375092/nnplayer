@@ -1,14 +1,19 @@
-// 歌词 composable：
+﻿// 歌词 composable：
 //   1. 拉取并解析当前歌曲歌词
 //   2. 监听 audio currentTime，计算当前高亮行 activeLineIndex
 //   3. 阶段3：暴露 karaokeTokens（当前行字符级时间窗）和 progressMs（行内毫秒进度）
 //   4. 阶段3：向桌面歌词窗口 emit 'desktop-lyrics:update'
+//   5. 阶段3+：桌面歌词窗口打开时 emit 'desktop-lyrics:request-snapshot'，
+//               主窗收到后立即推一份最新快照，解决"打开瞬间空白"
 //
 // 设计原则：
 //   - useAudioPlayer 内部已存在唯一的 <audio> 元素（由 player store 持有），
 //     useLyric 只通过 playerStore.audioState 读取 currentTime，不再创建 audio。
 //   - 切歌时自动重置并重新拉取。
 //   - 桌面歌词事件 emit 失败时静默（不影响主流程）。
+//   - useLyric 可被多个组件同时调用（DailyRecommend / Search / PlaylistDetail /
+//     NowPlaying），每次实例都注册一份推送函数；最新一次注册生效。所有实例
+//     观察同一个 playerStore，不会丢失推送。
 
 import {
   computed,
@@ -29,6 +34,64 @@ import {
   type LyricLine,
 } from "@/utils/lrcParser";
 import { usePlayerStore } from "@/stores/player";
+
+// =============== 桌面歌词 payload ===============
+
+/** 从 :root CSS 变量读取当前封面主题色。
+ * 零 Pinia Store 依赖，直接读 DOM（themeStore 把色写到 :root 上），
+ * 彻底避免 useLyric ↔ useThemeStore 交叉依赖破坏滚动。 */
+function readThemeAccentFromDOM(): string {
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--color-accent")
+      .trim();
+    return v || "#E85D3A";
+  } catch {
+    return "#E85D3A";
+  }
+}
+
+export interface KaraokeToken {
+  char: string;
+  startMs: number;
+  endMs: number;
+}
+
+export interface DesktopLyricsPayload {
+  /** 当前行文本 */
+  current: string;
+  /** 下一行文本 */
+  next: string;
+  /** 当前行进度的 0-1 百分比 */
+  progress: number;
+  /** 歌曲名 */
+  songName: string;
+  /** 艺术家 */
+  artists: string;
+  /** 完整歌词行（多行渲染用） */
+  lines: LyricLine[];
+  /** 当前行索引 */
+  activeLineIndex: number;
+  /** 行内毫秒进度（卡拉OK 用） */
+  progressMs: number;
+  /** 当前行卡拉OK 字符级时间窗 */
+  karaokeTokens: KaraokeToken[];
+  /** 封面提取的强调色（hex），供桌面歌词卡拉OK 逐字染色 */
+  accentColor: string;
+}
+
+// =============== 主窗 ↔ 桌面歌词窗：拉取快照 ===============
+//
+// 桌面歌词窗口打开瞬间会 emit 'desktop-lyrics:request-snapshot'。
+// 主窗 App.vue 监听到该事件后调用 triggerDesktopLyricsPush() 推一份最新状态。
+// 触发器指向"最后一个活跃 useLyric 实例"的推送函数（多个组件共享 playerStore，
+// 行为一致，无需担心漂移）。
+
+let _pushDesktopLyrics: (() => void) | null = null;
+
+export function triggerDesktopLyricsPush() {
+  _pushDesktopLyrics?.();
+}
 
 export interface UseLyricReturn {
   /** 解析后的歌词行 */
@@ -169,38 +232,59 @@ export function useLyric(): UseLyricReturn {
 
   /**
    * 阶段3：向桌面歌词窗口推送更新。
-   * 仅在 Tauri 环境下 emit；失败时静默（不影响主流程）。
+   * 抽出成函数复用：watch 依赖变化时调用，request-snapshot 时也调用。
    */
+  function pushUpdateToDesktop() {
+    if (!isTauri()) return;
+    const idx = activeLineIndex.value;
+    const currentLine = idx >= 0 && idx < lines.value.length
+      ? lines.value[idx]
+      : null;
+    const nextLine = idx + 1 < lines.value.length
+      ? lines.value[idx + 1]
+      : null;
+    const lineTime = currentLine ? currentLine.time : 0;
+    const nextTime = nextLine ? nextLine.time : lineTime + 5000;
+    const span = Math.max(1, nextTime - lineTime);
+    const progress = idx >= 0
+      ? Math.max(0, Math.min(1, progressMs.value / span))
+      : 0;
+
+    const payload: DesktopLyricsPayload = {
+      current: currentLine?.text ?? "",
+      next: nextLine?.text ?? "",
+      progress,
+      songName: player.currentSong?.name ?? "",
+      artists: player.currentSong?.artists ?? "",
+      lines: lines.value,
+      activeLineIndex: idx,
+      progressMs: progressMs.value,
+      karaokeTokens: karaokeTokens.value,
+      accentColor: readThemeAccentFromDOM(),
+    };
+
+    void emit("desktop-lyrics:update", payload).catch(() => {
+      /* 桌面窗未打开时 emit 静默失败 */
+    });
+  }
+
+  /** 监听变化主动推送：观察整首歌变化、活跃行、行内进度、歌词数组 */
   watch(
-    [() => player.currentSong?.id, activeLineIndex, progressMs, lines],
+    [
+      () => player.currentSong,
+      activeLineIndex,
+      progressMs,
+      lines,
+    ],
     () => {
-      if (!isTauri()) return;
-      const idx = activeLineIndex.value;
-      const current = idx >= 0 && idx < lines.value.length
-        ? lines.value[idx].text
-        : "";
-      const next = idx + 1 < lines.value.length
-        ? lines.value[idx + 1].text
-        : "";
-      const lineTime = idx >= 0 ? lines.value[idx].time : 0;
-      const nextTime = idx + 1 < lines.value.length
-        ? lines.value[idx + 1].time
-        : lineTime + 5000;
-      const span = Math.max(1, nextTime - lineTime);
-      const progress = idx >= 0
-        ? Math.max(0, Math.min(1, progressMs.value / span))
-        : 0;
-      void emit("desktop-lyrics:update", {
-        current,
-        next,
-        progress,
-        songName: player.currentSong?.name ?? "",
-        artists: player.currentSong?.artists ?? "",
-      }).catch(() => {
-        /* 桌面窗未打开时 emit 静默失败 */
-      });
+      pushUpdateToDesktop();
     },
   );
+
+  // 注册最新推送函数，供 request-snapshot 时调用。
+  // 多个组件都 useLyric() 时，最后一个活跃实例的引用生效（它们观察同一个
+  // playerStore，行为一致）。
+  _pushDesktopLyrics = pushUpdateToDesktop;
 
   /** 点击某行歌词 → 跳转播放 */
   function seekTo(seconds: number) {

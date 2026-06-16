@@ -52,7 +52,7 @@ const routes: RouteRecordRaw[] = [
     path: "/desktop-lyrics",
     name: "DesktopLyrics",
     component: () => import("@/views/DesktopLyrics.vue"),
-    meta: { title: "桌面歌词" },
+    meta: { title: "桌面歌词", public: true },
   },
   { path: "/:pathMatch(.*)*", redirect: "/daily" },
 ];

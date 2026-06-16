@@ -41,7 +41,9 @@ pub fn run() {
         // 阶段5：桌面集成插件
         // - tray 内置在 tauri 主 crate 中（无需独立 plugin crate）
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_window_state::Builder::default()
+            .with_denylist(&["desktop-lyrics"])
+            .build())
         // 全局状态
         .manage(initial_app_state)
         .setup(|app| {
