@@ -17,6 +17,7 @@
 
 import {
   computed,
+  onBeforeUnmount,
   ref,
   shallowRef,
   watch,
@@ -156,8 +157,11 @@ export function useLyric(): UseLyricReturn {
   });
 
   /** 拉取并解析歌词 */
+  let lyricSeq = 0;
+
   async function loadFor(songId: number) {
-    if (songId === currentSongId.value) return;
+    const seq = ++lyricSeq;
+    if (songId === currentSongId.value && seq > 1) return;
     currentSongId.value = songId;
     lines.value = [];
     activeLineIndex.value = -1;
@@ -166,19 +170,19 @@ export function useLyric(): UseLyricReturn {
     loading.value = true;
     try {
       const res = await getLyric(songId);
-      // 原文优先；无原文时退而求翻译
+      if (seq !== lyricSeq) return;
       const raw = res.lrc || res.tLrc;
       lines.value = parseLrc(raw);
-      // 解析 YRC 逐字歌词
       if (res.yLrc) {
         yrcLines.value = parseYrc(res.yLrc);
       } else {
         yrcLines.value = [];
       }
     } catch (e) {
+      if (seq !== lyricSeq) return;
       error.value = e instanceof Error ? e.message : "歌词加载失败";
     } finally {
-      loading.value = false;
+      if (seq === lyricSeq) loading.value = false;
     }
   }
 
@@ -232,40 +236,44 @@ export function useLyric(): UseLyricReturn {
 
   /**
    * 阶段3：向桌面歌词窗口推送更新。
-   * 抽出成函数复用：watch 依赖变化时调用，request-snapshot 时也调用。
+   * 节流到 250ms，避免 4Hz timeupdate 高频 IPC。
    */
+  let pushTimer: ReturnType<typeof setTimeout> | undefined;
+
   function pushUpdateToDesktop() {
-    if (!isTauri()) return;
-    const idx = activeLineIndex.value;
-    const currentLine = idx >= 0 && idx < lines.value.length
-      ? lines.value[idx]
-      : null;
-    const nextLine = idx + 1 < lines.value.length
-      ? lines.value[idx + 1]
-      : null;
-    const lineTime = currentLine ? currentLine.time : 0;
-    const nextTime = nextLine ? nextLine.time : lineTime + 5000;
-    const span = Math.max(1, nextTime - lineTime);
-    const progress = idx >= 0
-      ? Math.max(0, Math.min(1, progressMs.value / span))
-      : 0;
+    if (pushTimer) return;
+    pushTimer = setTimeout(() => {
+      pushTimer = undefined;
+      if (!isTauri()) return;
+      const idx = activeLineIndex.value;
+      const currentLine = idx >= 0 && idx < lines.value.length
+        ? lines.value[idx]
+        : null;
+      const nextLine = idx + 1 < lines.value.length
+        ? lines.value[idx + 1]
+        : null;
+      const lineTime = currentLine ? currentLine.time : 0;
+      const nextTime = nextLine ? nextLine.time : lineTime + 5000;
+      const span = Math.max(1, nextTime - lineTime);
+      const progress = idx >= 0
+        ? Math.max(0, Math.min(1, progressMs.value / span))
+        : 0;
 
-    const payload: DesktopLyricsPayload = {
-      current: currentLine?.text ?? "",
-      next: nextLine?.text ?? "",
-      progress,
-      songName: player.currentSong?.name ?? "",
-      artists: player.currentSong?.artists ?? "",
-      lines: lines.value,
-      activeLineIndex: idx,
-      progressMs: progressMs.value,
-      karaokeTokens: karaokeTokens.value,
-      accentColor: readThemeAccentFromDOM(),
-    };
+      const payload: DesktopLyricsPayload = {
+        current: currentLine?.text ?? "",
+        next: nextLine?.text ?? "",
+        progress,
+        songName: player.currentSong?.name ?? "",
+        artists: player.currentSong?.artists ?? "",
+        lines: lines.value,
+        activeLineIndex: idx,
+        progressMs: progressMs.value,
+        karaokeTokens: karaokeTokens.value,
+        accentColor: readThemeAccentFromDOM(),
+      };
 
-    void emit("desktop-lyrics:update", payload).catch(() => {
-      /* 桌面窗未打开时 emit 静默失败 */
-    });
+      void emit("desktop-lyrics:update", payload).catch(() => {});
+    }, 250);
   }
 
   /** 监听变化主动推送：观察整首歌变化、活跃行、行内进度、歌词数组 */
@@ -285,6 +293,14 @@ export function useLyric(): UseLyricReturn {
   // 多个组件都 useLyric() 时，最后一个活跃实例的引用生效（它们观察同一个
   // playerStore，行为一致）。
   _pushDesktopLyrics = pushUpdateToDesktop;
+
+  onBeforeUnmount(() => {
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = undefined;
+    if (_pushDesktopLyrics === pushUpdateToDesktop) {
+      _pushDesktopLyrics = null;
+    }
+  });
 
   /** 点击某行歌词 → 跳转播放 */
   function seekTo(seconds: number) {

@@ -10,10 +10,10 @@ use std::path::PathBuf;
 
 use ncm_api::{ApiResponse, Query};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{map_ncm_err, AppError, AppResult};
 use crate::state::AppState;
 
 // ============================================================
@@ -81,7 +81,7 @@ pub struct QrCheckResponse {
 #[tauri::command]
 pub async fn login_qr_key() -> AppResult<QrKeyResult> {
     // 临时 ApiClient（不需要登录态）
-    let api = build_anonymous_client(None)?;
+    let api = build_anonymous_client()?;
     let resp = api.login_qr_key(&Query::new()).await.map_err(map_ncm_err)?;
 
     // 兼容两种返回结构：
@@ -265,7 +265,6 @@ async fn finalize_login(
         let prev = state.auth.lock().await.cookie.clone();
         let merged = merge_cookie(prev.as_deref(), resp);
         if let Some(c) = merged.clone() {
-            // 同步到 ApiClient，供后续请求使用
             state.api.lock().await.set_cookie(c.clone());
         }
         merged
@@ -273,27 +272,29 @@ async fn finalize_login(
     .ok_or_else(|| AppError::Internal("未拿到登录 cookie".to_string()))?;
 
     // 2. 拉取用户信息（/user/account）。强制带上合并后的 cookie
+    //    先锁 api 发请求，完成后释放，再锁 auth 写结果，避免嵌套锁
+    let fetch_profile = |r: &ApiResponse| -> (u64, String, Option<String>) {
+        let uid = r
+            .body
+            .pointer("/account/id")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let nick = r
+            .body
+            .pointer("/profile/nickname")
+            .and_then(|v| v.as_str())
+            .unwrap_or("网易云用户")
+            .to_string();
+        let avatar = r
+            .body
+            .pointer("/profile/avatarUrl")
+            .and_then(|v| v.as_str())
+            .and_then(normalize_avatar_url);
+        (uid, nick, avatar)
+    };
+
     let (user_id, nickname, avatar_url) = {
         let api = state.api.lock().await;
-        let fetch_profile = |r: &ApiResponse| -> (u64, String, Option<String>) {
-            let uid = r
-                .body
-                .pointer("/account/id")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let nick = r
-                .body
-                .pointer("/profile/nickname")
-                .and_then(|v| v.as_str())
-                .unwrap_or("网易云用户")
-                .to_string();
-            let avatar = r
-                .body
-                .pointer("/profile/avatarUrl")
-                .and_then(|v| v.as_str())
-                .and_then(normalize_avatar_url);
-            (uid, nick, avatar)
-        };
         match api
             .user_account(&Query::new().cookie(&merged_cookie))
             .await
@@ -301,14 +302,13 @@ async fn finalize_login(
             Ok(r) => fetch_profile(&r),
             Err(e) => {
                 log::warn!("[login] user_account 拉取失败: {e}");
-                // 兜底用登录响应 body（多数情况没有 avatarUrl）
                 let (uid, nick, _) = fetch_profile(resp);
                 (uid, nick, None)
             }
         }
     };
 
-    // 3. 写内存
+    // 3. 写内存（api 已释放，不会嵌套锁）
     {
         let mut auth = state.auth.lock().await;
         auth.user_id = Some(user_id);
@@ -320,7 +320,7 @@ async fn finalize_login(
 
     // 4. 持久化（plugin-store + TOML 双份）
     persist_cookie(app, &merged_cookie)?;
-    persist_session_meta(app, user_id, &nickname, avatar_url.as_deref(), method, &merged_cookie)?;
+    persist_session_meta(user_id, &nickname, avatar_url.as_deref(), method, &merged_cookie)?;
 
     Ok(LoginResult { user_id, nickname, avatar_url })
 }
@@ -415,10 +415,9 @@ pub async fn save_cookie(
     state: State<'_, AppState>,
     payload: CookiePayload,
 ) -> AppResult<LoginResult> {
-    state.api.lock().await.set_cookie(payload.cookie.clone());
-
     let resp = {
-        let api = state.api.lock().await;
+        let mut api = state.api.lock().await;
+        api.set_cookie(payload.cookie.clone());
         api.user_account(&Query::new().cookie(&payload.cookie))
             .await
             .map_err(map_ncm_err)?
@@ -451,7 +450,7 @@ pub async fn save_cookie(
     }
 
     persist_cookie(&app, &payload.cookie)?;
-    persist_session_meta(&app, user_id, &nickname, avatar_url.as_deref(), "cookie", &payload.cookie)?;
+    persist_session_meta(user_id, &nickname, avatar_url.as_deref(), "cookie", &payload.cookie)?;
 
     Ok(LoginResult { user_id, nickname, avatar_url })
 }
@@ -470,14 +469,13 @@ fn persist_cookie(app: &AppHandle, cookie: &str) -> AppResult<()> {
 }
 
 fn persist_session_meta(
-    app: &AppHandle,
     user_id: u64,
     nickname: &str,
     avatar_url: Option<&str>,
     method: &str,
     cookie: &str,
 ) -> AppResult<()> {
-    let path = session_path().ok_or_else(|| AppError::Internal("无法定位配置目录".to_string()))?;
+    let path = dirs_auth_session().ok_or_else(|| AppError::Internal("无法定位配置目录".to_string()))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(AppError::Io)?;
     }
@@ -492,9 +490,6 @@ fn persist_session_meta(
     let raw = toml::to_string_pretty(&record)
         .map_err(|e| AppError::Internal(format!("toml 序列化失败: {e}")))?;
     std::fs::write(&path, raw).map_err(AppError::Io)?;
-
-    // 防止未使用的 app 警告
-    let _ = app;
     Ok(())
 }
 
@@ -524,10 +519,6 @@ pub fn session_to_auth(record: &SessionRecord) -> crate::state::AuthState {
     }
 }
 
-fn session_path() -> Option<PathBuf> {
-    dirs_auth_session()
-}
-
 fn dirs_auth_session() -> Option<PathBuf> {
     use directories::BaseDirs;
     let root = BaseDirs::new()?.config_dir().join("nnplayer");
@@ -542,7 +533,7 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-fn build_anonymous_client(_cookie: Option<String>) -> AppResult<ncm_api::ApiClient> {
+fn build_anonymous_client() -> AppResult<ncm_api::ApiClient> {
     use reqwest::Client;
     let http = Client::builder()
         .user_agent(concat!(
@@ -552,11 +543,7 @@ fn build_anonymous_client(_cookie: Option<String>) -> AppResult<ncm_api::ApiClie
         .cookie_store(true)
         .build()
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(ncm_api::ApiClient::new(_cookie, http))
-}
-
-pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
-    AppError::Ncm(e.to_string())
+    Ok(ncm_api::ApiClient::new(None, http))
 }
 
 // ============================================================

@@ -7,6 +7,7 @@ import { computed } from "vue";
 import { Play } from "lucide-vue-next";
 import type { Song } from "@/types/music";
 import { usePlayerStore } from "@/stores/player";
+import { fmtDurationMs } from "@/utils/format";
 
 interface Props {
   songs: Song[];
@@ -24,13 +25,6 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const player = usePlayerStore();
-
-function fmt(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
 
 // 当前播放歌曲 id
 const currentId = computed(() => player.currentSong?.id ?? null);
@@ -109,7 +103,7 @@ function playAll() {
           {{ song.album }}
         </div>
         <div class="text-xs text-text-secondary text-right tabular-nums">
-          {{ fmt(song.duration) }}
+          {{ fmtDurationMs(song.duration) }}
         </div>
       </li>
     </ul>

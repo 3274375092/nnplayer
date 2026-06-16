@@ -19,9 +19,9 @@ import {
 } from "vue";
 
 export interface SpringOptions {
-  stiffness?: number; // k, 默认 170
-  damping?: number;   // c, 默认 26
-  mass?: number;      // m, 默认 1
+  stiffness?: number;
+  damping?: number;
+  mass?: number;
 }
 
 const DEFAULTS: Required<SpringOptions> = {
@@ -36,28 +36,27 @@ export function useSpringValue(
 ) {
   const o = { ...DEFAULTS, ...opts };
   const value = ref(target.value);
-  const velocity = ref(0);
+  let velocity = 0;
 
   let raf = 0;
   let lastT = 0;
 
   function tick(t: number) {
     if (!lastT) lastT = t;
-    // 限制 dt 防止 tab 切换后大跳
     const dt = Math.min(0.064, (t - lastT) / 1000);
     lastT = t;
     const force =
       -o.stiffness * (value.value - target.value) -
-      o.damping * velocity.value;
+      o.damping * velocity;
     const accel = force / o.mass;
-    velocity.value += accel * dt;
-    value.value += velocity.value * dt;
+    velocity += accel * dt;
+    value.value += velocity * dt;
     if (
       Math.abs(value.value - target.value) < 0.1 &&
-      Math.abs(velocity.value) < 0.1
+      Math.abs(velocity) < 0.1
     ) {
       value.value = target.value;
-      velocity.value = 0;
+      velocity = 0;
       raf = 0;
       return;
     }

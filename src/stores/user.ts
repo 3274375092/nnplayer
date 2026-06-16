@@ -15,9 +15,10 @@ import {
   loginWithAccount,
   loginWithCaptcha,
   logout as apiLogout,
+  saveCookie,
 } from "@/composables/useNcmApi";
 
-export type LoginMethod = "qr" | "account" | "phone" | "cookie" | "unknown";
+export type LoginMethod = "qr" | "account" | "phone" | "cookie" | "unknown" | "failed";
 
 export const useUserStore = defineStore("user", () => {
   // =============== 状态 ===============
@@ -32,23 +33,48 @@ export const useUserStore = defineStore("user", () => {
     loggedIn.value ? nickname.value || "网易云用户" : "未登录"
   );
 
+  // refresh 调用去重：允许多次调用但只发一次请求
+  let refreshPromise: Promise<void> | null = null;
+
+  function setAuthState(opts: {
+    loggedIn: boolean;
+    nickname?: string;
+    userId?: number | null;
+    loginMethod?: LoginMethod;
+    avatarUrl?: string;
+  }) {
+    loggedIn.value = opts.loggedIn;
+    nickname.value = opts.nickname ?? "";
+    userId.value = opts.userId ?? null;
+    loginMethod.value = opts.loginMethod ?? "unknown";
+    avatarUrl.value = opts.avatarUrl ?? "";
+  }
+
   // =============== 会话恢复 ===============
 
-  /**
-   * 应用启动时调用：后端的 lib.rs::restore_session 已经把会话读入内存，
-   * 这里只是拉取一下显示出来。
-   */
   async function refresh() {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = _refresh();
+    try {
+      await refreshPromise;
+    } finally {
+      refreshPromise = null;
+    }
+  }
+
+  async function _refresh() {
     try {
       const s = await getAuthState();
-      loggedIn.value = s.loggedIn;
-      nickname.value = s.nickname ?? "";
-      userId.value = s.userId ?? null;
-      loginMethod.value = (s.loginMethod as LoginMethod) ?? "unknown";
-      avatarUrl.value = s.avatarUrl ?? "";
+      setAuthState({
+        loggedIn: s.loggedIn,
+        nickname: s.nickname,
+        userId: s.userId,
+        loginMethod: (s.loginMethod as LoginMethod) ?? "unknown",
+        avatarUrl: s.avatarUrl,
+      });
     } catch (e) {
       console.warn("[user] refresh 失败", e);
-      loggedIn.value = false;
+      setAuthState({ loggedIn: false, loginMethod: "failed" });
     }
   }
 
@@ -69,42 +95,54 @@ export const useUserStore = defineStore("user", () => {
   async function pollQrLogin(unikey: string) {
     const res = await loginQrCheck(unikey);
     if (res.code === 803) {
-      loggedIn.value = true;
-      nickname.value = res.nickname ?? "网易云用户";
-      userId.value = res.userId ?? null;
-      loginMethod.value = "qr";
-      avatarUrl.value = res.avatarUrl ?? "";
+      setAuthState({
+        loggedIn: true,
+        nickname: res.nickname ?? "网易云用户",
+        userId: res.userId ?? null,
+        loginMethod: "qr",
+        avatarUrl: res.avatarUrl ?? "",
+      });
     }
     return res;
   }
 
-  /**
-   * 账号密码登录。
-   * 前端：md5Password 由调用方传入（已 MD5 一次的 32 位小写 hex）。
-   */
   async function loginByAccount(account: string, md5Password: string) {
     const res = await loginWithAccount(account, md5Password);
-    loggedIn.value = true;
-    nickname.value = res.nickname;
-    userId.value = res.userId;
-    loginMethod.value = "account";
-    avatarUrl.value = res.avatarUrl ?? "";
+    setAuthState({
+      loggedIn: true,
+      nickname: res.nickname,
+      userId: res.userId ?? null,
+      loginMethod: "account",
+      avatarUrl: res.avatarUrl ?? "",
+    });
     return res;
   }
 
-  /** 发送手机验证码。*/
+  async function loginByCookie(cookie: string) {
+    const res = await saveCookie(cookie);
+    setAuthState({
+      loggedIn: true,
+      nickname: res.nickname,
+      userId: res.userId ?? null,
+      loginMethod: "cookie",
+      avatarUrl: res.avatarUrl ?? "",
+    });
+    return res;
+  }
+
   async function sendPhoneCaptcha(phone: string) {
     await loginSendCaptcha(phone);
   }
 
-  /** 手机验证码登录。*/
   async function loginByPhone(phone: string, captcha: string) {
     const res = await loginWithCaptcha(phone, captcha);
-    loggedIn.value = true;
-    nickname.value = res.nickname;
-    userId.value = res.userId;
-    loginMethod.value = "phone";
-    avatarUrl.value = res.avatarUrl ?? "";
+    setAuthState({
+      loggedIn: true,
+      nickname: res.nickname,
+      userId: res.userId ?? null,
+      loginMethod: "phone",
+      avatarUrl: res.avatarUrl ?? "",
+    });
     return res;
   }
 
@@ -115,10 +153,17 @@ export const useUserStore = defineStore("user", () => {
     } catch (e) {
       console.warn("[user] 后端 logout 失败，继续清本地状态", e);
     }
-    loggedIn.value = false;
-    nickname.value = "";
-    userId.value = null;
-    loginMethod.value = "unknown";
+    setAuthState({
+      loggedIn: false,
+      nickname: "",
+      userId: null,
+      loginMethod: "unknown",
+      avatarUrl: "",
+    });
+  }
+
+  /** 图片加载失败时由 UI 调用，清空头像。 */
+  function clearAvatar() {
     avatarUrl.value = "";
   }
 
@@ -135,6 +180,8 @@ export const useUserStore = defineStore("user", () => {
     loginByAccount,
     sendPhoneCaptcha,
     loginByPhone,
+    loginByCookie,
+    clearAvatar,
     logout,
   };
 });

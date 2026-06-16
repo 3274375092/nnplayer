@@ -335,7 +335,6 @@ onBeforeUnmount(() => {
           v-if="searchExpand && collapsed"
           class="fixed inset-0 z-40 bg-black/30 flex items-start justify-center pt-20 px-4"
           @click.self="searchExpand = false"
-          @keydown.esc="searchExpand = false"
         >
           <div class="card p-4 w-full max-w-md">
             <input
@@ -482,7 +481,7 @@ onBeforeUnmount(() => {
         :src="userStore.avatarUrl"
         :alt="userStore.displayName"
         class="w-8 h-8 rounded-full bg-hover object-cover shrink-0"
-        @error="userStore.avatarUrl = ''"
+          @error="userStore.clearAvatar()"
       />
       <div
         v-else
@@ -515,7 +514,7 @@ onBeforeUnmount(() => {
         :alt="userStore.displayName"
         class="w-9 h-9 rounded-full bg-hover object-cover"
         :title="userStore.displayName"
-        @error="userStore.avatarUrl = ''"
+          @error="userStore.clearAvatar()"
       />
       <div
         v-else

@@ -29,9 +29,9 @@ pub fn run() {
         .try_init();
 
     // 启动前先读取持久化的 session，准备初始 cookie 和 AuthState
-    let record = commands::load_session_meta();
-    let initial_cookie = record.as_ref().map(|r| r.cookie.clone());
-    let initial_auth = record.as_ref().map(commands::session_to_auth).unwrap_or_default();
+    let session = commands::load_session_meta();
+    let initial_cookie = session.as_ref().map(|r| r.cookie.clone());
+    let initial_auth = session.as_ref().map(commands::session_to_auth).unwrap_or_default();
     let initial_app_state = AppState::new(initial_cookie, initial_auth)
         .expect("创建 AppState 失败");
 
@@ -45,12 +45,13 @@ pub fn run() {
             .with_denylist(&["desktop-lyrics"])
             .build())
         // 全局状态
-        .manage(initial_app_state)
-        .setup(|app| {
+        .manage(initial_app_state.clone())
+        .setup(move |app| {
             // 应用启动时异步校验 session 有效性
             let app_handle = app.handle().clone();
+            let state = initial_app_state.clone();
             tauri::async_runtime::spawn(async move {
-                restore_session(&app_handle).await;
+                restore_session(&app_handle, &state, session).await;
             });
 
             // 阶段5：托盘 + 全局快捷键
@@ -86,20 +87,24 @@ pub fn run() {
             commands::user::get_playlist_detail,
             // === 歌词 ===
             commands::lyric::get_lyric,
+            // === 桌面歌词窗口 ===
+            commands::window_geom::is_position_on_screen,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
 }
 
 /// 启动时自动恢复上一次会话：
-///   1. 读取 session.toml（已在 AppState::new 中预读 cookie 到 ApiClient）
+///   1. 使用已经预读的 session 数据（避免重复读盘）
 ///   2. 调用 ncm_api::login_status 验证
 ///   3. 成功 → 把 user_id / nickname 写入 AuthState
 ///   4. 失败 → 清理持久化 + 清空内存 cookie
-async fn restore_session(app: &tauri::AppHandle) {
-    let state: tauri::State<AppState> = app.state();
-
-    let Some(record) = commands::load_session_meta() else {
+async fn restore_session(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    session: Option<commands::auth::SessionRecord>,
+) {
+    let Some(record) = session else {
         log::info!("[startup] 没有持久化的会话，跳过恢复");
         return;
     };
@@ -119,7 +124,6 @@ async fn restore_session(app: &tauri::AppHandle) {
         .await
     {
         Ok(resp) => {
-            // 响应 body.data.account.id / profile.nickname
             let uid = resp
                 .body
                 .pointer("/data/account/id")
@@ -133,7 +137,6 @@ async fn restore_session(app: &tauri::AppHandle) {
                 .and_then(|v| v.as_str())
                 .unwrap_or(&record.nickname)
                 .to_string();
-            // 优先用 login_status 响应的最新 avatarUrl,失败回落 session.toml 的旧值
             let avatar_url = resp
                 .body
                 .pointer("/data/profile/avatarUrl")
@@ -179,7 +182,6 @@ async fn restore_session(app: &tauri::AppHandle) {
 // - Rust emit 是单向信号，UI 与 store 同步由 Vue 负责
 // - 若 Rust 端持有 audio 状态会引入双份状态同步问题
 
-use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -198,7 +200,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     )?;
 
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
-        .expect("加载托盘图标失败");
+        .map_err(|e| tauri::Error::Anyhow(anyhow::Error::new(e)))?;
 
     let _tray = TrayIconBuilder::with_id("main")
         .icon(icon)

@@ -50,8 +50,8 @@ export function useAudioPlayer() {
 
   audio.volume = state.volume;
 
-  // 当前曲目的元信息（用于 MediaSession 同步）
-  let currentSongMeta: Song | null = null;
+  // 最近一次 playSong 请求的序号，用于取消过时的异步结果
+  let playSeq = 0;
 
   // =============== MediaSession 集成（阶段5） ===============
   //
@@ -196,25 +196,25 @@ export function useAudioPlayer() {
    * 3. 阶段5：若有 song 元信息则同步 MediaSession metadata
    */
   async function playSong(songId: number, song?: Song) {
+    const seq = ++playSeq;
     try {
       state.loading = true;
       state.currentSongId = songId;
-      currentSongMeta = song ?? null;
 
       const res = await getSongUrl(songId);
+      if (seq !== playSeq) return;
       if (!res.url) {
         throw new Error("该歌曲暂无可用播放源");
       }
 
-      // 切换歌曲前先暂停旧的，避免某些浏览器拒绝 autoplay
       audio.pause();
       audio.src = res.url;
-      // 切歌时更新 MediaSession metadata
       if (song) {
         syncMediaSession(song);
       }
       await audio.play();
     } catch (e) {
+      if (seq !== playSeq) return;
       state.loading = false;
       throw e;
     }

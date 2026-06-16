@@ -3,17 +3,14 @@
 // 不直接操作 audio DOM（交给 useAudioPlayer），只持有业务状态。
 
 import { defineStore } from "pinia";
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 
 import { useAudioPlayer } from "@/composables/useAudioPlayer";
-import { useThemeStore } from "@/stores/theme";
 import type { PlayMode, Song } from "@/types/music";
 
 export const usePlayerStore = defineStore("player", () => {
   // 单例 audio 控制器，整个应用共享一个 audio 元素
   const controller = useAudioPlayer();
-  // 主题色 store：当前歌曲封面变化时驱动主题色
-  const themeStore = useThemeStore();
 
   // =============== 状态 ===============
 
@@ -31,23 +28,6 @@ export const usePlayerStore = defineStore("player", () => {
       ? queue.value[index.value]
       : null;
   });
-
-  // =============== 副作用 ===============
-
-  // 监听当前歌曲变化：把封面主色应用到主题
-  // - 有 picUrl：触发封面提取（debounce 200ms 由 theme store 处理）
-  // - 无 picUrl：重置回米黄默认
-  watch(
-    currentSong,
-    (song) => {
-      if (song?.picUrl) {
-        themeStore.applyFromCover(song.picUrl);
-      } else {
-        themeStore.resetToDefault();
-      }
-    },
-    { immediate: true },
-  );
 
   const hasNext = computed(() => {
     if (playMode.value === "loop-one") return true;
@@ -127,14 +107,22 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   /** 播放当前索引对应的歌曲 */
+  let playFailCount = 0;
+
   async function playCurrent() {
     const song = currentSong.value;
     if (!song) return;
     try {
       await controller.playSong(song.id, song);
       pushHistory(song);
+      playFailCount = 0;
     } catch (e) {
-      // eslint-disable-next-line no-console
+      playFailCount++;
+      if (playFailCount >= 3) {
+        console.error("[player] 连续 3 次播放失败，停止自动切换");
+        playFailCount = 0;
+        return;
+      }
       console.error("[player] 播放失败，自动跳到下一首", e);
       await next();
     }
@@ -208,8 +196,12 @@ export const usePlayerStore = defineStore("player", () => {
     playMode.value = order[(cur + 1) % order.length];
   }
 
-  /** 监听 audio 的 ended 事件，触发自动下一首 + MediaSession 系统媒体键 */
+  /** 监听 audio 的 ended 事件，触发自动下一首 + MediaSession 系统媒体键。
+   *  幂等：多次调用不会重复注册监听器。*/
+  let autoNextBound = false;
   function bindAutoNext() {
+    if (autoNextBound) return;
+    autoNextBound = true;
     controller.audioEl.addEventListener("nnplayer:ended", () => {
       if (playMode.value === "loop-one") {
         void playCurrent();

@@ -12,7 +12,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { isPositionOnScreen } from "@/composables/useNcmApi";
 
@@ -157,24 +156,11 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
     }
   }
 
-  /**
-   * 判断当前是否在主窗口（避免桌面歌词窗口自身初始化 store 时误触发）。
-   * 当前窗口的 label 是 'main'。
-   */
-  function isMainWindow(): boolean {
-    try {
-      return getCurrentWindow().label === "main";
-    } catch {
-      return false;
-    }
-  }
-
   return {
     isOpen,
     openWindow,
     closeWindow,
     toggleWindow,
     syncFromSystem,
-    isMainWindow,
   };
 });

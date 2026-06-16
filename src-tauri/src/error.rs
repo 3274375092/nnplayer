@@ -62,3 +62,9 @@ impl Serialize for AppError {
 
 /// 项目内部使用的统一 Result 类型别名。
 pub type AppResult<T> = Result<T, AppError>;
+
+/// 将 ncm_api::NcmError 转换为 AppError::Ncm。
+/// 供各 commands 子模块共用，避免跨模块引用 auth 内部函数。
+pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
+    AppError::Ncm(e.to_string())
+}

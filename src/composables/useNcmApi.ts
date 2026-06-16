@@ -155,10 +155,6 @@ export function getPlaylistDetail(playlistId: number) {
   return call<PlaylistDetail>(Commands.GetPlaylistDetail, { playlistId });
 }
 
-export function pickSongIds(songs: Song[]): number[] {
-  return songs.map((s) => s.id);
-}
-
 // =============== 歌词（阶段3） ===============
 
 /**

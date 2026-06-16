@@ -65,7 +65,6 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   const userStore = useUserStore();
 
-  // 若尚未刷新过登录态，先等它完成（启动时自动恢复场景）
   if (!userStore.loggedIn && userStore.loginMethod === "unknown") {
     await userStore.refresh();
   }
@@ -76,7 +75,6 @@ router.beforeEach(async (to) => {
     return { path: "/login", query: { redirect: to.fullPath } };
   }
 
-  // 已登录但访问 /login：跳转回 redirect 或首页
   if (to.name === "Login") {
     const redirect = (to.query.redirect as string) || "/daily";
     return { path: redirect };

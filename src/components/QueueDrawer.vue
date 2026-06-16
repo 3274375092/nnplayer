@@ -6,6 +6,7 @@
 import { computed, ref, watch } from "vue";
 import { Play, X } from "lucide-vue-next";
 import { usePlayerStore } from "@/stores/player";
+import { fmtDurationMs } from "@/utils/format";
 
 const open = ref(false);
 const player = usePlayerStore();
@@ -56,18 +57,12 @@ function clear() {
 }
 
 function playAll() {
-  // 重新从头播放队列中所有"下一首"
   const songs = [...list.value];
   if (songs.length === 0) return;
-  void player.playList([player.currentSong!, ...songs].filter(Boolean) as never[], 0);
-}
-
-function fmt(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return "00:00";
-  const total = Math.floor(durationMs / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  const allSongs = player.currentSong
+    ? [player.currentSong, ...songs]
+    : songs;
+  void player.playList(allSongs, 0);
 }
 
 function onEsc(e: KeyboardEvent) {
@@ -156,7 +151,7 @@ defineExpose({
               </div>
             </div>
             <span class="text-xs text-text-secondary tabular-nums">
-              {{ fmt(song.duration) }}
+               {{ fmtDurationMs(song.duration) }}
             </span>
             <button
               type="button"

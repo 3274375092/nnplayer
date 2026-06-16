@@ -48,6 +48,7 @@ const {
  * key 设计：避免下标漂移导致老行残留——歌切换时整体清空。
  */
 const lineHeights = ref<number[]>([]);
+const containerRef = ref<HTMLElement | null>(null);
 
 let ro: ResizeObserver | null = null;
 
@@ -63,8 +64,9 @@ function setLineRef(el: Element | { $el?: Element } | null, idx: number) {
 }
 
 function measureAll() {
-  // 通过 querySelectorAll 抓所有 .lyric-line,避免对模板 ref 的依赖
-  const nodes = document.querySelectorAll<HTMLElement>(".lyric-line");
+  // 限定在组件根元素内查询,避免与其他 LyricPanel 实例或同名 class 冲突
+  const nodes = containerRef.value?.querySelectorAll<HTMLElement>(".lyric-line");
+  if (!nodes) return;
   const heights: number[] = [];
   nodes.forEach((n) => heights.push(n.offsetHeight));
   lineHeights.value = heights;
@@ -145,6 +147,7 @@ const hasSong = computed(() => player.currentSong !== null);
 
 <template>
   <div
+    ref="containerRef"
     class="card p-4 w-full"
     :style="{ minHeight: `${panelHeight}px` }"
   >

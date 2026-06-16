@@ -27,22 +27,15 @@ import {
   Volume2,
 } from "lucide-vue-next";
 import ProgressBar from "@/components/ProgressBar.vue";
+import { fmtDuration } from "@/utils/format";
 import ScrollText from "@/components/ScrollText.vue";
 import { usePlayerStore } from "@/stores/player";
 
 const player = usePlayerStore();
 const router = useRouter();
 
-function fmt(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
-  const total = Math.floor(seconds);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-const cur = computed(() => fmt(player.audioState.currentTime));
-const dur = computed(() => fmt(player.audioState.duration));
+const cur = computed(() => fmtDuration(player.audioState.currentTime));
+const dur = computed(() => fmtDuration(player.audioState.duration));
 
 function onSeek(v: number) {
   // ProgressBar 松手时才 emit change，直接 seek 即可

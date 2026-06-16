@@ -88,8 +88,3 @@ export interface AppErrorPayload {
 
 // 播放模式
 export type PlayMode = "loop-one" | "loop-list" | "shuffle";
-
-// 通用 Result 包装，便于前端统一处理错误
-export type Result<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: AppErrorPayload };

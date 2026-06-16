@@ -18,17 +18,21 @@ const props = defineProps<Props>();
 const detail = ref<PlaylistDetail | null>(null);
 const loading = ref(false);
 const error = ref("");
+let loadSeq = 0;
 
 async function load() {
+  const seq = ++loadSeq;
   loading.value = true;
   error.value = "";
   detail.value = null;
   try {
     detail.value = await getPlaylistDetail(Number(props.id));
+    if (seq !== loadSeq) return;
   } catch (e) {
+    if (seq !== loadSeq) return;
     error.value = e instanceof Error ? e.message : "加载失败";
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 

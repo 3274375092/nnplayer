@@ -5,7 +5,7 @@
 //   3. 支持手动回车立即触发
 //   4. （阶段3）右侧展示歌词面板
 
-import { onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
@@ -23,22 +23,26 @@ const error = ref("");
 
 // 防抖定时器
 let timer: number | undefined;
+let searchSeq = 0;
 
 async function doSearch(kw: string) {
   if (!kw.trim()) {
     results.value = [];
     return;
   }
+  const seq = ++searchSeq;
   loading.value = true;
   error.value = "";
   try {
     const res = await searchSongs(kw.trim(), 50);
+    if (seq !== searchSeq) return;
     results.value = res.songs;
   } catch (e) {
+    if (seq !== searchSeq) return;
     error.value = e instanceof Error ? e.message : "搜索失败";
     results.value = [];
   } finally {
-    loading.value = false;
+    if (seq === searchSeq) loading.value = false;
   }
 }
 
@@ -72,6 +76,11 @@ watch(
 
 onMounted(() => {
   if (keyword.value) void doSearch(keyword.value);
+});
+
+onBeforeUnmount(() => {
+  if (timer) window.clearTimeout(timer);
+  timer = undefined;
 });
 </script>
 

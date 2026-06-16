@@ -180,14 +180,7 @@ async function submitCookie() {
     return;
   }
   try {
-    await userStore.loginByAccount(cookieRaw.value.trim(), "");
-    // 这里走 account 通道会失败，改用 save_cookie
-    const { saveCookie } = await import("@/composables/useNcmApi");
-    const r = await saveCookie(cookieRaw.value.trim());
-    userStore.nickname = r.nickname;
-    userStore.userId = r.userId;
-    userStore.loggedIn = true;
-    userStore.loginMethod = "cookie";
+    await userStore.loginByCookie(cookieRaw.value.trim());
     redirectAfterLogin();
   } catch (e) {
     accountError.value = e instanceof Error ? e.message : "Cookie 登录失败";

@@ -5,7 +5,7 @@ use ncm_api::Query;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::models::{DailyRecommend, SearchResult, SearchSuggestion, Song, SongUrl};
+use crate::models::{parse_ncm_song, DailyRecommend, SearchResult, SearchSuggestion, Song, SongUrl};
 use crate::state::AppState;
 
 /// 搜索歌曲。
@@ -15,123 +15,63 @@ pub async fn search_songs(
     keyword: String,
     limit: Option<u32>,
 ) -> AppResult<SearchResult> {
-    state.auth.lock().await.require_login()?;
+    state.check_login().await?;
 
     if keyword.trim().is_empty() {
         return Err(AppError::InvalidParam("搜索关键词不能为空".to_string()));
     }
     let limit = limit.unwrap_or(30).min(100);
+    let cookie = state.cookie().await;
 
     let api = state.api.lock().await;
-    let cookie = state.auth.lock().await.cookie.clone().unwrap_or_default();
     let resp = api
         .cloudsearch(
             &Query::new()
                 .cookie(&cookie)
                 .param("keywords", &keyword)
-                .param("type", "1") // 1 = 单曲
+                .param("type", "1")
                 .param("limit", &limit.to_string())
                 .param("offset", "0"),
         )
         .await
-        .map_err(crate::commands::auth::map_ncm_err)?;
+        .map_err(crate::error::map_ncm_err)?;
+    drop(api);
 
-    // 解析 songs.*[]
-    let raw_songs = resp
+    let songs: Vec<Song> = resp
         .body
         .pointer("/result/songs")
         .and_then(|v| v.as_array())
-        .cloned()
+        .map(|arr| arr.iter().filter_map(|s| parse_ncm_song(s, "duration")).collect())
         .unwrap_or_default();
 
-    let songs: Vec<crate::models::Song> = raw_songs
-        .into_iter()
-        .filter_map(|s| {
-            let id = s.get("id")?.as_u64()?;
-            let name = s.get("name")?.as_str()?.to_string();
-            let artists = s
-                .pointer("/ar")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                        .collect::<Vec<_>>()
-                        .join(" / ")
-                })
-                .unwrap_or_default();
-            let album = s
-                .pointer("/al/name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            // NetEase 搜索/推荐接口的歌曲 duration 字段名是 `duration`（毫秒），
-            // 旧代码用 `dt` 读不到，会 fallback 0，导致列表里全显示 00:00。
-            let duration = s
-                .get("duration")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let pic_url = s
-                .pointer("/al/picUrl")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            Some(crate::models::Song { id, name, artists, album, duration, pic_url })
-        })
-        .collect();
+    let total = resp
+        .body
+        .pointer("/result/songCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(songs.len() as u64) as u32;
 
-    Ok(SearchResult { songs, total: limit })
+    Ok(SearchResult { songs, total })
 }
 
 /// 获取每日推荐歌曲。
 #[tauri::command]
 pub async fn get_daily_recommend(state: State<'_, AppState>) -> AppResult<DailyRecommend> {
-    state.auth.lock().await.require_login()?;
+    state.check_login().await?;
 
+    let cookie = state.cookie().await;
     let api = state.api.lock().await;
-    let cookie = state.auth.lock().await.cookie.clone().unwrap_or_default();
-
-    // 真实接口 /recommend/songs
     let resp = api
         .recommend_songs(&Query::new().cookie(&cookie))
         .await
-        .map_err(crate::commands::auth::map_ncm_err)?;
+        .map_err(crate::error::map_ncm_err)?;
+    drop(api);
 
-    let raw = resp
+    let songs: Vec<Song> = resp
         .body
         .pointer("/data/dailySongs")
         .and_then(|v| v.as_array())
-        .cloned()
+        .map(|arr| arr.iter().filter_map(|s| parse_ncm_song(s, "dt")).collect())
         .unwrap_or_default();
-
-    let songs: Vec<crate::models::Song> = raw
-        .into_iter()
-        .filter_map(|s| {
-            let id = s.get("id")?.as_u64()?;
-            let name = s.get("name")?.as_str()?.to_string();
-            let artists = s
-                .pointer("/ar")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                        .collect::<Vec<_>>()
-                        .join(" / ")
-                })
-                .unwrap_or_default();
-            let album = s
-                .pointer("/al/name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            // NetEase 每日推荐接口的时长字段是 `dt`（毫秒），
-            // 注意：和搜索接口的 `duration` 字段名不同。
-            let duration = s.get("dt").and_then(|v| v.as_u64()).unwrap_or(0);
-            let pic_url = s
-                .pointer("/al/picUrl")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            Some(crate::models::Song { id, name, artists, album, duration, pic_url })
-        })
-        .collect();
 
     Ok(DailyRecommend {
         songs,
@@ -145,20 +85,20 @@ pub async fn get_song_url(
     state: State<'_, AppState>,
     song_id: u64,
 ) -> AppResult<SongUrl> {
-    state.auth.lock().await.require_login()?;
+    state.check_login().await?;
 
+    let cookie = state.cookie().await;
     let api = state.api.lock().await;
-    let cookie = state.auth.lock().await.cookie.clone().unwrap_or_default();
-
     let resp = api
         .song_url_v1(
             &Query::new()
                 .cookie(&cookie)
                 .param("id", &song_id.to_string())
-                .param("level", "exhigh"), // 320kbps
+                .param("level", "exhigh"),
         )
         .await
-        .map_err(crate::commands::auth::map_ncm_err)?;
+        .map_err(crate::error::map_ncm_err)?;
+    drop(api);
 
     let url = resp
         .body
@@ -175,24 +115,19 @@ pub async fn get_song_url(
 }
 
 /// 搜索建议（自动补全下拉浮层用）。
-/// NCM 接口 `/search/suggest/web` 返回结构：
-///   result.order: ["songs", "artists", "albums", "关键词1", "关键词2", ...]
-///     → "songs"/"artists"/"albums" 是分类标记，非关键词，需跳过
-///   result.songs: [{...}, ...]（命中歌曲）
 #[tauri::command]
 pub async fn search_suggest(
     state: State<'_, AppState>,
     keyword: String,
 ) -> AppResult<Vec<SearchSuggestion>> {
-    state.auth.lock().await.require_login()?;
+    state.check_login().await?;
 
     if keyword.trim().is_empty() {
         return Ok(Vec::new());
     }
 
+    let cookie = state.cookie().await;
     let api = state.api.lock().await;
-    let cookie = state.auth.lock().await.cookie.clone().unwrap_or_default();
-
     let resp = api
         .search_suggest(
             &Query::new()
@@ -201,49 +136,19 @@ pub async fn search_suggest(
                 .param("type", "web"),
         )
         .await
-        .map_err(crate::commands::auth::map_ncm_err)?;
+        .map_err(crate::error::map_ncm_err)?;
+    drop(api);
 
-    // 直接从 result.songs 提取歌曲作为建议条目
     let mut out: Vec<SearchSuggestion> = Vec::new();
 
     if let Some(raw_songs) = resp.body.pointer("/result/songs").and_then(|v| v.as_array()) {
         for s in raw_songs {
-            let id = match s.get("id").and_then(|v| v.as_u64()) {
-                Some(id) => id,
-                None => continue,
-            };
-            let name = match s.get("name").and_then(|v| v.as_str()) {
-                Some(n) => n.to_string(),
-                None => continue,
-            };
-            let artists = s
-                .pointer("/ar")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                        .collect::<Vec<_>>()
-                        .join(" / ")
-                })
-                .unwrap_or_default();
-            let album = s
-                .pointer("/al/name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let duration = s
-                .get("duration")
-                .or_else(|| s.get("dt"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let pic_url = s
-                .pointer("/al/picUrl")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            out.push(SearchSuggestion {
-                keyword: name.clone(),
-                song: Some(Song { id, name, artists, album, duration, pic_url }),
-            });
+            if let Some(song) = parse_ncm_song(s, "duration") {
+                out.push(SearchSuggestion {
+                    keyword: song.name.clone(),
+                    song: Some(song),
+                });
+            }
         }
     }
 

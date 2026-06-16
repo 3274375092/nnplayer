@@ -17,7 +17,7 @@ use ncm_api::{ApiClient, ApiResponse};
 use reqwest::Client;
 use tokio::sync::Mutex;
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppError;
 
 /// 用户基本信息（持久化的部分）。
 #[derive(Default, Clone, Debug)]
@@ -74,6 +74,22 @@ impl AppState {
         })
     }
 
+    /// 校验登录态。仅锁 auth，不锁 api，避免嵌套锁死锁。
+    pub async fn check_login(&self) -> Result<(), AppError> {
+        self.auth.lock().await.require_login()
+    }
+
+    /// 获取当前 cookie 字符串。仅锁 auth，不锁 api。
+    /// 命令中应先调此方法拿到 cookie，再锁 api 发请求，避免 ABBA 死锁。
+    pub async fn cookie(&self) -> String {
+        self.auth
+            .lock()
+            .await
+            .cookie
+            .clone()
+            .unwrap_or_default()
+    }
+
     /// 提取 NCM 业务码。
     pub fn response_code(resp: &ApiResponse) -> i64 {
         resp.body
@@ -93,38 +109,5 @@ impl AppState {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error")
             .to_string()
-    }
-}
-
-/// 从 ApiResponse 的 Set-Cookie 中合并出新 cookie 字符串。
-pub fn merge_cookie(prev: Option<&str>, resp: &ApiResponse) -> Option<String> {
-    if resp.cookie.is_empty() {
-        return prev.map(|s| s.to_string());
-    }
-
-    let mut map: std::collections::HashMap<String, String> =
-        prev.unwrap_or("").split(';').filter_map(|kv| {
-            let kv = kv.trim();
-            kv.split_once('=').map(|(k, v)| {
-                (k.trim().to_string(), v.trim().to_string())
-            })
-        }).collect();
-
-    for raw in &resp.cookie {
-        // raw 类似 "MUSIC_U=xxx; Path=/; HttpOnly"
-        if let Some((k, v)) = raw.split(';').next().and_then(|s| s.split_once('=')) {
-            map.insert(k.trim().to_string(), v.trim().to_string());
-        }
-    }
-
-    if map.is_empty() {
-        None
-    } else {
-        Some(
-            map.iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
     }
 }

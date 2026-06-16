@@ -153,36 +153,12 @@ export async function extractPalette(
 
 /** 把 seed 主色扩展成 6 个角色色，写到 :root CSS 变量。 */
 export function applyToCssVars(seed: string): void {
-  // 把 seed 解析为 HSL
-  const r = parseInt(seed.slice(1, 3), 16) / 255;
-  const g = parseInt(seed.slice(3, 5), 16) / 255;
-  const b = parseInt(seed.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  let h = 0;
-  let s = 0;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r:
-        h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
-        break;
-      case g:
-        h = ((b - r) / d + 2) * 60;
-        break;
-      case b:
-        h = ((r - g) / d + 4) * 60;
-        break;
-    }
-  }
+  const { h, s, l } = rgbToHsl(
+    parseInt(seed.slice(1, 3), 16),
+    parseInt(seed.slice(3, 5), 16),
+    parseInt(seed.slice(5, 7), 16),
+  );
 
-  // 6 个角色色：lightness/saturation 偏移策略
-  // - bg 极高 L + 极低 S：近白米色，让内容清晰
-  // - card / hover 略低 L：分层
-  // - accent 用原色 H/S，适中 L
-  // - text-primary / secondary 极低 L：保证对比度
   const root = document.documentElement;
   root.style.setProperty("--color-bg", hslToHex(h, Math.min(s, 0.6), 0.96));
   root.style.setProperty("--color-card", hslToHex(h, Math.min(s, 0.55), 0.92));

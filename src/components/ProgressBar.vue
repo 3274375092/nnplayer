@@ -10,14 +10,14 @@
 // 5. 工具提示：拖拽时显示当前时间
 
 import { computed, ref, watch } from "vue";
+import { fmtDuration } from "@/utils/format";
 
 const props = withDefaults(
   defineProps<{
     value: number;
     max: number;
-    buffer?: number; // 0~1，预留缓冲进度（暂未消费）
   }>(),
-  { buffer: 0 },
+  {},
 );
 
 const emit = defineEmits<{
@@ -65,14 +65,6 @@ function onKey(e: KeyboardEvent) {
   localValue.value = next;
   emit("update:value", next);
   emit("change", next);
-}
-
-function fmt(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
-  const total = Math.floor(seconds);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 </script>
 
@@ -123,7 +115,7 @@ function fmt(seconds: number): string {
       class="absolute -top-9 px-2 py-1 bg-card text-xs rounded shadow pointer-events-none whitespace-nowrap"
       :style="{ left: `calc(${ratio}% - 24px)` }"
     >
-      {{ fmt(localValue) }}
+      {{ fmtDuration(localValue) }}
     </div>
   </div>
 </template>
