@@ -34,6 +34,9 @@ pub enum AppError {
 
     #[error("内部错误: {0}")]
     Internal(String),
+
+    #[error("音频播放错误: {0}")]
+    Audio(String),
 }
 
 // 自定义序列化，前端拿到的是 { kind, message } 结构，便于统一处理。
@@ -52,6 +55,7 @@ impl Serialize for AppError {
             AppError::Store(_) => "Store",
             AppError::InvalidParam(_) => "InvalidParam",
             AppError::Internal(_) => "Internal",
+            AppError::Audio(_) => "Audio",
         };
         let mut s = serializer.serialize_struct("AppError", 2)?;
         s.serialize_field("kind", kind)?;

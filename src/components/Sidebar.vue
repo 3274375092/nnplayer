@@ -44,6 +44,7 @@ const collapsed = ref(
 
 const menu = [
   { to: "/daily", label: "每日推荐", icon: Sparkles },
+  { to: "/local-music", label: "本地音乐", icon: Music2 },
   { to: "/playlists", label: "我的歌单", icon: Folder },
 ] as const;
 

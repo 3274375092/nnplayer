@@ -17,7 +17,6 @@
 
 import {
   computed,
-  onBeforeUnmount,
   ref,
   shallowRef,
   watch,
@@ -26,7 +25,7 @@ import {
 } from "vue";
 import { emit } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
-import { getLyric } from "@/composables/useNcmApi";
+import { fetchOnlineLyric, getLyric, getLocalLyric } from "@/composables/useNcmApi";
 import {
   findActiveLineIndex,
   parseKaraokeLine,
@@ -85,20 +84,250 @@ export interface DesktopLyricsPayload {
 //
 // 桌面歌词窗口打开瞬间会 emit 'desktop-lyrics:request-snapshot'。
 // 主窗 App.vue 监听到该事件后调用 triggerDesktopLyricsPush() 推一份最新状态。
-// 触发器指向"最后一个活跃 useLyric 实例"的推送函数（多个组件共享 playerStore，
-// 行为一致，无需担心漂移）。
+//
+// 关键：lyrics 状态 + watches + 推送器 全部是**模块级单例**。
+// 历史 bug：当主窗没渲染 LyricPanel（如 LocalMusic/PlaylistDetail 路由）时，
+// useLyric() 不会被调，_pushDesktopLyrics 是 null，桌面歌词空白。
+// 现在 initGlobalLyricBridge() 由 App.vue onMounted 显式调一次，
+// 保证主窗任何路由下都能推送。
+
+// ============ 模块级共享 state（单例） ============
+
+const _lines = ref<LyricLine[]>([]);
+const _yrcLines = shallowRef<ReturnType<typeof parseYrc>>([]);
+const _activeLineIndex = ref<number>(-1);
+const _progressMs = ref<number>(0);
+const _loading = ref<boolean>(false);
+const _error = ref<string>("");
+const _currentSongId = ref<number | null>(null);
+let _lyricSeq = 0;
+
+/** 歌词来源（用于 LyricPanel 在"本地歌+在线歌词"时显示提示） */
+type LyricSource = "local" | "online" | "none";
+const _source = ref<LyricSource>("none");
+
+const _karaokeTokens = computed(() => {
+  const idx = _activeLineIndex.value;
+  if (idx < 0 || idx >= _lines.value.length) return [];
+  const cur = _lines.value[idx];
+
+  const yrcLine = _yrcLines.value.find(
+    (yl) => Math.abs(yl.time - cur.time) < 20,
+  );
+  if (yrcLine && yrcLine.words.length > 0) {
+    return yrcLine.words.map((w) => ({
+      char: w.char,
+      startMs: w.startMs - cur.time,
+      endMs: w.startMs + w.duration - cur.time,
+    }));
+  }
+
+  const next = idx + 1 < _lines.value.length ? _lines.value[idx + 1] : null;
+  const nextMs = next ? next.time : -1;
+  const tokens = parseKaraokeLine(cur.text, cur.time, nextMs);
+  return tokens.map((t) => ({
+    char: t.char,
+    startMs: t.startMs - cur.time,
+    endMs: t.endMs - cur.time,
+  }));
+});
+
+const _hasLyric = computed(() => _lines.value.length > 0);
 
 let _pushDesktopLyrics: (() => void) | null = null;
+let _globalBridgeInited = false;
+const _watchStops: Array<() => void> = [];
 
 export function triggerDesktopLyricsPush() {
   _pushDesktopLyrics?.();
 }
+
+async function _loadFor(songId: number) {
+  const seq = ++_lyricSeq;
+  const song = usePlayerStore().currentSong;
+  if (song && !song.localPath && songId === _currentSongId.value && seq > 1) return;
+  _currentSongId.value = songId;
+  _lines.value = [];
+  _activeLineIndex.value = -1;
+  _progressMs.value = 0;
+  _error.value = "";
+  _source.value = "none";
+  _loading.value = true;
+  try {
+    if (song?.localPath) {
+      // ─── 本地歌词：内嵌/同目录 .lrc → 在线 NCM 兜底 ───
+      let raw = "";
+      try {
+        raw = await getLocalLyric(song.localPath);
+      } catch (e) {
+        console.warn("[useLyric] 读本地歌词失败", song.localPath, e);
+      }
+      if (seq !== _lyricSeq) return;
+      if (raw && raw.trim().length > 0) {
+        _source.value = "local";
+        _lines.value = parseLrc(raw);
+        _yrcLines.value = [];
+      } else {
+        // 在线兜底
+        try {
+          console.log("[useLyric] 本地无歌词, 在线搜 NCM:", song.name, song.artists);
+          const online = await fetchOnlineLyric(song.name, song.artists);
+          if (seq !== _lyricSeq) return;
+          if (online && online.trim().length > 0) {
+            _source.value = "online";
+            _lines.value = parseLrc(online);
+            _yrcLines.value = [];
+          } else {
+            _source.value = "none";
+            _lines.value = [];
+          }
+        } catch (e) {
+          console.warn("[useLyric] 在线搜歌词失败", e);
+          _source.value = "none";
+          _lines.value = [];
+        }
+      }
+    } else {
+      // ─── NCM 歌词 ───
+      const res = await getLyric(songId);
+      if (seq !== _lyricSeq) return;
+      const raw = res.lrc || res.tLrc;
+      _lines.value = parseLrc(raw);
+      if (res.yLrc) {
+        _yrcLines.value = parseYrc(res.yLrc);
+      } else {
+        _yrcLines.value = [];
+      }
+      _source.value = raw ? "online" : "none";
+    }
+  } catch (e) {
+    if (seq !== _lyricSeq) return;
+    _error.value = e instanceof Error ? e.message : "歌词加载失败";
+  } finally {
+    if (seq === _lyricSeq) _loading.value = false;
+  }
+}
+
+function _pushUpdateToDesktop() {
+  if (_pushTimer) return;
+  _pushTimer = setTimeout(() => {
+    _pushTimer = undefined;
+    if (!isTauri()) return;
+    const idx = _activeLineIndex.value;
+    const currentLine = idx >= 0 && idx < _lines.value.length
+      ? _lines.value[idx]
+      : null;
+    const nextLine = idx + 1 < _lines.value.length
+      ? _lines.value[idx + 1]
+      : null;
+    const lineTime = currentLine ? currentLine.time : 0;
+    const nextTime = nextLine ? nextLine.time : lineTime + 5000;
+    const span = Math.max(1, nextTime - lineTime);
+    const progress = idx >= 0
+      ? Math.max(0, Math.min(1, _progressMs.value / span))
+      : 0;
+
+    const song = usePlayerStore().currentSong;
+
+    const payload: DesktopLyricsPayload = {
+      current: currentLine?.text ?? "",
+      next: nextLine?.text ?? "",
+      progress,
+      songName: song?.name ?? "",
+      artists: song?.artists ?? "",
+      lines: _lines.value,
+      activeLineIndex: idx,
+      progressMs: _progressMs.value,
+      karaokeTokens: _karaokeTokens.value,
+      accentColor: readThemeAccentFromDOM(),
+    };
+
+    void emit("desktop-lyrics:update", payload).catch(() => {});
+  }, 250);
+}
+
+let _pushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * 初始化全局歌词桥接：在 App.vue onMounted 调用一次（**早于**任何 LyricPanel 挂载）。
+ * 注册三个 watch：
+ *   1. player.currentSong.id 变化 → _loadFor
+ *   2. player.audioState.currentTime 变化 → 重算 activeLineIndex / progressMs
+ *   3. 上述 state 变化 → _pushUpdateToDesktop
+ * 同时设置模块级 _pushDesktopLyrics 供 triggerDesktopLyricsPush 使用。
+ */
+export function initGlobalLyricBridge() {
+  if (_globalBridgeInited) return;
+  _globalBridgeInited = true;
+
+  const player = usePlayerStore();
+
+  // 1. 切歌 → 拉歌词
+  _watchStops.push(
+    watch(
+      () => player.currentSong?.id ?? null,
+      (id) => {
+        if (id === null) {
+          _lines.value = [];
+          _activeLineIndex.value = -1;
+          _progressMs.value = 0;
+          _currentSongId.value = null;
+          return;
+        }
+        void _loadFor(id);
+      },
+      { immediate: true },
+    ),
+  );
+
+  // 2. 时间变化 → 重算活跃行 + 行内进度
+  _watchStops.push(
+    watch(
+      () => player.audioState.currentTime,
+      (t) => {
+        if (_lines.value.length === 0) {
+          _activeLineIndex.value = -1;
+          _progressMs.value = 0;
+          return;
+        }
+        const currentMs = t * 1000;
+        const idx = findActiveLineIndex(_lines.value, Math.floor(currentMs));
+        _activeLineIndex.value = idx;
+        if (idx >= 0) {
+          const lineTime = _lines.value[idx].time;
+          const next = _lines.value[idx + 1];
+          const nextTime = next ? next.time : lineTime + 5000;
+          _progressMs.value = Math.max(
+            0,
+            Math.min(nextTime - lineTime, currentMs - lineTime),
+          );
+        } else {
+          _progressMs.value = 0;
+        }
+      },
+    ),
+  );
+
+  // 3. 状态变化 → 推送到桌面歌词
+  _watchStops.push(
+    watch(
+      [_activeLineIndex, _progressMs, _lines, () => player.currentSong],
+      () => _pushUpdateToDesktop(),
+    ),
+  );
+
+  _pushDesktopLyrics = _pushUpdateToDesktop;
+}
+
+export type { LyricSource };
 
 export interface UseLyricReturn {
   /** 解析后的歌词行 */
   lines: Ref<LyricLine[]>;
   /** 当前高亮行索引（-1 表示无） */
   activeLineIndex: Ref<number>;
+  /** 歌词来源：local = 内嵌/.lrc；online = NCM 在线；none = 无 */
+  source: Ref<LyricSource>;
   /** 当前行内卡拉OK 字符级时间窗（伪） */
   karaokeTokens: ComputedRef<
     { char: string; startMs: number; endMs: number }[]
@@ -116,205 +345,23 @@ export interface UseLyricReturn {
 }
 
 export function useLyric(): UseLyricReturn {
-  const player = usePlayerStore();
+  // 兜底：万一 App.vue 没调 initGlobalLyricBridge，组件首次挂载时也补一下
+  initGlobalLyricBridge();
 
-  const lines = ref<LyricLine[]>([]);
-  const yrcLines = shallowRef<ReturnType<typeof parseYrc>>([]);
-  const activeLineIndex = ref<number>(-1);
-  const progressMs = ref<number>(0);
-  const loading = ref<boolean>(false);
-  const error = ref<string>("");
-  const currentSongId = ref<number | null>(null);
-
-  const hasLyric = computed(() => lines.value.length > 0);
-
-  const karaokeTokens = computed(() => {
-    const idx = activeLineIndex.value;
-    if (idx < 0 || idx >= lines.value.length) return [];
-    const cur = lines.value[idx];
-
-    // 优先使用 YRC 逐字时间戳（转成行内相对偏移）
-    const yrcLine = yrcLines.value.find(
-      (yl) => Math.abs(yl.time - cur.time) < 20,
-    );
-    if (yrcLine && yrcLine.words.length > 0) {
-      return yrcLine.words.map((w) => ({
-        char: w.char,
-        startMs: w.startMs - cur.time,
-        endMs: w.startMs + w.duration - cur.time,
-      }));
-    }
-
-    // 回退：伪卡拉OK 等分
-    const next = idx + 1 < lines.value.length ? lines.value[idx + 1] : null;
-    const nextMs = next ? next.time : -1;
-    const tokens = parseKaraokeLine(cur.text, cur.time, nextMs);
-    return tokens.map((t) => ({
-      char: t.char,
-      startMs: t.startMs - cur.time,
-      endMs: t.endMs - cur.time,
-    }));
-  });
-
-  /** 拉取并解析歌词 */
-  let lyricSeq = 0;
-
-  async function loadFor(songId: number) {
-    const seq = ++lyricSeq;
-    if (songId === currentSongId.value && seq > 1) return;
-    currentSongId.value = songId;
-    lines.value = [];
-    activeLineIndex.value = -1;
-    progressMs.value = 0;
-    error.value = "";
-    loading.value = true;
-    try {
-      const res = await getLyric(songId);
-      if (seq !== lyricSeq) return;
-      const raw = res.lrc || res.tLrc;
-      lines.value = parseLrc(raw);
-      if (res.yLrc) {
-        yrcLines.value = parseYrc(res.yLrc);
-      } else {
-        yrcLines.value = [];
-      }
-    } catch (e) {
-      if (seq !== lyricSeq) return;
-      error.value = e instanceof Error ? e.message : "歌词加载失败";
-    } finally {
-      if (seq === lyricSeq) loading.value = false;
-    }
-  }
-
-  /** 监听当前歌曲变化：切歌时重新拉取 */
-  watch(
-    () => player.currentSong?.id ?? null,
-    (id) => {
-      if (id === null) {
-        lines.value = [];
-        activeLineIndex.value = -1;
-        progressMs.value = 0;
-        currentSongId.value = null;
-        return;
-      }
-      void loadFor(id);
-    },
-    { immediate: true }
-  );
-
-  /**
-   * 监听 playerStore.audioState.currentTime（它本身已是 reactive，
-   * 由 useAudioPlayer 的 timeupdate 事件驱动）。
-   * 同时计算行内毫秒进度（用于卡拉OK）。
-   */
-  watch(
-    () => player.audioState.currentTime,
-    (t) => {
-      if (lines.value.length === 0) {
-        activeLineIndex.value = -1;
-        progressMs.value = 0;
-        return;
-      }
-      // audio.currentTime 单位是秒
-      const currentMs = t * 1000;
-      const idx = findActiveLineIndex(lines.value, Math.floor(currentMs));
-      activeLineIndex.value = idx;
-      // 行内进度
-      if (idx >= 0) {
-        const lineTime = lines.value[idx].time;
-        const next = lines.value[idx + 1];
-        const nextTime = next ? next.time : lineTime + 5000;
-        progressMs.value = Math.max(
-          0,
-          Math.min(nextTime - lineTime, currentMs - lineTime),
-        );
-      } else {
-        progressMs.value = 0;
-      }
-    }
-  );
-
-  /**
-   * 阶段3：向桌面歌词窗口推送更新。
-   * 节流到 250ms，避免 4Hz timeupdate 高频 IPC。
-   */
-  let pushTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function pushUpdateToDesktop() {
-    if (pushTimer) return;
-    pushTimer = setTimeout(() => {
-      pushTimer = undefined;
-      if (!isTauri()) return;
-      const idx = activeLineIndex.value;
-      const currentLine = idx >= 0 && idx < lines.value.length
-        ? lines.value[idx]
-        : null;
-      const nextLine = idx + 1 < lines.value.length
-        ? lines.value[idx + 1]
-        : null;
-      const lineTime = currentLine ? currentLine.time : 0;
-      const nextTime = nextLine ? nextLine.time : lineTime + 5000;
-      const span = Math.max(1, nextTime - lineTime);
-      const progress = idx >= 0
-        ? Math.max(0, Math.min(1, progressMs.value / span))
-        : 0;
-
-      const payload: DesktopLyricsPayload = {
-        current: currentLine?.text ?? "",
-        next: nextLine?.text ?? "",
-        progress,
-        songName: player.currentSong?.name ?? "",
-        artists: player.currentSong?.artists ?? "",
-        lines: lines.value,
-        activeLineIndex: idx,
-        progressMs: progressMs.value,
-        karaokeTokens: karaokeTokens.value,
-        accentColor: readThemeAccentFromDOM(),
-      };
-
-      void emit("desktop-lyrics:update", payload).catch(() => {});
-    }, 250);
-  }
-
-  /** 监听变化主动推送：观察整首歌变化、活跃行、行内进度、歌词数组 */
-  watch(
-    [
-      () => player.currentSong,
-      activeLineIndex,
-      progressMs,
-      lines,
-    ],
-    () => {
-      pushUpdateToDesktop();
-    },
-  );
-
-  // 注册最新推送函数，供 request-snapshot 时调用。
-  // 多个组件都 useLyric() 时，最后一个活跃实例的引用生效（它们观察同一个
-  // playerStore，行为一致）。
-  _pushDesktopLyrics = pushUpdateToDesktop;
-
-  onBeforeUnmount(() => {
-    if (pushTimer) clearTimeout(pushTimer);
-    pushTimer = undefined;
-    if (_pushDesktopLyrics === pushUpdateToDesktop) {
-      _pushDesktopLyrics = null;
-    }
-  });
-
-  /** 点击某行歌词 → 跳转播放 */
   function seekTo(seconds: number) {
+    const player = usePlayerStore();
     player.seek(seconds);
   }
 
   return {
-    lines,
-    activeLineIndex,
-    karaokeTokens,
-    progressMs,
-    loading,
-    error,
-    hasLyric,
+    lines: _lines,
+    activeLineIndex: _activeLineIndex,
+    karaokeTokens: _karaokeTokens,
+    progressMs: _progressMs,
+    loading: _loading,
+    error: _error,
+    hasLyric: _hasLyric,
+    source: _source,
     seekTo,
   };
 }

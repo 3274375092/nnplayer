@@ -7,7 +7,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AuthState,
+  AudioStateSnapshot,
   DailyRecommend,
+  LocalSongMetadata,
   LyricResult,
   Playlist,
   PlaylistDetail,
@@ -42,6 +44,19 @@ export const Commands = {
   GetLyric: "get_lyric",
   // 桌面歌词
   IsPositionOnScreen: "is_position_on_screen",
+  // 本地播放音频引擎
+  PlayLocal: "play_local",
+  PauseAudio: "pause_audio",
+  ResumeAudio: "resume_audio",
+  ToggleAudio: "toggle_audio",
+  SeekAudio: "seek_audio",
+  SetAudioVolume: "set_audio_volume",
+  GetAudioState: "get_audio_state",
+  // 本地音乐扫描
+  ScanLocalFolder: "scan_local_folder",
+  GetLocalCover: "get_local_cover",
+  GetLocalLyric: "get_local_lyric",
+  FetchOnlineLyric: "fetch_online_lyric",
 } as const;
 
 /**
@@ -169,4 +184,56 @@ export function getLyric(songId: number) {
 /** 校验坐标是否在任意显示器范围内。*/
 export function isPositionOnScreen(x: number, y: number) {
   return call<boolean>(Commands.IsPositionOnScreen, { x, y });
+}
+
+// =============== 本地播放（Rust 音频引擎） ===============
+
+export function playLocal(path: string) {
+  return call<void>(Commands.PlayLocal, { path });
+}
+
+export function pauseAudio() {
+  return call<void>(Commands.PauseAudio);
+}
+
+export function resumeAudio() {
+  return call<void>(Commands.ResumeAudio);
+}
+
+export function toggleAudio() {
+  return call<void>(Commands.ToggleAudio);
+}
+
+export function seekAudio(seconds: number) {
+  return call<void>(Commands.SeekAudio, { seconds });
+}
+
+export function setAudioVolume(volume: number) {
+  return call<void>(Commands.SetAudioVolume, { volume });
+}
+
+export function getAudioState() {
+  return call<AudioStateSnapshot>(Commands.GetAudioState);
+}
+
+// =============== 本地音乐扫描 ===============
+
+export function scanLocalFolder(folder: string) {
+  return call<LocalSongMetadata[]>(Commands.ScanLocalFolder, { folder });
+}
+
+export function getLocalCover(path: string) {
+  return call<number[]>(Commands.GetLocalCover, { path });
+}
+
+/** 获取本地音频内嵌歌词（USLT/©lyr/LYRICS 等）或同目录 .lrc 文件。
+ *  返回空串表示无歌词，UI 显示"暂无歌词"。 */
+export function getLocalLyric(path: string) {
+  return call<string>(Commands.GetLocalLyric, { path });
+}
+
+/** 在线兜底：用 title + artist 走 NCM cloudsearch 找最佳匹配，再调 lyric_new 拉歌词。
+ *  返回 null = 未登录 / 搜不到 / NCM 没歌词；返回 string（含 LRC 文本或空串）= 命中。 */
+export function fetchOnlineLyric(title: string, artist?: string) {
+  return call<string | null>(Commands.FetchOnlineLyric, { title, artist });
 }

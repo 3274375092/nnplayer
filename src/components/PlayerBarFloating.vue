@@ -30,8 +30,10 @@ import ProgressBar from "@/components/ProgressBar.vue";
 import { fmtDuration } from "@/utils/format";
 import ScrollText from "@/components/ScrollText.vue";
 import { usePlayerStore } from "@/stores/player";
+import { useAudioPlayer } from "@/composables/useAudioPlayer";
 
 const player = usePlayerStore();
+const controller = useAudioPlayer();
 const router = useRouter();
 
 const cur = computed(() => fmtDuration(player.audioState.currentTime));
@@ -90,8 +92,8 @@ function openNowPlaying() {
         @click="openNowPlaying"
       >
         <img
-          v-if="player.currentSong?.picUrl"
-          :src="player.currentSong.picUrl"
+          v-if="controller.state.currentCover"
+          :src="controller.state.currentCover"
           alt=""
           class="w-full h-full object-cover motion-safe:animate-spin-slow"
           :class="player.audioState.playing ? '' : '[animation-play-state:paused]'"

@@ -18,6 +18,26 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "每日推荐" },
   },
   {
+    path: "/local-music",
+    name: "LocalMusic",
+    component: () => import("@/views/LocalMusic.vue"),
+    meta: { title: "本地音乐", public: true },
+  },
+  {
+    path: "/local-album/:name",
+    name: "LocalAlbum",
+    component: () => import("@/views/LocalAlbum.vue"),
+    props: true,
+    meta: { title: "专辑", public: true },
+  },
+  {
+    path: "/local-artist/:name",
+    name: "LocalArtist",
+    component: () => import("@/views/LocalArtist.vue"),
+    props: true,
+    meta: { title: "艺人", public: true },
+  },
+  {
     path: "/search",
     name: "Search",
     component: () => import("@/views/Search.vue"),

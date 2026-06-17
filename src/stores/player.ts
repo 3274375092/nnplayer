@@ -31,10 +31,17 @@ export const usePlayerStore = defineStore("player", () => {
 
   const hasNext = computed(() => {
     if (playMode.value === "loop-one") return true;
+    if (playMode.value === "loop-list") return queue.value.length > 0;
+    if (playMode.value === "shuffle") return queue.value.length > 1;
     return index.value < queue.value.length - 1;
   });
 
-  const hasPrev = computed(() => index.value > 0);
+  const hasPrev = computed(() => {
+    if (playMode.value === "loop-one") return true;
+    if (playMode.value === "loop-list") return queue.value.length > 0;
+    if (playMode.value === "shuffle") return queue.value.length > 1;
+    return index.value > 0;
+  });
 
   // =============== 队列管理（阶段4） ===============
 
@@ -142,9 +149,51 @@ export const usePlayerStore = defineStore("player", () => {
     await playCurrent();
   }
 
+  /**
+   * 仅把歌曲塞进队列当首项，不触发 playCurrent。
+   * 用于启动恢复（Rust 引擎已经在播了，调用 playCurrent 会重置位置）。
+   */
+  function setCurrentSongOnly(song: Song) {
+    queue.value = [song];
+    index.value = 0;
+  }
+
+  /**
+   * 把一组歌追加到队尾，不影响当前播放。
+   * 用于「添加到队列」按钮：先听现在的，列表里的歌排后面。
+   */
+  function appendToQueue(songs: Song[]) {
+    if (songs.length === 0) return;
+    queue.value.push(...songs);
+  }
+
+  /**
+   * 把一组歌插入到当前播放歌曲之后下一位。
+   * 用于「下一首播放」：立刻播完当前这首后播这些。
+   */
+  function insertAsNextUp(songs: Song[]) {
+    if (songs.length === 0) return;
+    const insertAt = index.value + 1;
+    queue.value.splice(insertAt, 0, ...songs);
+  }
+
+  /** Fisher-Yates 洗牌（不修改原数组） */
+  function shuffled<T>(arr: T[]): T[] {
+    const out = [...arr];
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  }
+
   /** 下一首 */
   async function next() {
-    if (queue.value.length === 0) return;
+    if (queue.value.length === 0) {
+      console.log("[player] next(): queue empty");
+      return;
+    }
+    console.log(`[player] next() queue.length=${queue.value.length} index=${index.value} playMode=${playMode.value}`);
 
     if (playMode.value === "shuffle") {
       // 随机模式下：若队列 >1，随机选一个不同的；否则保持
@@ -170,7 +219,11 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** 上一首 */
   async function prev() {
-    if (queue.value.length === 0) return;
+    if (queue.value.length === 0) {
+      console.log("[player] prev(): queue empty");
+      return;
+    }
+    console.log(`[player] prev() queue.length=${queue.value.length} index=${index.value} currentTime=${controller.state.currentTime}`);
 
     // 若已播放 > 3 秒，则"上一首"=回到当前歌曲开头
     if (controller.state.currentTime > 3) {
@@ -202,7 +255,16 @@ export const usePlayerStore = defineStore("player", () => {
   function bindAutoNext() {
     if (autoNextBound) return;
     autoNextBound = true;
+    // <audio> 的 ended（NCM 歌曲）
     controller.audioEl.addEventListener("nnplayer:ended", () => {
+      if (playMode.value === "loop-one") {
+        void playCurrent();
+      } else {
+        void next();
+      }
+    });
+    // Rust 引擎的 ended（useAudioBridge 派发的 window 事件，本地歌曲）
+    window.addEventListener("nnplayer:ended", () => {
       if (playMode.value === "loop-one") {
         void playCurrent();
       } else {
@@ -245,6 +307,10 @@ export const usePlayerStore = defineStore("player", () => {
     // 队列操作
     playList,
     playSong,
+    setCurrentSongOnly,
+    appendToQueue,
+    insertAsNextUp,
+    shuffled,
     next,
     prev,
     togglePlayMode,

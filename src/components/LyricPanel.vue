@@ -36,8 +36,14 @@ const {
   loading,
   error,
   hasLyric,
+  source,
   seekTo,
 } = useLyric();
+
+/** 本地歌用了 NCM 在线歌词 → 时间轴可能错位，提示用户放 .lrc 覆盖 */
+const showOnlineHint = computed(
+  () => source.value === "online" && !!player.currentSong?.localPath,
+);
 
 // =============== 行高测量 ===============
 
@@ -159,6 +165,14 @@ const hasSong = computed(() => player.currentSong !== null);
       >
         {{ player.currentSong?.name }}
       </div>
+    </div>
+
+    <!-- 本地歌用了 NCM 在线歌词：时间轴可能与本地歌曲不完全同步，提示用户放 .lrc 覆盖 -->
+    <div
+      v-if="showOnlineHint"
+      class="text-[11px] text-text-secondary/80 mb-2 px-2 py-1 rounded bg-accent/5 border border-accent/15 leading-snug"
+    >
+      歌词来源：网易云音乐 · 时间轴可能与本地歌曲不完全同步，可放置同名 .lrc 文件覆盖
     </div>
 
     <!-- 加载 / 错误 / 空态 -->

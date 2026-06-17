@@ -27,6 +27,8 @@ tauri-macros = { version = "2", default-features = false }
 # Tauri 官方插件
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 # 阶段5：桌面集成
 # - tray 内置在 tauri 主 crate 中（tauri::tray 模块），无需独立插件
 # - global-shortcut / window-state 是独立插件
@@ -67,6 +69,16 @@ base64 = "0.22"
 # 跨平台配置目录（用于持久化 session TOML）
 directories = "6"
 toml = "1"
+
+# ─── 本地播放（本地音频解码 + 元数据 + 文件扫描） ───
+symphonia = { version = "0.6", default-features = false, features = [
+    "all-codecs", "all-formats"
+] }
+rodio = { version = "0.22", default-features = false, features = [
+    "playback"
+] }
+lofty = { version = "0.24", default-features = false }
+walkdir = "2"
 
 # 临时 patch：tauri 默认 features 拉入 brotli 8.0.3，但 8.0.3 依赖
 # nightly-only 的 `impl Allocator for StandardAlloc`，在 stable/nightly 1.86+

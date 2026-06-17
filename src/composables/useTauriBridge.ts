@@ -1,28 +1,13 @@
-import { watch } from "vue";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import { usePlayerStore } from "@/stores/player";
 import { useDesktopLyricsStore, GEOM_KEY } from "@/stores/desktopLyrics";
-import { useThemeStore } from "@/stores/theme";
 import { triggerDesktopLyricsPush } from "@/composables/useLyric";
 
 export function useTauriBridge() {
   const playerStore = usePlayerStore();
   const desktopLyricsStore = useDesktopLyricsStore();
-  const themeStore = useThemeStore();
   const unlistens: UnlistenFn[] = [];
   let tornDown = false;
-
-  watch(
-    () => playerStore.currentSong,
-    (song) => {
-      if (song?.picUrl) {
-        themeStore.applyFromCover(song.picUrl);
-      } else {
-        themeStore.resetToDefault();
-      }
-    },
-    { immediate: true },
-  );
 
   async function setup() {
     playerStore.bindAutoNext();

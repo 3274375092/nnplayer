@@ -5,7 +5,9 @@
 //
 // 重要：map_ncm_err 已移至 error.rs，各子模块通过 crate::error::map_ncm_err 引用。
 
+pub mod audio;
 pub mod auth;
+pub mod local_music;
 pub mod lyric;
 pub mod music;
 pub mod user;

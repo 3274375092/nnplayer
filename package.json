@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-store": "^2.0.0",
     "blueimp-md5": "^2.19.0",
     "lucide-vue-next": "^1.0.0",

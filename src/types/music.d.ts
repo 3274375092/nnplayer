@@ -12,6 +12,8 @@ export interface Song {
   /** 毫秒 */
   duration: number;
   picUrl?: string;
+  /** 本地文件路径，有值 = 本地歌曲（走 Rust 引擎），否则 = NCM 在线歌曲（走 <audio>） */
+  localPath?: string;
 }
 
 // 歌曲播放 URL
@@ -88,3 +90,27 @@ export interface AppErrorPayload {
 
 // 播放模式
 export type PlayMode = "loop-one" | "loop-list" | "shuffle";
+
+// ─── 本地播放 ───
+
+/** 本地音频文件的元数据（扫描结果） */
+export interface LocalSongMetadata {
+  path: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number;
+  bitrate: number;
+  sampleRate: number;
+  hasCover: boolean;
+  fileSize: number;
+}
+
+/** Rust 音频引擎状态快照 */
+export interface AudioStateSnapshot {
+  playing: boolean;
+  currentTime: number;
+  duration: number;
+  volume: number;
+  path: string | null;
+}

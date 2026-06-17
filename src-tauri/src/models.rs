@@ -85,6 +85,21 @@ pub struct LyricResult {
     pub y_lrc: Option<String>,
 }
 
+/// 本地音频文件的元数据（扫描结果）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSongMetadata {
+    pub path: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration: f64,
+    pub bitrate: u32,
+    pub sample_rate: u32,
+    pub has_cover: bool,
+    pub file_size: u64,
+}
+
 // =============== 共享解析函数 ===============
 
 fn join_artists(arr: &[serde_json::Value]) -> String {

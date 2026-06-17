@@ -6,10 +6,13 @@
 //   4. 阶段5：托盘菜单 / 全局快捷键 / 窗口状态持久化
 // 业务代码一律拆分到 commands/* 子模块，本文件保持极简。
 
+mod audio;
 mod commands;
 mod error;
 mod models;
 mod state;
+
+use std::sync::Mutex;
 
 use state::AppState;
 use tauri::Emitter;
@@ -38,6 +41,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         // 阶段5：桌面集成插件
         // - tray 内置在 tauri 主 crate 中（无需独立 plugin crate）
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -53,6 +58,18 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 restore_session(&app_handle, &state, session).await;
             });
+
+            // 初始化音频引擎
+            match audio::AudioEngine::new() {
+                Ok(mut engine) => {
+                    engine.set_app_handle(app.handle().clone());
+                    app.manage(Mutex::new(engine));
+                    log::info!("[startup] 音频引擎初始化成功");
+                }
+                Err(e) => {
+                    log::warn!("[startup] 音频引擎初始化失败: {e}");
+                }
+            }
 
             // 阶段5：托盘 + 全局快捷键
             if let Err(e) = build_tray(app.handle()) {
@@ -89,6 +106,18 @@ pub fn run() {
             commands::lyric::get_lyric,
             // === 桌面歌词窗口 ===
             commands::window_geom::is_position_on_screen,
+            // === 本地播放 ===
+            commands::audio::play_local,
+            commands::audio::pause_audio,
+            commands::audio::resume_audio,
+            commands::audio::toggle_audio,
+            commands::audio::seek_audio,
+            commands::audio::set_audio_volume,
+            commands::audio::get_audio_state,
+            commands::local_music::scan_local_folder,
+            commands::local_music::get_local_cover,
+            commands::local_music::get_local_lyric,
+            commands::local_music::fetch_online_lyric,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

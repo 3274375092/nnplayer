@@ -12,8 +12,10 @@ import { useRouter } from "vue-router";
 import { Music2, X } from "lucide-vue-next";
 import LyricPanel from "@/components/LyricPanel.vue";
 import { usePlayerStore } from "@/stores/player";
+import { useAudioPlayer } from "@/composables/useAudioPlayer";
 
 const player = usePlayerStore();
+const controller = useAudioPlayer();
 const router = useRouter();
 
 function close() {
@@ -56,8 +58,8 @@ onBeforeUnmount(() => {
         :class="player.audioState.playing ? 'motion-safe:animate-spin-slow' : 'motion-safe:animate-spin-slow [animation-play-state:paused]'"
       >
         <img
-          v-if="player.currentSong?.picUrl"
-          :src="player.currentSong.picUrl"
+          v-if="controller.state.currentCover"
+          :src="controller.state.currentCover"
           class="w-full h-full object-cover"
           alt=""
         />
