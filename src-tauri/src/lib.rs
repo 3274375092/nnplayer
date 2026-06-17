@@ -30,10 +30,20 @@ pub fn run() {
 
     // 启动前先读取持久化的 session，准备初始 cookie 和 AuthState
     let session = commands::load_session_meta();
+    let qq_session = commands::load_qq_session_meta();
     let initial_cookie = session.as_ref().map(|r| r.cookie.clone());
     let initial_auth = session.as_ref().map(commands::session_to_auth).unwrap_or_default();
     let initial_app_state = AppState::new(initial_cookie, initial_auth)
         .expect("创建 AppState 失败");
+    // 启动时把 QQ session 预填到 AppState.qq_token（不校验有效性，由前端
+    // qq_get_auth_state 触发后端做轻量 probe 决定是否清空）
+    if let Some(qq_record) = qq_session.as_ref() {
+        let token = commands::qq_session_to_token(qq_record);
+        initial_app_state
+            .qq_token
+            .blocking_lock()
+            .clone_from(&Some(token));
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -51,7 +61,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let state = initial_app_state.clone();
             tauri::async_runtime::spawn(async move {
-                restore_session(&app_handle, &state, session).await;
+                restore_session(&app_handle, &state, session, qq_session).await;
             });
 
             // 阶段5：托盘 + 全局快捷键
@@ -87,6 +97,21 @@ pub fn run() {
             commands::user::get_playlist_detail,
             // === 歌词 ===
             commands::lyric::get_lyric,
+            // === QQ 音乐：登录 ===
+            commands::qq_auth::qq_login_set_cookie,
+            commands::qq_auth::qq_login_qr_key,
+            commands::qq_auth::qq_login_qr_check,
+            commands::qq_auth::qq_get_auth_state,
+            commands::qq_auth::qq_logout,
+            // === QQ 音乐：调试（排查二维码加载失败时触发）===
+            commands::qq_auth::qq_debug_raw_qr,
+            // === QQ 音乐：业务接口（6 个常用端点）===
+            commands::qq_music::qq_search_songs,
+            commands::qq_music::qq_get_song_url,
+            commands::qq_music::qq_get_lyric,
+            commands::qq_music::qq_get_daily_recommend,
+            commands::qq_music::qq_get_user_playlists,
+            commands::qq_music::qq_get_playlist_detail,
             // === 桌面歌词窗口 ===
             commands::window_geom::is_position_on_screen,
         ])
@@ -99,74 +124,89 @@ pub fn run() {
 ///   2. 调用 ncm_api::login_status 验证
 ///   3. 成功 → 把 user_id / nickname 写入 AuthState
 ///   4. 失败 → 清理持久化 + 清空内存 cookie
+///   5. QQ 音乐 session 仅做"存在性"恢复（不主动 probe QQ 后端），由前端
+///      qq_get_auth_state 触发命令时按需 lazy 清理
 async fn restore_session(
     app: &tauri::AppHandle,
     state: &AppState,
     session: Option<commands::auth::SessionRecord>,
+    qq_session: Option<commands::qq_auth::QqSessionRecord>,
 ) {
-    let Some(record) = session else {
-        log::info!("[startup] 没有持久化的会话，跳过恢复");
-        return;
-    };
+    // =============== NCM 恢复 ===============
+    if let Some(record) = session {
+        if !record.cookie.trim().is_empty() {
+            // 注入 cookie 到 ApiClient
+            state.api.lock().await.set_cookie(record.cookie.clone());
 
-    if record.cookie.trim().is_empty() {
-        log::info!("[startup] cookie 为空，跳过恢复");
-        return;
-    }
+            // 调 login_status 验证
+            let api = state.api.lock().await;
+            match api
+                .login_status(&ncm_api::Query::new().cookie(&record.cookie))
+                .await
+            {
+                Ok(resp) => {
+                    let uid = resp
+                        .body
+                        .pointer("/data/account/id")
+                        .or_else(|| resp.body.pointer("/account/id"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(record.user_id);
+                    let nick = resp
+                        .body
+                        .pointer("/data/profile/nickname")
+                        .or_else(|| resp.body.pointer("/profile/nickname"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&record.nickname)
+                        .to_string();
+                    let avatar_url = resp
+                        .body
+                        .pointer("/data/profile/avatarUrl")
+                        .or_else(|| resp.body.pointer("/profile/avatarUrl"))
+                        .and_then(|v| v.as_str())
+                        .and_then(commands::auth::normalize_avatar_url)
+                        .or_else(|| record.avatar_url.clone());
 
-    // 注入 cookie 到 ApiClient
-    state.api.lock().await.set_cookie(record.cookie.clone());
-
-    // 调 login_status 验证
-    let api = state.api.lock().await;
-    match api
-        .login_status(&ncm_api::Query::new().cookie(&record.cookie))
-        .await
-    {
-        Ok(resp) => {
-            let uid = resp
-                .body
-                .pointer("/data/account/id")
-                .or_else(|| resp.body.pointer("/account/id"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(record.user_id);
-            let nick = resp
-                .body
-                .pointer("/data/profile/nickname")
-                .or_else(|| resp.body.pointer("/profile/nickname"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(&record.nickname)
-                .to_string();
-            let avatar_url = resp
-                .body
-                .pointer("/data/profile/avatarUrl")
-                .or_else(|| resp.body.pointer("/profile/avatarUrl"))
-                .and_then(|v| v.as_str())
-                .and_then(commands::auth::normalize_avatar_url)
-                .or_else(|| record.avatar_url.clone());
-
-            drop(api);
-            let mut auth = state.auth.lock().await;
-            auth.user_id = Some(uid);
-            auth.nickname = Some(nick);
-            auth.cookie = Some(record.cookie.clone());
-            auth.login_method = Some(record.login_method.clone());
-            auth.avatar_url = avatar_url;
-            log::info!("[startup] 会话恢复成功: user_id={uid}, method={}", record.login_method);
-        }
-        Err(e) => {
-            log::warn!("[startup] 会话已失效，清空: {e}");
-            drop(api);
-            // 清空内存
-            state.api.lock().await.set_cookie(String::new());
-            *state.auth.lock().await = Default::default();
-            // 清空持久化
-            let _ = commands::clear_session_meta();
-            if let Ok(store) = app.store("auth.json") {
-                store.delete("cookie");
-                let _ = store.save();
+                    drop(api);
+                    let mut auth = state.auth.lock().await;
+                    auth.user_id = Some(uid);
+                    auth.nickname = Some(nick);
+                    auth.cookie = Some(record.cookie.clone());
+                    auth.login_method = Some(record.login_method.clone());
+                    auth.avatar_url = avatar_url;
+                    log::info!(
+                        "[startup] NCM 会话恢复成功: user_id={uid}, method={}",
+                        record.login_method
+                    );
+                }
+                Err(e) => {
+                    log::warn!("[startup] NCM 会话已失效，清空: {e}");
+                    drop(api);
+                    // 清空内存
+                    state.api.lock().await.set_cookie(String::new());
+                    *state.auth.lock().await = Default::default();
+                    // 清空持久化
+                    let _ = commands::clear_session_meta();
+                    if let Ok(store) = app.store("auth.json") {
+                        store.delete("cookie");
+                        let _ = store.save();
+                    }
+                }
             }
         }
+    } else {
+        log::info!("[startup] 没有持久化的 NCM 会话");
+    }
+
+    // =============== QQ 恢复（仅存在性，不 probe）================
+    if let Some(qq_record) = qq_session {
+        if !qq_record.music_key.is_empty() {
+            log::info!(
+                "[startup] QQ 会话存在: music_id={}，下次调用 QQ 命令时按需校验",
+                qq_record.user_id
+            );
+        }
+    } else {
+        log::info!("[startup] 没有持久化的 QQ 会话");
     }
 }
 

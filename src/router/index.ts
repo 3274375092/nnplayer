@@ -65,19 +65,21 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   const userStore = useUserStore();
 
-  if (!userStore.loggedIn && userStore.loginMethod === "unknown") {
+  // 首次访问时扫描后端获取当前登录态
+  if (userStore.activePlatform === null) {
     await userStore.refresh();
   }
 
   if (to.meta.public) return true;
 
+  // 未登录跳转到登录页
   if (!userStore.loggedIn) {
     return { path: "/login", query: { redirect: to.fullPath } };
   }
 
+  // 已登录还访问登录页 → 跳到首页
   if (to.name === "Login") {
-    const redirect = (to.query.redirect as string) || "/daily";
-    return { path: redirect };
+    return { path: "/daily" };
   }
 
   return true;

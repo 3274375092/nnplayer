@@ -26,7 +26,7 @@ pub enum AppError {
     #[error("Store 插件错误: {0}")]
     Store(String),
 
-    #[error("未登录或 Cookie 已过期")]
+    #[error("网易云账号未登录")]
     Unauthorized,
 
     #[error("参数无效: {0}")]
@@ -34,6 +34,9 @@ pub enum AppError {
 
     #[error("内部错误: {0}")]
     Internal(String),
+
+    #[error("QQ 音乐错误: {0}")]
+    Qq(String),
 }
 
 // 自定义序列化，前端拿到的是 { kind, message } 结构，便于统一处理。
@@ -52,6 +55,7 @@ impl Serialize for AppError {
             AppError::Store(_) => "Store",
             AppError::InvalidParam(_) => "InvalidParam",
             AppError::Internal(_) => "Internal",
+            AppError::Qq(_) => "Qq",
         };
         let mut s = serializer.serialize_struct("AppError", 2)?;
         s.serialize_field("kind", kind)?;
@@ -67,4 +71,10 @@ pub type AppResult<T> = Result<T, AppError>;
 /// 供各 commands 子模块共用，避免跨模块引用 auth 内部函数。
 pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
     AppError::Ncm(e.to_string())
+}
+
+/// 将 qq_music::QqError 转换为 AppError::Qq。
+/// 供 commands/qq_*.rs 共用。
+pub(crate) fn map_qq_err(e: qq_music::QqError) -> AppError {
+    AppError::Qq(e.to_string())
 }

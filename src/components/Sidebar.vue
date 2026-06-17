@@ -172,7 +172,7 @@ function onSuggestionClick(idx: number) {
 }
 
 function logout() {
-  userStore.logout().then(() => router.replace("/login"));
+  userStore.doLogout().then(() => router.replace("/login"));
 }
 
 function toggleCollapsed() {
@@ -471,24 +471,35 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- 用户信息 -->
+    <!-- 用户信息（按当前活跃平台显示） -->
     <div
       v-if="!collapsed"
       class="px-1 pt-2 flex items-center gap-2 text-xs"
     >
-      <img
-        v-if="userStore.avatarUrl"
-        :src="userStore.avatarUrl"
-        :alt="userStore.displayName"
-        class="w-8 h-8 rounded-full bg-hover object-cover shrink-0"
+      <!-- NCM -->
+      <template v-if="userStore.activePlatform === 'netease'">
+        <img
+          v-if="userStore.avatarUrl"
+          :src="userStore.avatarUrl"
+          :alt="userStore.displayName"
+          class="w-8 h-8 rounded-full bg-hover object-cover shrink-0"
           @error="userStore.clearAvatar()"
-      />
+        />
+        <div
+          v-else
+          class="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white text-xs shrink-0"
+        >
+          {{ userStore.displayName.charAt(0).toUpperCase() }}
+        </div>
+      </template>
+      <!-- QQ -->
       <div
-        v-else
-        class="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white text-xs shrink-0"
+        v-else-if="userStore.activePlatform === 'qq'"
+        class="w-8 h-8 rounded-full bg-blue-400 flex items-center justify-center text-white text-xs shrink-0"
       >
-        {{ userStore.displayName.charAt(0).toUpperCase() }}
+        Q
       </div>
+
       <div class="min-w-0 flex-1">
         <div class="mb-0.5 truncate text-text-secondary">
           {{ userStore.displayName }}
@@ -503,25 +514,32 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 折叠态：纯圆形头像 -->
+    <!-- 折叠态 -->
     <div
       v-else
       class="pt-3 flex justify-center shrink-0"
     >
       <img
-        v-if="userStore.avatarUrl"
+        v-if="userStore.activePlatform === 'netease' && userStore.avatarUrl"
         :src="userStore.avatarUrl"
         :alt="userStore.displayName"
         class="w-9 h-9 rounded-full bg-hover object-cover"
         :title="userStore.displayName"
-          @error="userStore.clearAvatar()"
+        @error="userStore.clearAvatar()"
       />
       <div
-        v-else
+        v-else-if="userStore.activePlatform === 'netease'"
         class="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white text-sm"
         :title="userStore.displayName"
       >
         {{ userStore.displayName.charAt(0).toUpperCase() }}
+      </div>
+      <div
+        v-else-if="userStore.activePlatform === 'qq'"
+        class="w-9 h-9 rounded-full bg-blue-400 flex items-center justify-center text-white text-sm"
+        title="QQ 已登录"
+      >
+        Q
       </div>
     </div>
 

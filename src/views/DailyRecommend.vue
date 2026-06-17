@@ -1,14 +1,22 @@
 <script setup lang="ts">
-// 每日推荐页：调用 get_daily_recommend，展示列表 + 歌词面板。
-// 鉴权接口：未登录会被路由守卫拦截。
+// 每日推荐页：按当前活跃平台加载对应推荐数据。
+// NCM → 30 首歌曲列表；QQ → 推荐歌单卡片网格。
 
-import { onMounted, ref } from "vue";
-import SongList from "@/components/SongList.vue";
-import LyricPanel from "@/components/LyricPanel.vue";
+import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { getDailyRecommend } from "@/composables/useNcmApi";
-import type { DailyRecommend } from "@/types/music";
+import { qqGetDailyRecommend } from "@/composables/useQqApi";
+import { useUserStore } from "@/stores/user";
+import type { DailyRecommend, Playlist } from "@/types/music";
+import SongList from "@/components/SongList.vue";
+import SongListItem from "@/components/SongListItem.vue";
+import LyricPanel from "@/components/LyricPanel.vue";
 
-const data = ref<DailyRecommend | null>(null);
+const router = useRouter();
+const user = useUserStore();
+
+const ncmData = ref<DailyRecommend | null>(null);
+const qqPlaylists = ref<Playlist[]>([]);
 const loading = ref(false);
 const error = ref("");
 
@@ -16,7 +24,11 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    data.value = await getDailyRecommend();
+    if (user.activePlatform === "qq") {
+      qqPlaylists.value = await qqGetDailyRecommend();
+    } else {
+      ncmData.value = await getDailyRecommend();
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : "加载失败";
   } finally {
@@ -25,6 +37,13 @@ async function load() {
 }
 
 onMounted(load);
+
+const showNcm = computed(() => user.activePlatform !== "qq");
+const showQq = computed(() => user.activePlatform === "qq");
+
+function openPlaylist(p: Playlist) {
+  router.push({ name: "PlaylistDetail", params: { id: String(p.id) } });
+}
 </script>
 
 <template>
@@ -32,7 +51,8 @@ onMounted(load);
     <header class="mb-6">
       <h1 class="text-2xl font-semibold mb-1">每日推荐</h1>
       <p class="text-xs text-text-secondary">
-        根据你的口味生成 · {{ data?.date ?? "—" }}
+        <template v-if="showNcm">根据你的口味生成 · {{ ncmData?.date ?? "—" }}</template>
+        <template v-else>QQ 音乐推荐歌单</template>
       </p>
     </header>
 
@@ -45,15 +65,35 @@ onMounted(load);
       <button class="btn btn-primary" @click="load">重试</button>
     </div>
 
+    <!-- NCM：30 首歌曲列表 -->
     <div
-      v-else-if="data"
+      v-else-if="showNcm && ncmData"
       class="grid gap-4"
       style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
     >
-      <SongList :songs="data.songs" title="今日推荐" />
+      <SongList :songs="ncmData.songs" title="今日推荐" />
       <div class="self-start sticky top-4">
         <LyricPanel />
       </div>
+    </div>
+
+    <!-- QQ：推荐歌单卡片网格 -->
+    <div
+      v-else-if="showQq && qqPlaylists.length > 0"
+      class="grid gap-4"
+      style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))"
+    >
+      <SongListItem
+        v-for="p in qqPlaylists"
+        :key="p.id"
+        :playlist="p"
+        variant="playlist"
+        @click="openPlaylist(p)"
+      />
+    </div>
+
+    <div v-else-if="showQq && qqPlaylists.length === 0 && !loading && !error" class="card p-6 text-center text-text-secondary text-sm">
+      暂无推荐歌单
     </div>
   </div>
 </template>

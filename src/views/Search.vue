@@ -10,10 +10,13 @@ import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
 import { searchSongs } from "@/composables/useNcmApi";
+import { qqSearchSongs } from "@/composables/useQqApi";
+import { useUserStore } from "@/stores/user";
 import type { Song } from "@/types/music";
 
 const route = useRoute();
 const router = useRouter();
+const user = useUserStore();
 
 // 输入框双向绑定
 const keyword = ref<string>((route.query.q as string) || "");
@@ -34,9 +37,15 @@ async function doSearch(kw: string) {
   loading.value = true;
   error.value = "";
   try {
-    const res = await searchSongs(kw.trim(), 50);
-    if (seq !== searchSeq) return;
-    results.value = res.songs;
+    if (user.activePlatform === "qq") {
+      const songs = await qqSearchSongs(kw.trim(), 50);
+      if (seq !== searchSeq) return;
+      results.value = songs;
+    } else {
+      const res = await searchSongs(kw.trim(), 50);
+      if (seq !== searchSeq) return;
+      results.value = res.songs;
+    }
   } catch (e) {
     if (seq !== searchSeq) return;
     error.value = e instanceof Error ? e.message : "搜索失败";

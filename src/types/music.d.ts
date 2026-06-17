@@ -12,6 +12,14 @@ export interface Song {
   /** 毫秒 */
   duration: number;
   picUrl?: string;
+  /** 平台标识：`'netease'` | `'qq'`。后端新增字段，向后兼容（缺失时默认 `'netease'`）。 */
+  platform?: "netease" | "qq";
+  /**
+   * QQ 原始 mid（字符串）。仅 platform === "qq" 时有意义。
+   * 用于在 player store / audio player 中回查 QQ API。
+   * 前端不需要直接读这个字段。
+   */
+  qqMid?: string;
 }
 
 // 歌曲播放 URL

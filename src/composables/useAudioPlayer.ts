@@ -5,10 +5,14 @@
 //   3. 提供 play/pause/seek/setVolume 等命令式方法
 //   4. 与 Pinia player store 解耦：store 负责状态，composable 负责 DOM 操作
 //   5. 阶段5：playSong(songId, song?) — 若传 song 则同步 MediaSession metadata
+//   6. 阶段6（QQ 集成）：playSong 根据 song.platform 路由到 NCM 或 QQ 后端
+//      - 'netease' (默认) → NCM getSongUrl
+//      - 'qq' → QQ qqGetSongUrl（id 透传为字符串 mid）
 
 import { onBeforeUnmount, reactive, readonly, watch } from "vue";
 import type { Song } from "@/types/music";
 import { getSongUrl } from "./useNcmApi";
+import { qqGetSongUrl } from "./useQqApi";
 
 export interface AudioState {
   /** 当前播放的歌曲 id，没有则为 null */
@@ -191,7 +195,7 @@ export function useAudioPlayer() {
 
   /**
    * 加载并播放指定歌曲。
-   * 1. 先调用 Rust get_song_url 拿到真实 url
+   * 1. 根据 song.platform 路由到 NCM 或 QQ 后端拿 URL
    * 2. 设置 audio.src 并 play()
    * 3. 阶段5：若有 song 元信息则同步 MediaSession metadata
    */
@@ -201,14 +205,23 @@ export function useAudioPlayer() {
       state.loading = true;
       state.currentSongId = songId;
 
-      const res = await getSongUrl(songId);
+      let url: string | null | undefined;
+      if (song?.platform === "qq") {
+        // QQ 协议 songId 必须是字符串 mid，从 song.qqMid 拿
+        const mid = song.qqMid ?? String(songId);
+        const res = await qqGetSongUrl(mid);
+        url = res.url;
+      } else {
+        const res = await getSongUrl(songId);
+        url = res.url;
+      }
       if (seq !== playSeq) return;
-      if (!res.url) {
+      if (!url) {
         throw new Error("该歌曲暂无可用播放源");
       }
 
       audio.pause();
-      audio.src = res.url;
+      audio.src = url;
       if (song) {
         syncMediaSession(song);
       }

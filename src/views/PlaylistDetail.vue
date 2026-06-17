@@ -8,12 +8,15 @@ import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
 import SkeletonCard from "@/components/SkeletonCard.vue";
 import { getPlaylistDetail } from "@/composables/useNcmApi";
+import { qqGetPlaylistDetail } from "@/composables/useQqApi";
+import { useUserStore } from "@/stores/user";
 import type { PlaylistDetail } from "@/types/music";
 
 interface Props {
   id: string;
 }
 const props = defineProps<Props>();
+const user = useUserStore();
 
 const detail = ref<PlaylistDetail | null>(null);
 const loading = ref(false);
@@ -26,7 +29,11 @@ async function load() {
   error.value = "";
   detail.value = null;
   try {
-    detail.value = await getPlaylistDetail(Number(props.id));
+    if (user.activePlatform === "qq") {
+      detail.value = await qqGetPlaylistDetail(Number(props.id));
+    } else {
+      detail.value = await getPlaylistDetail(Number(props.id));
+    }
     if (seq !== loadSeq) return;
   } catch (e) {
     if (seq !== loadSeq) return;

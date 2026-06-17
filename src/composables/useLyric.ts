@@ -27,6 +27,7 @@ import {
 import { emit } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
 import { getLyric } from "@/composables/useNcmApi";
+import { qqGetLyric } from "@/composables/useQqApi";
 import {
   findActiveLineIndex,
   parseKaraokeLine,
@@ -169,7 +170,12 @@ export function useLyric(): UseLyricReturn {
     error.value = "";
     loading.value = true;
     try {
-      const res = await getLyric(songId);
+      // 根据当前歌曲平台路由歌词请求
+      const current = player.currentSong;
+      const res =
+        current?.platform === "qq"
+          ? await qqGetLyric(current.qqMid ?? String(songId))
+          : await getLyric(songId);
       if (seq !== lyricSeq) return;
       const raw = res.lrc || res.tLrc;
       lines.value = parseLrc(raw);

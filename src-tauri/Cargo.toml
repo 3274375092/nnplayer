@@ -36,6 +36,11 @@ tauri-plugin-window-state = "2"
 # 网易云 API 客户端（与 CNMPlayer 共用同一 crate，保证加密/反爬/会话捕获逻辑一致）
 ncm-api = { path = "../ncm-api-rs" }
 
+# QQ 音乐 API 客户端（精简 fork，自 netease-qq-music-api 0.1.0 抽取）
+# 仅用于 6 个常用端点：搜索 / 详情 / 播放 / 歌词 / 推荐 / 我的歌单
+# 登录走 cookie 粘贴 + refresh_token HTTP 轮询（无 MQTT）
+qq-music = { path = "../qq-music" }
+
 # 序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

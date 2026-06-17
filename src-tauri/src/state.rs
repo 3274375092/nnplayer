@@ -10,10 +10,22 @@
 //   - 自动捕获响应 Set-Cookie 到 response.cookie
 //   - 自动按 CryptoType 进行 weapi/eapi 加密
 // 调用方只需 login_status / login / login_cellphone 等接口即可。
+//
+// QQ 音乐使用独立的客户端 + 独立的 AuthState（与 NCM 解耦）：
+//   - qq_music::QqMusicClient 是无状态 HTTP 客户端，可在 AppState 间 clone
+//   - QQ 登录态（QqToken）独立持久化到 session_qq.toml / auth.json.qq_cookie
+//   - 两种平台的 AuthState 不互相影响
+//
+// QQ 扫码登录 session 管理：
+//   - 每个 QR session 是独立的 MqttLoginSession 长连接
+//   - session_id → MqttLoginSession 存放在 AppState.qq_login_sessions
+//   - login success / 主动 cancel / session 过期 → 从 Map 中移除
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ncm_api::{ApiClient, ApiResponse};
+use qq_music::{MqttLoginSession, QqMusicClient, QqToken};
 use reqwest::Client;
 use tokio::sync::Mutex;
 
@@ -54,6 +66,13 @@ pub struct AppState {
     pub api: Arc<Mutex<ApiClient>>,
     /// 轻量用户信息（user_id、nickname）。
     pub auth: Arc<Mutex<AuthState>>,
+    /// qq-music HTTP 客户端。无状态，可跨线程共享。
+    pub qq: Arc<QqMusicClient>,
+    /// QQ 登录态。`None` 表示未登录。
+    pub qq_token: Arc<Mutex<Option<QqToken>>>,
+    /// QQ 扫码登录活跃 session。key = session_id (= qrcode_id)。
+    /// 用户扫码成功 / 主动 cancel / session 过期时移除。
+    pub qq_login_sessions: Arc<Mutex<HashMap<String, MqttLoginSession>>>,
 }
 
 impl AppState {
@@ -71,15 +90,18 @@ impl AppState {
         Ok(Self {
             api: Arc::new(Mutex::new(api)),
             auth: Arc::new(Mutex::new(auth)),
+            qq: Arc::new(QqMusicClient::new()),
+            qq_token: Arc::new(Mutex::new(None)),
+            qq_login_sessions: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    /// 校验登录态。仅锁 auth，不锁 api，避免嵌套锁死锁。
+    /// 校验 NCM 登录态。仅锁 auth，不锁 api，避免嵌套锁死锁。
     pub async fn check_login(&self) -> Result<(), AppError> {
         self.auth.lock().await.require_login()
     }
 
-    /// 获取当前 cookie 字符串。仅锁 auth，不锁 api。
+    /// 获取当前 NCM cookie 字符串。仅锁 auth，不锁 api。
     /// 命令中应先调此方法拿到 cookie，再锁 api 发请求，避免 ABBA 死锁。
     pub async fn cookie(&self) -> String {
         self.auth
@@ -88,6 +110,16 @@ impl AppState {
             .cookie
             .clone()
             .unwrap_or_default()
+    }
+
+    /// 读取当前 QQ token 的克隆。调用方在闭包内使用，避免长持锁。
+    pub async fn qq_token_snapshot(&self) -> Option<QqToken> {
+        self.qq_token.lock().await.clone()
+    }
+
+    /// 写入 QQ token。`None` 表示清空登录态。
+    pub async fn set_qq_token(&self, token: Option<QqToken>) {
+        *self.qq_token.lock().await = token;
     }
 
     /// 提取 NCM 业务码。

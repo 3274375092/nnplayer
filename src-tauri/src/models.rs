@@ -16,6 +16,13 @@ pub struct Song {
     pub duration: u64,
     /// 封面 URL
     pub pic_url: Option<String>,
+    /// 平台标识：`"netease"` | `"qq"`。新增字段，向后兼容（不写则前端默认 netease）。
+    /// QQ 端 id 是字符串（song mid），转换时用 hash 折叠为 u64。
+    #[serde(default)]
+    pub platform: String,
+    /// QQ 原始 mid。仅 platform="qq" 时存在，前端用于回查 QQ API。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qq_mid: Option<String>,
 }
 
 /// 歌曲 URL（播放时使用）。
@@ -119,5 +126,5 @@ pub fn parse_ncm_song(val: &serde_json::Value, duration_field: &str) -> Option<S
         .pointer("/al/picUrl")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    Some(Song { id, name, artists, album, duration, pic_url })
+    Some(Song { id, name, artists, album, duration, pic_url, platform: "netease".to_string(), qq_mid: None })
 }
