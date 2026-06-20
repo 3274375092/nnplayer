@@ -1,4 +1,4 @@
-# nnplayer
+# nnplayer(纯网易云版本已移动至V0.1分支)
 
 > 基于 **Tauri v2 + Rust + Vue 3 + TypeScript** 的网易云音乐桌面客户端。
 > Rust 端通过本地 crate `ncm-api-rs` 调用网易云 API,前端用 `@tauri-apps/api` 通过 `invoke` 桥接。
