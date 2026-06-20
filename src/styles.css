@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   主题色 CSS 变量（阶段1：封面驱动主题）
+   - 默认值即米黄体系，保持与升级前像素级一致
+   - 切歌时由 stores/theme.ts 改写
+   - tailwind.config.js 的 colors 全部走 var(--color-*) 引用这里
+   ============================================================ */
+:root {
+  --color-bg: #fafce4;
+  --color-card: #f5f7e1;
+  --color-hover: #eef0d8;
+  --color-accent: #e85d3a;
+  --color-text-primary: #373737;
+  --color-text-secondary: #8c8c8c;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  /* 主题色切换时背景/文字平滑过渡（600ms） */
+  transition:
+    background-color 0.6s ease,
+    color 0.6s ease;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d9dcc6;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c2c6a8;
+}
+
+/* 隐藏 input number 的箭头 */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ============================================================
+   通用组件样式（与 Tailwind 配合使用）
+   ============================================================ */
+@layer components {
+  /* 按钮基础 */
+  .btn {
+    @apply inline-flex items-center justify-center rounded-btn px-4 py-2
+           text-sm font-medium transition-colors duration-200 select-none;
+  }
+  .btn-primary {
+    @apply bg-accent text-white hover:opacity-90 active:opacity-80;
+  }
+  .btn-ghost {
+    @apply bg-transparent text-text-primary hover:bg-hover;
+  }
+
+  /* 卡片 */
+  .card {
+    @apply bg-card rounded-card shadow-soft;
+  }
+
+  /* 输入框 */
+  .input {
+    @apply w-full px-3 py-2 rounded-btn bg-white border border-transparent
+           focus:border-accent focus:outline-none transition-colors
+           placeholder:text-text-secondary;
+  }
+}
+
+/* ============================================================
+   工具类
+   ============================================================ */
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
