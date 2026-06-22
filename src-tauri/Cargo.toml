@@ -1,6 +1,6 @@
 [package]
 name = "nnplayer"
-version = "0.1.21"
+version = "0.1.22"
 description = "nnplayer - 网易云音乐桌面客户端"
 authors = ["nnplayer team"]
 edition = "2021"
@@ -67,6 +67,7 @@ base64 = "0.22"
 # 跨平台配置目录（用于持久化 session TOML）
 directories = "6"
 toml = "1"
+tauri-plugin-updater = "2.10.1"
 
 # 临时 patch：tauri 默认 features 拉入 brotli 8.0.3，但 8.0.3 依赖
 # nightly-only 的 `impl Allocator for StandardAlloc`，在 stable/nightly 1.86+

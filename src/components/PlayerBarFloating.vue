@@ -133,7 +133,7 @@ function openNowPlaying() {
         </button>
         <button
           type="button"
-          class="opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-text-secondary hover:text-text-primary disabled:opacity-30 focus-visible:opacity-100 focus-visible:outline-none"
+          class="opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-text-secondary hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none"
           :disabled="!player.hasPrev"
           aria-label="上一首"
           @click="player.prev"

@@ -55,6 +55,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default()
             .with_denylist(&["desktop-lyrics"])
             .build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // 全局状态
         .manage(initial_app_state.clone())
         .setup(move |app| {

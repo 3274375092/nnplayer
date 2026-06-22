@@ -21,6 +21,7 @@
     "core:webview:allow-webview-close",
     "core:webview:allow-webview-show",
     "core:webview:allow-set-webview-focus",
-    "window-state:default"
+    "window-state:default",
+    "updater:default"
   ]
 }

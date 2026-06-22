@@ -1,6 +1,8 @@
 ﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import Sidebar from "@/components/Sidebar.vue";
 import PlayerBarFloating from "@/components/PlayerBarFloating.vue";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
@@ -25,7 +27,21 @@ onMounted(async () => {
   });
 
   await setup();
+
+  checkAndUpdate();
 });
+
+async function checkAndUpdate() {
+  try {
+    const update = await check();
+    if (update) {
+      await update.downloadAndInstall();
+      await relaunch();
+    }
+  } catch (e) {
+    console.debug("update check skipped:", e);
+  }
+}
 
 onBeforeUnmount(() => {
   teardown();

@@ -1,0 +1,10 @@
+node_modules
+dist
+src-tauri/target
+ncm-api-rs/target
+src-tauri/gen
+.git
+*.md
+!README.md
+screenshots
+.vscode
