@@ -115,10 +115,27 @@ const targetY = computed(() => {
   return props.panelHeight / 2 - cur / 2 - offset;
 });
 
-const { value: springY } = useSpringValue(targetY);
+const { value: springY, snap: snapSpringY } = useSpringValue(targetY);
 
 const translateY = computed(() =>
   reduceMotion ? targetY.value : springY.value,
+);
+
+// 行切换瞬间直接 snap 滚动到新行中心，与卡拉OK 归零同步
+watch(
+  activeLineIndex,
+  () => {
+    snapSpringY(targetY.value);
+  },
+);
+
+// 行高被 ResizeObserver 异步更新时，targetY 会跳变，snap 吸收
+watch(
+  lineHeights,
+  () => {
+    void nextTick(() => snapSpringY(targetY.value));
+  },
+  { flush: "post" },
 );
 
 // 行间距离模糊：距当前 3 行外开始模糊，每多 1 行 +0.5px，最大 4px
@@ -245,6 +262,12 @@ const hasSong = computed(() => player.currentSong !== null);
           </template>
           <span v-else-if="line.text">{{ line.text }}</span>
           <span v-else class="opacity-50">·</span>
+          <!-- 翻译：当前行及邻近行显示，小字号半透明 -->
+          <span
+            v-if="line.translation"
+            class="lyric-translation"
+            :class="{ 'is-active-translation': idx === activeLineIndex }"
+          >{{ line.translation }}</span>
         </div>
       </div>
 
@@ -306,5 +329,19 @@ const hasSong = computed(() => player.currentSong !== null);
 
 .will-change-transform {
   will-change: transform;
+}
+
+/* 翻译行：小字号、半透明，当前行更亮。必须显式设 color 覆盖 .is-active 的 transparent */
+.lyric-translation {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  opacity: 0.35;
+  margin-top: 1px;
+  transition: opacity 0.3s;
+}
+
+.lyric-translation.is-active-translation {
+  opacity: 0.55;
 }
 </style>

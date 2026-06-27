@@ -318,7 +318,7 @@ impl AudioEngine {
             log::info!("[audio] eof_monitor started");
             let mut tick_n = 0u32;
             loop {
-                match eof_rx.recv_timeout(Duration::from_millis(200)) {
+                match eof_rx.recv_timeout(Duration::from_millis(40)) {
                     Ok(()) => {
                         log::info!("[audio] EOF received");
                         if let Ok(mut st) = state_clone.write() {
@@ -372,6 +372,7 @@ impl AudioEngine {
         }
         self.freeze_clock();
         self.is_paused.store(true, Ordering::SeqCst);
+        self.emit_tick();
     }
 
     pub fn resume(&mut self) {
@@ -382,6 +383,7 @@ impl AudioEngine {
         }
         self.restart_clock();
         self.is_paused.store(false, Ordering::SeqCst);
+        self.emit_tick();
     }
 
     pub fn toggle(&mut self) {
@@ -412,6 +414,7 @@ impl AudioEngine {
             self.restart_clock();
             self.is_paused.store(false, Ordering::SeqCst);
         }
+        self.emit_tick();
     }
 
     /// 暂停时把已播时间累加到 play_offset，并清掉时钟起点（停止计时）
@@ -431,6 +434,13 @@ impl AudioEngine {
             st.play_started_at = Some(Instant::now());
             st.playing = true;
         }
+    }
+
+    /// 立刻向前端推送一次 audio:tick（seek/暂停/恢复后不用等 eof_monitor 轮询间隔）
+    fn emit_tick(&self) {
+        let Some(ref app) = self.app_handle else { return };
+        let snap = AudioStateSnapshot::from(&*self.state);
+        let _ = app.emit("audio:tick", &snap);
     }
 
     /// Seek — 重新创建 source 替换到 Player。
@@ -456,6 +466,7 @@ impl AudioEngine {
             // 通过再次调 pause 把 play_offset 锁住并清掉 play_started_at
             self.pause();
         }
+        self.emit_tick();
     }
 
     pub fn set_volume(&mut self, volume: f64) {

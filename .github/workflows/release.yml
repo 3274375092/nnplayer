@@ -1,0 +1,67 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build Tauri app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $ver = (Get-Content src-tauri\tauri.conf.json | ConvertFrom-Json).version
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "version: $ver"
+
+      - name: Read signature
+        id: sig
+        shell: pwsh
+        run: |
+          $sig = Get-Content src-tauri\target\release\bundle\nsis\*.exe.sig -Raw
+          echo "SIG=$sig" >> $env:GITHUB_OUTPUT
+
+      - name: Generate latest.json
+        shell: pwsh
+        run: |
+          $sig = "${{ steps.sig.outputs.SIG }}"
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          $json = @{
+            version = $ver
+            notes  = "详见 https://github.com/${{ github.repository }}/releases/tag/v$ver"
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $sig
+                url       = "https://github.com/${{ github.repository }}/releases/download/v$ver/nnplayer_$($ver)_x64-setup.exe"
+              }
+            }
+          }
+          $json | ConvertTo-Json | Set-Content latest.json
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri\target\release\bundle\nsis\*.exe
+            src-tauri\target\release\bundle\nsis\*.exe.sig
+            latest.json
+          generate_release_notes: true

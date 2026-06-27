@@ -17,6 +17,8 @@
 
 import {
   computed,
+  onBeforeUnmount,
+  onMounted,
   ref,
   shallowRef,
   watch,
@@ -30,6 +32,7 @@ import {
   findActiveLineIndex,
   parseKaraokeLine,
   parseLrc,
+  parseLrcWithTranslation,
   parseYrc,
   type LyricLine,
 } from "@/utils/lrcParser";
@@ -78,6 +81,8 @@ export interface DesktopLyricsPayload {
   karaokeTokens: KaraokeToken[];
   /** 封面提取的强调色（hex），供桌面歌词卡拉OK 逐字染色 */
   accentColor: string;
+  /** 是否正在播放（子窗据此决定本地时钟是否前进） */
+  playing: boolean;
 }
 
 // =============== 主窗 ↔ 桌面歌词窗：拉取快照 ===============
@@ -101,6 +106,45 @@ const _loading = ref<boolean>(false);
 const _error = ref<string>("");
 const _currentSongId = ref<number | null>(null);
 let _lyricSeq = 0;
+
+// ============ rAF 播放时钟（模块级单例）============
+const _clockMs = ref(0);
+let _clockAnchorMs = 0;
+let _clockAnchorTs = 0;
+let _clockPlaying = false;
+let _clockRaf = 0;
+const SEEK_MS = 800;
+const TOLERANCE_MS = 120;
+
+function _snapClock(force: boolean) {
+  const player = usePlayerStore();
+  const audioMs = player.audioState.currentTime * 1000;
+  const delta = audioMs - _clockMs.value;
+  const now = performance.now();
+  const playing = player.audioState.playing;
+
+  if (force || Math.abs(delta) > SEEK_MS) {
+    _clockAnchorMs = audioMs;
+    _clockAnchorTs = now;
+    _clockMs.value = audioMs;
+  } else if (playing !== _clockPlaying) {
+    _clockAnchorMs = _clockMs.value;
+    _clockAnchorTs = now;
+  } else if (delta > TOLERANCE_MS) {
+    _clockAnchorMs = (_clockMs.value + audioMs) / 2;
+    _clockAnchorTs = now;
+  }
+  _clockPlaying = playing;
+}
+
+function _clockTick() {
+  if (_clockPlaying) {
+    _clockMs.value = _clockAnchorMs + (performance.now() - _clockAnchorTs);
+  } else {
+    _clockMs.value = _clockAnchorMs;
+  }
+  _clockRaf = requestAnimationFrame(_clockTick);
+}
 
 /** 歌词来源（用于 LyricPanel 在"本地歌+在线歌词"时显示提示） */
 type LyricSource = "local" | "online" | "none";
@@ -191,14 +235,16 @@ async function _loadFor(songId: number) {
       // ─── NCM 歌词 ───
       const res = await getLyric(songId);
       if (seq !== _lyricSeq) return;
-      const raw = res.lrc || res.tLrc;
-      _lines.value = parseLrc(raw);
+      const hasLrc = !!res.lrc;
+      _lines.value = hasLrc
+        ? parseLrcWithTranslation(res.lrc, res.tLrc)
+        : parseLrc(res.tLrc);
       if (res.yLrc) {
         _yrcLines.value = parseYrc(res.yLrc);
       } else {
         _yrcLines.value = [];
       }
-      _source.value = raw ? "online" : "none";
+      _source.value = (res.lrc || res.tLrc) ? "online" : "none";
     }
   } catch (e) {
     if (seq !== _lyricSeq) return;
@@ -208,45 +254,58 @@ async function _loadFor(songId: number) {
   }
 }
 
+let _pushTimer: ReturnType<typeof setTimeout> | undefined;
+
+function _buildPayload(): DesktopLyricsPayload {
+  const idx = _activeLineIndex.value;
+  const currentLine = idx >= 0 && idx < _lines.value.length
+    ? _lines.value[idx]
+    : null;
+  const nextLine = idx + 1 < _lines.value.length
+    ? _lines.value[idx + 1]
+    : null;
+  const lineTime = currentLine ? currentLine.time : 0;
+  const nextTime = nextLine ? nextLine.time : lineTime + 5000;
+  const span = Math.max(1, nextTime - lineTime);
+  const progress = idx >= 0
+    ? Math.max(0, Math.min(1, _progressMs.value / span))
+    : 0;
+  const player = usePlayerStore();
+  return {
+    current: currentLine?.text ?? "",
+    next: nextLine?.text ?? "",
+    progress,
+    songName: player.currentSong?.name ?? "",
+    artists: player.currentSong?.artists ?? "",
+    lines: _lines.value,
+    activeLineIndex: idx,
+    progressMs: _progressMs.value,
+    karaokeTokens: _karaokeTokens.value,
+    accentColor: readThemeAccentFromDOM(),
+    playing: player.audioState.playing,
+  };
+}
+
+function _sendPush() {
+  if (!isTauri()) return;
+  void emit("desktop-lyrics:update", _buildPayload()).catch(() => {});
+}
+
 function _pushUpdateToDesktop() {
   if (_pushTimer) return;
   _pushTimer = setTimeout(() => {
     _pushTimer = undefined;
-    if (!isTauri()) return;
-    const idx = _activeLineIndex.value;
-    const currentLine = idx >= 0 && idx < _lines.value.length
-      ? _lines.value[idx]
-      : null;
-    const nextLine = idx + 1 < _lines.value.length
-      ? _lines.value[idx + 1]
-      : null;
-    const lineTime = currentLine ? currentLine.time : 0;
-    const nextTime = nextLine ? nextLine.time : lineTime + 5000;
-    const span = Math.max(1, nextTime - lineTime);
-    const progress = idx >= 0
-      ? Math.max(0, Math.min(1, _progressMs.value / span))
-      : 0;
-
-    const song = usePlayerStore().currentSong;
-
-    const payload: DesktopLyricsPayload = {
-      current: currentLine?.text ?? "",
-      next: nextLine?.text ?? "",
-      progress,
-      songName: song?.name ?? "",
-      artists: song?.artists ?? "",
-      lines: _lines.value,
-      activeLineIndex: idx,
-      progressMs: _progressMs.value,
-      karaokeTokens: _karaokeTokens.value,
-      accentColor: readThemeAccentFromDOM(),
-    };
-
-    void emit("desktop-lyrics:update", payload).catch(() => {});
+    _sendPush();
   }, 250);
 }
 
-let _pushTimer: ReturnType<typeof setTimeout> | undefined;
+function _flushPush() {
+  if (_pushTimer) {
+    clearTimeout(_pushTimer);
+    _pushTimer = undefined;
+  }
+  _sendPush();
+}
 
 /**
  * 初始化全局歌词桥接：在 App.vue onMounted 调用一次（**早于**任何 LyricPanel 挂载）。
@@ -280,18 +339,25 @@ export function initGlobalLyricBridge() {
     ),
   );
 
-  // 2. 时间变化 → 重算活跃行 + 行内进度
+  // 2. timeupdate / playing 变化 → snap 锚点
   _watchStops.push(
     watch(
-      () => player.audioState.currentTime,
-      (t) => {
+      [() => player.audioState.currentTime, () => player.audioState.playing],
+      () => _snapClock(false),
+    ),
+  );
+
+  // 3. 用插值时钟算 activeLineIndex + progressMs（60fps，行边界及时切换）
+  _watchStops.push(
+    watch(
+      _clockMs,
+      (ms) => {
         if (_lines.value.length === 0) {
           _activeLineIndex.value = -1;
           _progressMs.value = 0;
           return;
         }
-        const currentMs = t * 1000;
-        const idx = findActiveLineIndex(_lines.value, Math.floor(currentMs));
+        const idx = findActiveLineIndex(_lines.value, Math.floor(ms));
         _activeLineIndex.value = idx;
         if (idx >= 0) {
           const lineTime = _lines.value[idx].time;
@@ -299,7 +365,7 @@ export function initGlobalLyricBridge() {
           const nextTime = next ? next.time : lineTime + 5000;
           _progressMs.value = Math.max(
             0,
-            Math.min(nextTime - lineTime, currentMs - lineTime),
+            Math.min(nextTime - lineTime, ms - lineTime),
           );
         } else {
           _progressMs.value = 0;
@@ -308,7 +374,7 @@ export function initGlobalLyricBridge() {
     ),
   );
 
-  // 3. 状态变化 → 推送到桌面歌词
+  // 4. 状态变化 → 推送到桌面歌词（节流 250ms）
   _watchStops.push(
     watch(
       [_activeLineIndex, _progressMs, _lines, () => player.currentSong],
@@ -316,7 +382,26 @@ export function initGlobalLyricBridge() {
     ),
   );
 
+  // 5. 行切换立即推一次（绕过 250ms 节流，避免新行首字延迟）
+  _watchStops.push(
+    watch(_activeLineIndex, () => _flushPush()),
+  );
+
   _pushDesktopLyrics = _pushUpdateToDesktop;
+
+  // 启动 rAF 时钟
+  _snapClock(true);
+  _clockRaf = requestAnimationFrame(_clockTick);
+}
+
+/** 销毁全局桥接（仅用于测试/热更；正常流程不用调） */
+export function destroyGlobalLyricBridge() {
+  _watchStops.forEach((s) => s());
+  _watchStops.length = 0;
+  if (_clockRaf) cancelAnimationFrame(_clockRaf);
+  _clockRaf = 0;
+  _pushDesktopLyrics = null;
+  _globalBridgeInited = false;
 }
 
 export type { LyricSource };
