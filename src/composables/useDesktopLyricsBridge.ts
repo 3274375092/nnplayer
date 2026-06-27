@@ -26,7 +26,7 @@ export interface DesktopLyricsBridgeState {
   /** 艺术家 */
   artists: string;
   /** 完整歌词行（多行渲染用） */
-  lines: { time: number; text: string }[];
+  lines: { time: number; text: string; translation?: string }[];
   /** 当前行索引 */
   activeLineIndex: number;
   /** 行内毫秒进度（卡拉OK 用） */
@@ -35,6 +35,8 @@ export interface DesktopLyricsBridgeState {
   karaokeTokens: { char: string; startMs: number; endMs: number }[];
   /** 封面提取的强调色（hex），供卡拉OK 逐字染色 */
   accentColor: string;
+  /** 是否正在播放（子窗本地时钟据此决定是否前进） */
+  playing: boolean;
 }
 
 const EMPTY: DesktopLyricsBridgeState = {
@@ -48,6 +50,7 @@ const EMPTY: DesktopLyricsBridgeState = {
   progressMs: 0,
   karaokeTokens: [],
   accentColor: "#E85D3A",
+  playing: false,
 };
 
 export function useDesktopLyricsBridge() {

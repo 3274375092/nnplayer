@@ -39,6 +39,17 @@ pub fn run() {
         .expect("创建 AppState 失败");
 
     tauri::Builder::default()
+        // 拦截主窗关闭请求：点 X 不退出进程，而是隐藏到托盘，
+        // 保证音频引擎不被销毁、音乐继续播放；真正退出走托盘菜单"退出"。
+        // 只对 "main" 生效，不误伤 "desktop-lyrics" 窗口。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -49,6 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default()
             .with_denylist(&["desktop-lyrics"])
             .build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // 全局状态
         .manage(initial_app_state.clone())
         .setup(move |app| {

@@ -44,24 +44,92 @@ const placeholderText = computed(() => {
   return "♪";
 });
 
-// =============== 卡拉 OK ===============
+// =============== 本地时钟（rAF 插值）==============
+//
+// 主窗推送节流到 250ms（4Hz），子窗直接用会"两个字两个字跳"。
+// 这里用 requestAnimationFrame 跑 60fps 本地时钟：
+//   - 收到推送 → 记录锚点 (anchorMs = progressMs, anchorTs = now, playing)
+//   - 行切换 → 立即 snap 到新行进度，避免从旧行进度开始擦
+//   - rAF tick：playing 时 localProgressMs = anchorMs + (now - anchorTs)
+//   - 暂停时 localProgressMs = anchorMs（不动）
+//
+// 关键：同一行内 anchor 不允许回退。主窗 progressMs 由 <audio> timeupdate
+// 驱动（4Hz、离散、滞后实时播放），子窗 rAF 用 performance.now()（墙钟、连续、
+// 实时）。两个 anchor 要么一起更新，要么都不动。
 
-const karaokeStyle = computed(() => {
+const localProgressMs = ref(0);
+let anchorMs = 0;
+let anchorTs = 0;
+let anchorPlaying = false;
+let lastLineIdx = -1;
+let rafId = 0;
+const SEEK_THRESHOLD_MS = 800;
+const TOLERANCE_MS = 120;
+
+function syncAnchor(snap: boolean) {
+  const s = state.value;
+  const lineChanged = s.activeLineIndex !== lastLineIdx;
+  const delta = s.progressMs - localProgressMs.value;
+  const now = performance.now();
+
+  if (snap || lineChanged || Math.abs(delta) > SEEK_THRESHOLD_MS) {
+    localProgressMs.value = s.progressMs;
+    lastLineIdx = s.activeLineIndex;
+    anchorMs = s.progressMs;
+    anchorTs = now;
+  } else if (s.playing !== anchorPlaying) {
+    anchorMs = localProgressMs.value;
+    anchorTs = now;
+  } else if (delta > TOLERANCE_MS) {
+    anchorMs = (localProgressMs.value + s.progressMs) / 2;
+    anchorTs = now;
+  }
+  anchorPlaying = s.playing;
+}
+
+function rafTick() {
+  if (anchorPlaying) {
+    localProgressMs.value = anchorMs + (performance.now() - anchorTs);
+  } else {
+    localProgressMs.value = anchorMs;
+  }
+  rafId = requestAnimationFrame(rafTick);
+}
+
+watch(
+  () => [state.value.progressMs, state.value.playing, state.value.activeLineIndex],
+  () => syncAnchor(false),
+);
+
+// =============== 卡拉 OK 逐字三态 ===============
+
+const lineSpan = computed(() => {
   const cur = visible.value.current;
-  if (!cur) return {};
+  if (!cur) return 1;
   const next = visible.value.next;
-  const span = Math.max(1, (next?.time ?? cur.time + 5000) - cur.time);
-  const pct = Math.max(0, Math.min(1, state.value.progressMs / span));
-  return { "--lyric-pct": `${(pct * 100).toFixed(1)}%` };
+  return Math.max(1, (next?.time ?? cur.time + 5000) - cur.time);
 });
 
-const sungStyle = computed(() => ({
-  clipPath: "inset(0 calc(100% - var(--lyric-pct, 0%)) 0 0)",
-}));
+const fallbackStyle = computed(() => {
+  const pct = Math.max(0, Math.min(1, localProgressMs.value / lineSpan.value));
+  return { "--lyric-pct": `${(pct * 100).toFixed(2)}%` };
+});
 
-const pendingStyle = computed(() => ({
-  clipPath: "inset(0 0 0 var(--lyric-pct, 0%))",
-}));
+interface CharRender {
+  char: string;
+  pct: number;
+}
+
+const chars = computed<CharRender[]>(() => {
+  const tokens = state.value.karaokeTokens;
+  if (!tokens || tokens.length === 0) return [];
+  const now = localProgressMs.value;
+  return tokens.map((t) => {
+    const span = t.endMs - t.startMs;
+    if (span <= 0) return { char: t.char, pct: now >= t.endMs ? 1 : 0 };
+    return { char: t.char, pct: Math.max(0, Math.min(1, (now - t.startMs) / span)) };
+  });
+});
 
 // =============== CSS 变量 ===============
 
@@ -90,12 +158,18 @@ onMounted(async () => {
 
   // Escape 键关闭
   window.addEventListener("keydown", onKeyDown);
+
+  // 启动本地时钟 rAF
+  syncAnchor(true);
+  rafId = requestAnimationFrame(rafTick);
 });
 
 onBeforeUnmount(() => {
   unlistens.forEach((u) => u());
   unlistens.length = 0;
   window.removeEventListener("keydown", onKeyDown);
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = 0;
 });
 
 // 锁定状态变化 → 通知主窗
@@ -208,28 +282,33 @@ function onFontSizeChange(delta: number) {
       <p v-else-if="prefs.showPrevNext" class="prev-line"></p>
 
       <!-- 当前行（卡拉OK 逐字） -->
-      <div class="current-wrap" :style="karaokeStyle">
+      <div class="current-wrap" :style="fallbackStyle">
         <h1
-          v-if="visible.current && state.karaokeTokens.length > 0"
+          v-if="visible.current && chars.length > 0"
           class="current-lyric text-transparent font-semibold leading-tight text-center"
         >
           <span class="lyric-karaoke" aria-hidden="true">
-            <!-- 已唱：accent 色，靠 clip-path 从左裁出 -->
-            <span class="lyric-karaoke__sung" :style="sungStyle">
-              <span v-for="(t, i) in state.karaokeTokens" :key="`s${i}`">{{ t.char }}</span>
-            </span>
-            <!-- 未唱：覆盖在白色之上（绝对定位，反向 clip-path） -->
-            <span class="lyric-karaoke__pending" :style="pendingStyle">
-              <span v-for="(t, i) in state.karaokeTokens" :key="`p${i}`">{{ t.char }}</span>
+            <!-- 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除 -->
+            <span
+              v-for="(c, i) in chars"
+              :key="i"
+              class="lyric-char"
+              :style="{ '--char-pct': `${(c.pct * 100).toFixed(2)}%` }"
+            >
+              <span class="lyric-char__sung">{{ c.char }}</span>
+              <span class="lyric-char__pending">{{ c.char }}</span>
             </span>
           </span>
         </h1>
         <h1
           v-else-if="visible.current && visible.current.text"
-          class="current-lyric text-white font-semibold leading-tight text-center"
-          style="text-shadow: 0 0 1px rgba(0, 0, 0, 0.22)"
+          class="current-lyric text-transparent font-semibold leading-tight text-center"
         >
-          {{ visible.current.text }}
+          <!-- 回退：无逐字时间戳，整行线性擦 -->
+          <span class="lyric-karaoke" aria-hidden="true">
+            <span class="lyric-karaoke__sung">{{ visible.current.text }}</span>
+            <span class="lyric-karaoke__pending">{{ visible.current.text }}</span>
+          </span>
         </h1>
         <h1
           v-else
@@ -238,6 +317,13 @@ function onFontSizeChange(delta: number) {
         >
           {{ placeholderText }}
         </h1>
+        <!-- 翻译行（外文歌双语显示） -->
+        <p
+          v-if="visible.current && visible.current.translation"
+          class="translation-line text-center max-w-full truncate"
+        >
+          {{ visible.current.translation }}
+        </p>
       </div>
 
       <!-- 下一行（中字号、半透明） -->
@@ -387,36 +473,69 @@ body,
   margin-top: 0.15rem;
 }
 
+/* 翻译行（外文歌双语）：小字号、半透，位于当前行与歌曲信息之间 */
+.translation-line {
+  font-size: calc(var(--lyric-font-size, 28px) * 0.38);
+  color: rgba(255, 255, 255, 0.42);
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.12);
+  margin-top: 0.06rem;
+}
+
 /* 滑块控制的整窗歌词不透明度：只作用于歌词内容层，不影响工具栏背景 */
 .lyric-content {
   opacity: var(--lyric-opacity, 1);
   transition: opacity 0.15s linear;
 }
 
-/* 卡拉OK：双层 span 模拟单行渐变，字符始终单行 inline，不会撑高父行 */
+/* 卡拉OK 容器：inline-block + relative，子层 absolute 才能对齐 */
 .lyric-karaoke {
   display: inline-block;
   position: relative;
   white-space: nowrap;
 }
 
-.lyric-karaoke__sung,
-.lyric-karaoke__pending {
+/* 回退：整行双层擦（无逐字时间戳时，用 --lyric-pct） */
+.lyric-karaoke__sung {
   display: inline-block;
   white-space: nowrap;
-  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
-}
-
-.lyric-karaoke__sung {
   color: var(--color-accent, #E85D3A);
-  transition: clip-path 0.1s linear;
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
+  clip-path: inset(0 calc(100% - var(--lyric-pct, 0%)) 0 0);
 }
 
 .lyric-karaoke__pending {
   position: absolute;
   inset: 0;
+  display: inline-block;
+  white-space: nowrap;
   color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
   pointer-events: none;
+  clip-path: inset(0 0 0 var(--lyric-pct, 0%));
+}
+
+/* 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除 */
+.lyric-char {
+  display: inline-block;
+  position: relative;
+  white-space: nowrap;
+}
+
+.lyric-char__sung {
+  display: inline-block;
+  color: var(--color-accent, #E85D3A);
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
+  clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
+}
+
+.lyric-char__pending {
+  position: absolute;
+  inset: 0;
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  clip-path: inset(0 0 0 var(--char-pct, 0%));
 }
 
 /* 工具条按钮样式 */

@@ -75,8 +75,22 @@ export function useSpringValue(
     }
   });
 
+  /** 立即把 value 设到指定位置并清零速度/停止 rAF，不经过弹簧过渡。
+   *  用于行切换等需要"瞬间到位"的场景，避免弹簧追赶期间新行先在偏下位置
+   *  出现再滑到中心造成的换行闪回。 */
+  function snap(to: number) {
+    if (raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    velocity = 0;
+    lastT = 0;
+    value.value = to;
+  }
+
   return {
     value,
+    snap,
     stop: () => {
       if (raf) {
         cancelAnimationFrame(raf);

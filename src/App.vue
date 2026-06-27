@@ -1,6 +1,8 @@
 ﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import Sidebar from "@/components/Sidebar.vue";
 import PlayerBarFloating from "@/components/PlayerBarFloating.vue";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
@@ -44,6 +46,8 @@ onMounted(async () => {
   // 绑定自动下一首逻辑（<audio> 的 ended 事件 + useAudioBridge 派发的 window 事件）
   playerStore.bindAutoNext();
 
+  checkAndUpdate();
+
   // 恢复 Rust 端在播的本地歌：WebView 刷新后 Pinia 全没了但 Rust 引擎还在跑
   // 这里把前端 state 对齐到 Rust 真实状态，不重启播放
   const restoredSong = await controller.restoreIfPlaying();
@@ -52,6 +56,18 @@ onMounted(async () => {
     console.log("[App] 本地歌已从 Rust 端恢复:", restoredSong.name);
   }
 });
+
+async function checkAndUpdate() {
+  try {
+    const update = await check();
+    if (update) {
+      await update.downloadAndInstall();
+      await relaunch();
+    }
+  } catch (e) {
+    console.debug("update check skipped:", e);
+  }
+}
 
 onBeforeUnmount(() => {
   teardown();

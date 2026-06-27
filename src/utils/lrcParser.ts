@@ -14,6 +14,8 @@ export interface LyricLine {
   time: number;
   /** 文本（已 trim） */
   text: string;
+  /** 翻译文本（若有，按时间戳与原文配对） */
+  translation?: string;
 }
 
 /**
@@ -60,6 +62,63 @@ export function parseLrc(lrc: string | null | undefined): LyricLine[] {
 
   out.sort((a, b) => a.time - b.time);
   return out;
+}
+
+/**
+ * 解析原文 LRC 并按时间戳配对翻译 LRC。
+ *
+ * NCM 的 tLrc 也是标准 LRC，时间戳与 lrc 一一对应；但偶有微小差异
+ *（如原文 [00:01.23]、翻译 [00:01.24]），故用 ±50ms 容忍带匹配。
+ * 配对失败（找不到对应时间戳）的原文行 translation 留空。
+ */
+export function parseLrcWithTranslation(
+  lrc: string | null | undefined,
+  tLrc: string | null | undefined,
+): LyricLine[] {
+  const lines = parseLrc(lrc);
+  if (lines.length === 0 || !tLrc) return lines;
+
+  const tLines = parseLrc(tLrc);
+  const tMap = new Map<number, string>();
+  for (const t of tLines) {
+    tMap.set(t.time, t.text);
+  }
+
+  const TOLERANCE_MS = 50;
+  const tTimes = tLines.map((t) => t.time);
+
+  function findTranslation(time: number): string | undefined {
+    const exact = tMap.get(time);
+    if (exact) return exact;
+    if (tTimes.length === 0) return undefined;
+    let lo = 0;
+    let hi = tTimes.length - 1;
+    let best = -1;
+    let bestDist = TOLERANCE_MS + 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const d = Math.abs(tTimes[mid] - time);
+      if (d < bestDist) {
+        bestDist = d;
+        best = mid;
+      }
+      if (tTimes[mid] < time) {
+        lo = mid + 1;
+      } else if (tTimes[mid] > time) {
+        hi = mid - 1;
+      } else {
+        break;
+      }
+    }
+    if (best < 0 || bestDist > TOLERANCE_MS) return undefined;
+    return tMap.get(tTimes[best]);
+  }
+
+  for (const line of lines) {
+    const tr = findTranslation(line.time);
+    if (tr) line.translation = tr;
+  }
+  return lines;
 }
 
 /**
