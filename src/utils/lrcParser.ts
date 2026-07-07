@@ -232,13 +232,6 @@ export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
 }
 
 /**
- * 从 YRC 行数据生成 [startMs, endMs] 格式的 CharToken[]。
- * 用于替换原先的伪卡拉OK 等分时间窗。
- *
- * @param words YRC 逐字条目
- * @returns 兼容 CharToken 格式的数组
- */
-/**
  * 卡拉OK 字符级时间标签。
  * 按字符数等分 [prevMs, nextMs] 时间窗（伪卡拉OK，NCM LRC 无逐字时间戳）。
  */
