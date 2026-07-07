@@ -28,7 +28,7 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="px-8 py-6">
+  <div class="px-8 py-6 mobile-content-padding">
     <header class="mb-6">
       <h1 class="text-2xl font-semibold mb-1">每日推荐</h1>
       <p class="text-xs text-text-secondary">
@@ -47,7 +47,7 @@ onMounted(load);
 
     <div
       v-else-if="data"
-      class="grid gap-4"
+      class="grid gap-4 mobile-stack"
       style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
     >
       <SongList :songs="data.songs" title="今日推荐" />

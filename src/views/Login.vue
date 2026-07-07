@@ -4,7 +4,6 @@
 //   2. 账号密码登录（邮箱 / 用户名）
 //   3. 手机验证码登录（60s 倒计时）
 //
-// 设计风格沿用 UI 规范：柔和米黄背景 + 12px 圆角 + 橘红强调色。
 
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -198,15 +197,21 @@ const accountHint = computed(() => {
 </script>
 
 <template>
-  <div class="h-full flex items-center justify-center px-6">
-    <div class="card w-full max-w-md p-8">
+  <div class="h-full flex items-center justify-center px-6 relative overflow-hidden">
+    <!-- 背景装饰 -->
+    <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+      <div class="absolute top-1/4 -left-20 w-96 h-96 rounded-full opacity-[0.07] blur-3xl" style="background: radial-gradient(circle, var(--color-accent) 0%, transparent 70%);" />
+      <div class="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full opacity-[0.05] blur-3xl" style="background: radial-gradient(circle, var(--color-accent-secondary) 0%, transparent 70%);" />
+    </div>
+
+    <div class="card w-full max-w-md p-8 animate-fade-in-up relative z-10">
       <h1 class="text-xl font-semibold mb-1">登录 nnplayer</h1>
       <p class="text-xs text-text-secondary mb-5">
         选择一种登录方式开始使用
       </p>
 
       <!-- Tab 切换 -->
-      <div class="flex gap-2 mb-6 border-b border-hover">
+      <div class="flex gap-1 mb-6 rounded-xl bg-[rgba(255,255,255,0.03)] p-1">
         <button
           v-for="t in [
             { key: 'qr', label: '二维码' },
@@ -214,11 +219,11 @@ const accountHint = computed(() => {
             { key: 'phone', label: '手机验证' },
           ]"
           :key="t.key"
-          class="px-4 py-2 text-sm transition-colors"
+          class="flex-1 px-3 py-2 text-sm rounded-lg transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
           :class="
             tab === t.key
-              ? 'text-accent border-b-2 border-accent font-medium'
-              : 'text-text-secondary hover:text-text-primary'
+              ? 'bg-accent text-white shadow-lg shadow-accent/25 font-medium'
+              : 'text-text-secondary hover:text-text-primary hover:bg-[rgba(255,255,255,0.04)]'
           "
           @click="switchTab(t.key as Tab)"
         >
@@ -229,7 +234,7 @@ const accountHint = computed(() => {
       <!-- =============== Tab 1: 二维码 =============== -->
       <div v-if="tab === 'qr'" class="flex flex-col items-center">
         <div
-          class="w-56 h-56 rounded-card bg-white p-2 flex items-center justify-center overflow-hidden"
+          class="w-56 h-56 rounded-xl bg-white p-2 flex items-center justify-center overflow-hidden shadow-lg"
         >
           <img
             v-if="qr?.qrImage"
@@ -332,9 +337,9 @@ const accountHint = computed(() => {
       </form>
 
       <!-- =============== 调试：粘贴 Cookie =============== -->
-      <div class="mt-6 pt-4 border-t border-hover">
+      <div class="mt-6 pt-4 border-t border-border">
         <button
-          class="text-[11px] text-text-secondary hover:text-text-primary"
+          class="text-[11px] text-text-secondary hover:text-text-primary transition-colors"
           @click="showCookieDebug = !showCookieDebug"
         >
           {{ showCookieDebug ? "收起" : "高级" }}：粘贴 Cookie 登录

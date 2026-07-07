@@ -43,7 +43,7 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="px-8 py-6">
+  <div class="px-8 py-6 mobile-content-padding">
     <!-- 阶段4：骨架屏（头 + 列表） -->
     <template v-if="loading">
       <header class="flex gap-6 mb-6 items-end">
@@ -91,7 +91,7 @@ onMounted(load);
 
       <!-- 歌曲列表 + 歌词面板 -->
       <div
-        class="grid gap-4"
+        class="grid gap-4 mobile-stack"
         style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
       >
         <SongList :songs="detail.songs" :show-index="true" />

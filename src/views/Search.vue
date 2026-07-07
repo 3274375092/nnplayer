@@ -85,7 +85,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="px-8 py-6">
+  <div class="px-8 py-6 mobile-content-padding">
     <header class="mb-6">
       <h1 class="text-2xl font-semibold mb-3">搜索</h1>
       <input
@@ -109,7 +109,7 @@ onBeforeUnmount(() => {
 
     <div
       v-else-if="results.length > 0"
-      class="grid gap-4"
+      class="grid gap-4 mobile-stack"
       style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)"
     >
       <SongList :songs="results" title="搜索结果" />

@@ -51,13 +51,13 @@ withDefaults(defineProps<Props>(), {
 </template>
 
 <style scoped>
-/* 微光闪烁背景：浅米黄 → 浅灰 → 浅米黄 */
+/* 微光闪烁背景：深色 */
 .skeleton {
   background: linear-gradient(
     90deg,
-    #eeefde 0%,
-    #f4f5e3 50%,
-    #eeefde 100%
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 100%
   );
   background-size: 800px 100%;
   animation: shimmer 1.6s linear infinite;

@@ -1,13 +1,7 @@
-// 桌面歌词窗口几何信息校验命令。
-//
-// is_position_on_screen：在恢复持久化位置前检查 (x, y) 是否仍在某个
-// 可用显示器范围内，避免拔掉副屏后窗口"消失"。
-
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::Manager;
 
-/// 检查 (x, y) 是否位于任一当前可用显示器范围内。
-/// 用于桌面歌词窗口恢复持久化位置前做边界校验。
-/// 失败时保守返回 true（不阻止窗口创建，主窗会居中兜底）。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub fn is_position_on_screen(app: tauri::AppHandle, x: i32, y: i32) -> bool {
     let Some(main) = app.get_webview_window("main") else {
@@ -28,4 +22,10 @@ pub fn is_position_on_screen(app: tauri::AppHandle, x: i32, y: i32) -> bool {
             && x < pos.x + size.width as i32
             && y < pos.y + size.height as i32
     })
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+pub fn is_position_on_screen(_app: tauri::AppHandle, _x: i32, _y: i32) -> bool {
+    true
 }

@@ -2,19 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ============================================================
-   主题色 CSS 变量（阶段1：封面驱动主题）
-   - 默认值即米黄体系，保持与升级前像素级一致
-   - 切歌时由 stores/theme.ts 改写
-   - tailwind.config.js 的 colors 全部走 var(--color-*) 引用这里
-   ============================================================ */
 :root {
-  --color-bg: #fafce4;
-  --color-card: #f5f7e1;
-  --color-hover: #eef0d8;
+  --color-bg: #0a0a0c;
+  --color-bg-from: #0f0f14;
+  --color-bg-to: #060608;
+  --color-card: #181820;
+  --color-card-hover: hsla(12, 30%, 70%, 0.12);
+  --color-border: hsla(12, 35%, 60%, 0.18);
+  --color-border-strong: hsla(12, 40%, 65%, 0.28);
+  --color-ring: hsla(12, 40%, 70%, 0.20);
   --color-accent: #e85d3a;
-  --color-text-primary: #373737;
-  --color-text-secondary: #8c8c8c;
+  --color-accent-secondary: #e88d3a;
+  --color-accent-subtle: hsla(12, 60%, 55%, 0.25);
+  --color-text-primary: #eaeaf0;
+  --color-text-secondary: rgba(255, 255, 255, 0.45);
+  --color-text-tertiary: rgba(255, 255, 255, 0.25);
+  --color-shadow: hsla(12, 25%, 0%, 0.55);
+  --color-scrollbar: hsla(12, 55%, 60%, 0.30);
+  --color-scrollbar-hover: hsla(12, 60%, 65%, 0.50);
+  --color-glow: hsla(12, 65%, 55%, 0.30);
 }
 
 html,
@@ -27,74 +33,97 @@ body,
 
 body {
   font-family:
+    "Inter",
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 14px;
   line-height: 1.5;
   color: var(--color-text-primary);
+  background:
+    radial-gradient(
+      ellipse 70% 50% at 50% -10%,
+      var(--color-bg-from) 0%,
+      transparent 70%
+    ),
+    var(--color-bg);
   background-color: var(--color-bg);
   -webkit-font-smoothing: antialiased;
-  /* 主题色切换时背景/文字平滑过渡（600ms） */
   transition:
     background-color 0.6s ease,
     color 0.6s ease;
 }
 
-/* 自定义滚动条 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d9dcc6;
-  border-radius: 4px;
+  background: var(--color-scrollbar);
+  border-radius: 3px;
+  transition: background 0.2s;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #c2c6a8;
+  background: var(--color-scrollbar-hover);
 }
 
-/* 隐藏 input number 的箭头 */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 
-/* ============================================================
-   通用组件样式（与 Tailwind 配合使用）
-   ============================================================ */
 @layer components {
-  /* 按钮基础 */
   .btn {
     @apply inline-flex items-center justify-center rounded-btn px-4 py-2
-           text-sm font-medium transition-colors duration-200 select-none;
+           text-sm font-medium transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] select-none;
   }
   .btn-primary {
-    @apply bg-accent text-white hover:opacity-90 active:opacity-80;
+    @apply bg-accent text-white hover:opacity-90 active:scale-[0.97];
   }
   .btn-ghost {
-    @apply bg-transparent text-text-primary hover:bg-hover;
+    @apply bg-transparent text-text-primary hover:bg-hover active:scale-[0.97];
   }
 
-  /* 卡片 */
   .card {
-    @apply bg-card rounded-card shadow-soft;
+    @apply bg-card rounded-card shadow-lg border border-border;
   }
 
-  /* 输入框 */
+  .glass {
+    background: rgba(18, 18, 20, 0.72);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+  }
+
   .input {
-    @apply w-full px-3 py-2 rounded-btn bg-white border border-transparent
-           focus:border-accent focus:outline-none transition-colors
-           placeholder:text-text-secondary;
+    @apply w-full px-3 py-2 rounded-btn;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+  }
+  .input:focus {
+    border-color: var(--color-accent);
+    outline: none;
+  }
+  .input::placeholder {
+    color: var(--color-text-tertiary);
   }
 }
 
-/* ============================================================
-   工具类
-   ============================================================ */
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {
     display: none;
@@ -102,4 +131,72 @@ input[type="number"]::-webkit-outer-spin-button {
   .no-scrollbar {
     scrollbar-width: none;
   }
+
+  .border-border {
+    border-color: var(--color-border);
+  }
+  .border-border-strong {
+    border-color: var(--color-border-strong);
+  }
+  .ring-ring {
+    --tw-ring-color: var(--color-ring);
+  }
+  .bg-card-hover {
+    background-color: var(--color-card-hover);
+  }
+  .text-tertiary {
+    color: var(--color-text-tertiary);
+  }
+  .bg-accent-subtle {
+    background-color: var(--color-accent-subtle);
+  }
+  .shadow-theme {
+    box-shadow: 0 4px 20px var(--color-shadow);
+  }
+  .text-glow {
+    text-shadow: 0 0 12px var(--color-glow);
+  }
+  .bg-gradient-bar {
+    background: linear-gradient(90deg, var(--color-accent), var(--color-accent-secondary));
+  }
 }
+
+@media (max-width: 768px) {
+  .mobile-stack {
+    grid-template-columns: 1fr !important;
+  }
+
+  .mobile-song-grid {
+    grid-template-columns: 36px 40px 1fr 52px !important;
+  }
+
+  .mobile-song-grid-header {
+    grid-template-columns: 36px 40px 1fr 52px !important;
+  }
+
+  .mobile-player-bar {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    height: 60px !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    gap: 8px !important;
+    bottom: 8px !important;
+  }
+
+  .mobile-player-bar .mobile-hide-on-small {
+    display: none !important;
+  }
+
+  .mobile-sidebar-hidden {
+    display: none !important;
+  }
+
+  .mobile-content-padding {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    padding-bottom: 80px !important;
+  }
+}
+
+

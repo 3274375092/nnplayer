@@ -303,9 +303,9 @@ const hasSong = computed(() => player.currentSong !== null);
 
 .lyric-karaoke__sung {
   color: var(--color-accent);
-  /* 已唱部分按 --lyric-pct 显示：靠 clip-path 从左裁出已唱 */
   clip-path: inset(0 calc(100% - var(--lyric-pct, 0%)) 0 0);
   transition: clip-path 0.1s linear;
+  text-shadow: 0 0 8px var(--color-glow);
 }
 
 .lyric-karaoke__pending {
@@ -324,14 +324,15 @@ const hasSong = computed(() => player.currentSong !== null);
 /* 翻译行：小字号、半透明，当前行更亮。必须显式设 color 覆盖 .is-active 的 transparent */
 .lyric-translation {
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
+  font-style: italic;
   color: var(--color-text-secondary);
-  opacity: 0.35;
-  margin-top: 1px;
+  opacity: 0.4;
+  margin-top: 2px;
   transition: opacity 0.3s;
 }
 
 .lyric-translation.is-active-translation {
-  opacity: 0.55;
+  opacity: 0.65;
 }
 </style>

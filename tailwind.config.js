@@ -4,51 +4,66 @@ export default {
   theme: {
     extend: {
       colors: {
-        // === UI 规范颜色（柔和米黄体系）===
-        // CSS 变量驱动：阶段1 主题色切换时由 stores/theme.ts 改写 :root
-        // 默认值在 src/styles.css 的 :root 块里定义
         bg: "var(--color-bg)",
         card: "var(--color-card)",
-        hover: "var(--color-hover)",
+        "card-hover": "var(--color-card-hover)",
+        hover: "var(--color-card-hover)",
+        border: "var(--color-border)",
+        "border-strong": "var(--color-border-strong)",
+        ring: "var(--color-ring)",
         text: {
           primary: "var(--color-text-primary)",
           secondary: "var(--color-text-secondary)",
+          tertiary: "var(--color-text-tertiary)",
         },
         accent: "var(--color-accent)",
+        "accent-secondary": "var(--color-accent-secondary)",
+        "accent-subtle": "var(--color-accent-subtle)",
       },
       borderRadius: {
-        // 大圆角
         DEFAULT: "12px",
         card: "12px",
         btn: "10px",
       },
       boxShadow: {
-        // 轻阴影
-        soft: "0 2px 8px rgba(55, 55, 55, 0.06)",
-        card: "0 4px 16px rgba(55, 55, 55, 0.08)",
+        soft: "0 2px 8px rgba(0, 0, 0, 0.2)",
+        card: "0 4px 20px var(--color-shadow)",
       },
       backdropBlur: {
         lg: "16px",
+        xl: "24px",
       },
       transitionProperty: {
-        // 让过渡更平滑
-        DEFAULT: "color, background-color, border-color, transform, opacity",
+        DEFAULT: "color, background-color, border-color, transform, opacity, box-shadow",
       },
       keyframes: {
-        // 阶段4：播放栏封面旋转
         "spin-slow": {
           from: { transform: "rotate(0deg)" },
           to: { transform: "rotate(360deg)" },
         },
-        // 阶段4：骨架屏微光闪烁
         shimmer: {
           "0%": { backgroundPosition: "-400px 0" },
           "100%": { backgroundPosition: "400px 0" },
+        },
+        "play-pulse": {
+          "0%, 100%": { boxShadow: "0 0 0 0 var(--color-accent-subtle)" },
+          "50%": { boxShadow: "0 0 0 10px transparent" },
+        },
+        "cover-glow": {
+          "0%, 100%": { opacity: "0.5" },
+          "50%": { opacity: "1" },
+        },
+        "fade-in-up": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
         },
       },
       animation: {
         "spin-slow": "spin-slow 8s linear infinite",
         shimmer: "shimmer 1.6s linear infinite",
+        "play-pulse": "play-pulse 2s ease-in-out infinite",
+        "cover-glow": "cover-glow 2.5s ease-in-out infinite",
+        "fade-in-up": "fade-in-up 0.35s ease-out",
       },
     },
   },

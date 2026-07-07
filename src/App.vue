@@ -42,7 +42,7 @@ onBeforeUnmount(() => {
 
   <!-- 主窗：完整布局 -->
   <div v-else class="h-full flex bg-bg">
-    <Sidebar class="shrink-0" />
+    <Sidebar class="shrink-0 mobile-sidebar-hidden" />
 
     <main class="flex-1 overflow-y-auto">
       <router-view v-slot="{ Component }">
