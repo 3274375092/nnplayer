@@ -12,10 +12,7 @@ use crate::state::AppState;
 
 /// 获取歌词。
 #[tauri::command]
-pub async fn get_lyric(
-    state: State<'_, AppState>,
-    song_id: u64,
-) -> AppResult<LyricResult> {
+pub async fn get_lyric(state: State<'_, AppState>, song_id: u64) -> AppResult<LyricResult> {
     state.check_login().await?;
 
     if song_id == 0 {
@@ -23,11 +20,13 @@ pub async fn get_lyric(
     }
 
     let cookie = state.cookie().await;
-    let api = state.api.lock().await;
+    let api = state.api.read().await;
     let resp = api
-        .lyric_new(&Query::new()
-            .cookie(&cookie)
-            .param("id", &song_id.to_string()))
+        .lyric_new(
+            &Query::new()
+                .cookie(&cookie)
+                .param("id", &song_id.to_string()),
+        )
         .await
         .map_err(crate::error::map_ncm_err)?;
 

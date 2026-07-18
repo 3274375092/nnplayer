@@ -9,25 +9,136 @@
 //   5. 几何信息防抖持久化（useWindowGeometry）
 //   6. 监听主窗 apply-prefs 事件（同步主窗设置面板）
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useDesktopLyricsBridge } from "@/composables/useDesktopLyricsBridge";
 import { useLyricWindowPrefs } from "@/composables/useLyricWindowPrefs";
 import { useWindowGeometry } from "@/composables/useWindowGeometry";
+import { findActiveLineIndex } from "@/utils/lrcParser";
+import { getKaraokeTokenProgress } from "@/utils/lyricTiming";
 
 const { state } = useDesktopLyricsBridge();
-const { prefs } = useLyricWindowPrefs();
+const { prefs, apply: applyPrefs } = useLyricWindowPrefs();
 useWindowGeometry(); // 防抖保存窗口位置/大小
 
 const unlistens: UnlistenFn[] = [];
 const toolbarVisible = ref(false);
+let disposed = false;
 
-// =============== 歌词行裁剪 ===============
+// =============== 本地绝对媒体时钟 + 独立时间轴定位 ===============
+// 主窗只低频发送绝对时钟锚点；完整 lines/tokensByLine 在快照中只传一次。
+// 子窗每帧由绝对位置自行二分切行，因此换行不依赖 IPC 到达时机。
+
+const localPositionMs = ref(0);
+let anchorPositionMs = 0;
+let anchorTs = 0;
+let anchorPlaying = false;
+let anchorPlaybackRate = 1;
+let lastSongId: number | null = null;
+let lastSessionId = "";
+let lastSeekRevision = -1;
+let initialized = false;
+let rafId = 0;
+
+const HARD_SYNC_THRESHOLD_MS = 300;
+const SOFT_CORRECTION_RATIO = 0.35;
+const MAX_TRANSPORT_COMPENSATION_MS = 5000;
+
+function packetPositionNow() {
+  const s = state.value;
+  if (!s.playing) return s.positionMs;
+  const transportAge = Number.isFinite(s.sampledAt)
+    ? Math.max(
+        0,
+        Math.min(MAX_TRANSPORT_COMPENSATION_MS, Date.now() - s.sampledAt),
+      )
+    : 0;
+  return s.positionMs + transportAge * s.playbackRate;
+}
+
+function shouldRunLocalRaf() {
+  return anchorPlaying && document.visibilityState === "visible";
+}
+
+function stopLocalRaf() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = 0;
+}
+
+function rafTick() {
+  rafId = 0;
+  if (!shouldRunLocalRaf()) return;
+  localPositionMs.value =
+    anchorPositionMs +
+    (performance.now() - anchorTs) * anchorPlaybackRate;
+  rafId = requestAnimationFrame(rafTick);
+}
+
+function updateLocalRaf() {
+  if (!shouldRunLocalRaf()) {
+    stopLocalRaf();
+    return;
+  }
+  if (!rafId) rafId = requestAnimationFrame(rafTick);
+}
+
+function syncAnchor(forceSnap: boolean) {
+  const s = state.value;
+  const now = performance.now();
+  const elapsed = Math.max(0, now - anchorTs);
+  const currentPosition = anchorPlaying
+    ? anchorPositionMs + elapsed * anchorPlaybackRate
+    : anchorPositionMs;
+  const authoritativePosition = packetPositionNow();
+  const positionDelta = authoritativePosition - currentPosition;
+  const sessionChanged = initialized && s.sessionId !== lastSessionId;
+  const songChanged = initialized && s.songId !== lastSongId;
+  const seeked = initialized && s.seekRevision !== lastSeekRevision;
+  const playStateChanged = initialized && s.playing !== anchorPlaying;
+  const rateChanged = initialized && s.playbackRate !== anchorPlaybackRate;
+  const hardSync =
+    forceSnap ||
+    !initialized ||
+    sessionChanged ||
+    songChanged ||
+    seeked ||
+    playStateChanged ||
+    rateChanged ||
+    Math.abs(positionDelta) >= HARD_SYNC_THRESHOLD_MS;
+
+  anchorPositionMs = hardSync
+    ? authoritativePosition
+    : currentPosition + positionDelta * SOFT_CORRECTION_RATIO;
+  localPositionMs.value = anchorPositionMs;
+  anchorTs = now;
+  anchorPlaying = s.playing;
+  anchorPlaybackRate = s.playbackRate;
+  lastSessionId = s.sessionId;
+  lastSongId = s.songId;
+  lastSeekRevision = s.seekRevision;
+  initialized = true;
+  updateLocalRaf();
+}
+
+watch(
+  () => [state.value.sessionId, state.value.sequence],
+  () => syncAnchor(false),
+);
+
+const activeLineIndex = computed(() =>
+  findActiveLineIndex(state.value.lines, Math.floor(localPositionMs.value)),
+);
+
+const localProgressMs = computed(() => {
+  const idx = activeLineIndex.value;
+  const line = idx >= 0 ? state.value.lines[idx] : undefined;
+  return line ? Math.max(0, localPositionMs.value - line.time) : 0;
+});
 
 const visible = computed(() => {
   const ls = state.value.lines;
-  const idx = state.value.activeLineIndex;
+  const idx = activeLineIndex.value;
   return {
     prev: idx > 0 ? ls[idx - 1] : null,
     current: idx >= 0 && idx < ls.length ? ls[idx] : null,
@@ -44,95 +155,13 @@ const placeholderText = computed(() => {
   return "♪";
 });
 
-// =============== 本地时钟（rAF 插值）==============
-//
-// 主窗推送节流到 250ms（4Hz），子窗直接用会"两个字两个字跳"。
-// 这里用 requestAnimationFrame 跑 60fps 本地时钟：
-//   - 收到推送 → 记录锚点 (anchorMs = progressMs, anchorTs = now, playing)
-//   - 行切换 → 立即 snap 到新行进度，避免从旧行进度开始擦
-//   - rAF tick：playing 时 localProgressMs = anchorMs + (now - anchorTs)
-//   - 暂停时 localProgressMs = anchorMs（不动）
-// 这样 --char-pct / --lyric-pct 每帧更新，擦除顺滑、跟得上人声。
-//
-// 关键：同一行内 anchor 不允许回退。
-// 主窗 progressMs 由 <audio> timeupdate 驱动（4Hz、离散、滞后实时播放），
-// 子窗 rAF 用 performance.now()（墙钟、连续、实时）。两者时间基准不同步，
-// 若每次推送都把 anchor 拉回主窗滞后值，下一帧 localProgressMs 就倒退 →
-// 换行后一秒内最明显（snap 重置后 rAF 快速往前，紧接着的滞后推送把颜色拉回）。
-// 策略：行变化/大跳(seek) 才 snap；主窗领先才追赶；滞后/暂停时保持子窗位置。
-
-const localProgressMs = ref(0);
-let anchorMs = 0;
-let anchorTs = 0;
-let anchorPlaying = false;
-let lastLineIdx = -1;
-let rafId = 0;
-
-/** 同一行内判定 seek 的大跳阈值（ms）。超过视为 seek/切歌，snap 到主窗值。 */
-const SEEK_THRESHOLD_MS = 800;
-/** 主窗推送抖动容忍带（ms）：|delta| 在此范围内视为噪声，anchor 不动。 */
-const TOLERANCE_MS = 120;
-
-function syncAnchor(snap: boolean) {
-  const s = state.value;
-  const lineChanged = s.activeLineIndex !== lastLineIdx;
-  const delta = s.progressMs - localProgressMs.value;
-  const now = performance.now();
-
-  if (snap || lineChanged || Math.abs(delta) > SEEK_THRESHOLD_MS) {
-    // 行切换 / seek 大跳 / 首帧 → 对齐到主窗权威值
-    localProgressMs.value = s.progressMs;
-    lastLineIdx = s.activeLineIndex;
-    anchorMs = s.progressMs;
-    anchorTs = now;
-  } else if (s.playing !== anchorPlaying) {
-    // 播放/暂停切换 → 以当前 localProgressMs 重新锚定，值不跳
-    anchorMs = localProgressMs.value;
-    anchorTs = now;
-  } else if (delta > TOLERANCE_MS) {
-    // 主窗明显领先 → 平滑追赶：anchor 取中点
-    anchorMs = (localProgressMs.value + s.progressMs) / 2;
-    anchorTs = now;
-  }
-  // |delta| <= TOLERANCE_MS（抖动带）或 delta < -TOLERANCE_MS（主窗滞后）
-  // → anchorMs 和 anchorTs 都不动，rAF 继续按墙钟自走（不重置！）
-  anchorPlaying = s.playing;
-}
-
-function rafTick() {
-  if (anchorPlaying) {
-    localProgressMs.value = anchorMs + (performance.now() - anchorTs);
-  } else {
-    localProgressMs.value = anchorMs;
-  }
-  rafId = requestAnimationFrame(rafTick);
-}
-
-watch(
-  () => [state.value.progressMs, state.value.playing, state.value.activeLineIndex],
-  () => syncAnchor(false),
-);
-
 // =============== 卡拉 OK 逐字三态 ===============
 //
 // 每个 token 用 --char-pct 控制字内擦除：
 //   - 已唱 (localProgressMs >= endMs) → 100%
 //   - 未唱 (localProgressMs < startMs) → 0%
 //   - 进行中 → (localProgressMs - startMs) / (endMs - startMs)
-// 无 token 时回退整行线性擦（用 localProgressMs / span，同样带 rAF 插值）。
-
-const lineSpan = computed(() => {
-  const cur = visible.value.current;
-  if (!cur) return 1;
-  const next = visible.value.next;
-  return Math.max(1, (next?.time ?? cur.time + 5000) - cur.time);
-});
-
-/** 回退（无逐字时间戳）：整行线性擦的 CSS 变量 */
-const fallbackStyle = computed(() => {
-  const pct = Math.max(0, Math.min(1, localProgressMs.value / lineSpan.value));
-  return { "--lyric-pct": `${(pct * 100).toFixed(2)}%` };
-});
+// 无 YRC token 时只显示行级歌词，不伪造看似精确的逐字动画。
 
 interface CharRender {
   char: string;
@@ -141,14 +170,13 @@ interface CharRender {
 
 /** 逐字渲染数据：每个字的字内已唱百分比（0~1） */
 const chars = computed<CharRender[]>(() => {
-  const tokens = state.value.karaokeTokens;
+  const tokens = state.value.tokensByLine[activeLineIndex.value] ?? [];
   if (!tokens || tokens.length === 0) return [];
   const now = localProgressMs.value;
-  return tokens.map((t) => {
-    const span = t.endMs - t.startMs;
-    if (span <= 0) return { char: t.char, pct: now >= t.endMs ? 1 : 0 };
-    return { char: t.char, pct: Math.max(0, Math.min(1, (now - t.startMs) / span)) };
-  });
+  return tokens.map((token) => ({
+    char: token.char,
+    pct: getKaraokeTokenProgress(token, now),
+  }));
 });
 
 // =============== CSS 变量 ===============
@@ -163,33 +191,89 @@ const cssVars = computed(() => ({
   "--color-accent": accentColor.value,
 }));
 
+// =============== 超长当前行自适应 ===============
+
+const currentWrapRef = ref<HTMLElement | null>(null);
+const currentTextRef = ref<HTMLElement | null>(null);
+const currentLineScale = ref(1);
+let lyricResizeObserver: ResizeObserver | null = null;
+
+/**
+ * 桌面歌词保持单行展示。文本超过窗口可用宽度时只缩放当前行的视觉尺寸，
+ * 不改变用户保存的字号，也不会让页面的布局宽度被长文本撑开。
+ */
+function fitCurrentLine() {
+  const wrapper = currentWrapRef.value;
+  const text = currentTextRef.value;
+  if (!wrapper || !text) {
+    currentLineScale.value = 1;
+    return;
+  }
+
+  const availableWidth = wrapper.clientWidth;
+  const naturalWidth = text.scrollWidth;
+  if (availableWidth <= 0 || naturalWidth <= 0) {
+    currentLineScale.value = 1;
+    return;
+  }
+
+  currentLineScale.value = Math.min(1, availableWidth / naturalWidth);
+}
+
+const currentTextStyle = computed(() => ({
+  transform: `scale(${currentLineScale.value})`,
+}));
+
+watch(
+  () => [visible.value.current?.text, prefs.value.fontSize],
+  () => void nextTick(fitCurrentLine),
+  { flush: "post" },
+);
+
 // =============== 生命周期 ===============
 
+function onVisibilityChange() {
+  // 恢复可见时用最近权威包（含 sampledAt）补齐后台经过的时间。
+  syncAnchor(document.visibilityState === "visible");
+}
+
 onMounted(async () => {
+  disposed = false;
+  lyricResizeObserver = new ResizeObserver(() => fitCurrentLine());
+  if (currentWrapRef.value) lyricResizeObserver.observe(currentWrapRef.value);
+  void nextTick(fitCurrentLine);
+
   // 监听主窗配置推送
-  unlistens.push(
-    await listen<Partial<typeof prefs.value>>(
-      "desktop-lyrics:apply-prefs",
-      (e) => {
-        Object.assign(prefs.value, e.payload);
-      },
-    ),
+  const stopPrefs = await listen<Partial<typeof prefs.value>>(
+    "desktop-lyrics:apply-prefs",
+    (e) => {
+      if (!disposed) applyPrefs(e.payload);
+    },
   );
+  if (disposed) {
+    stopPrefs();
+    return;
+  }
+  unlistens.push(stopPrefs);
 
   // Escape 键关闭
   window.addEventListener("keydown", onKeyDown);
+  document.addEventListener("visibilitychange", onVisibilityChange);
 
-  // 启动本地时钟 rAF（首帧用 EMPTY 锚点，收到推送后 snap）
+  // 首帧用 EMPTY 锚点；只有收到 playing=true 后才启动 rAF。
   syncAnchor(true);
-  rafId = requestAnimationFrame(rafTick);
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  lyricResizeObserver?.disconnect();
+  lyricResizeObserver = null;
   unlistens.forEach((u) => u());
   unlistens.length = 0;
   window.removeEventListener("keydown", onKeyDown);
-  if (rafId) cancelAnimationFrame(rafId);
-  rafId = 0;
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  stopLocalRaf();
+  _cleanupDragListeners();
 });
 
 // 锁定状态变化 → 通知主窗
@@ -244,7 +328,8 @@ function onMouseDown(e: MouseEvent) {
   window.addEventListener("mouseup", _onDragUp);
 }
 
-function onDoubleClick() {
+function onDoubleClick(e: MouseEvent) {
+  if ((e.target as HTMLElement).closest("[data-toolbar]")) return;
   prefs.value.locked = !prefs.value.locked;
 }
 
@@ -302,12 +387,18 @@ function onFontSizeChange(delta: number) {
       <p v-else-if="prefs.showPrevNext" class="prev-line"></p>
 
       <!-- 当前行（卡拉OK 逐字） -->
-      <div class="current-wrap" :style="fallbackStyle">
+      <div ref="currentWrapRef" class="current-wrap">
         <h1
           v-if="visible.current && chars.length > 0"
           class="current-lyric text-transparent font-semibold leading-tight text-center"
         >
-          <span class="lyric-karaoke" aria-hidden="true">
+          <span
+            ref="currentTextRef"
+            class="lyric-karaoke"
+            :style="currentTextStyle"
+            dir="auto"
+            aria-hidden="true"
+          >
             <!-- 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除 -->
             <span
               v-for="(c, i) in chars"
@@ -322,12 +413,15 @@ function onFontSizeChange(delta: number) {
         </h1>
         <h1
           v-else-if="visible.current && visible.current.text"
-          class="current-lyric text-transparent font-semibold leading-tight text-center"
+          class="current-lyric font-semibold leading-tight text-center"
         >
-          <!-- 回退：无逐字时间戳，整行线性擦（--lyric-pct 由外层 fallbackStyle 提供） -->
-          <span class="lyric-karaoke" aria-hidden="true">
-            <span class="lyric-karaoke__sung">{{ visible.current.text }}</span>
-            <span class="lyric-karaoke__pending">{{ visible.current.text }}</span>
+          <!-- 无精确时间戳时展示稳定文本，不伪造逐字进度。 -->
+          <span
+            ref="currentTextRef"
+            class="plain-current-text"
+            :style="currentTextStyle"
+          >
+            {{ visible.current.text }}
           </span>
         </h1>
         <h1
@@ -443,8 +537,10 @@ body,
 #app {
   background: transparent !important;
   height: 100%;
+  width: 100%;
   margin: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 /* 核弹级透明：歌词内容区内所有元素强制透明，确保文字直接浮在桌面 */
@@ -460,6 +556,10 @@ body,
 
 /* 歌词根容器：融入桌面，无背景/边框/投影；不透明度由 .lyric-content 层控制 */
 .lyric-root {
+  width: 100%;
+  max-width: 100vw;
+  overflow: hidden;
+  box-sizing: border-box;
   background: transparent;
   border: none;
   box-shadow: none;
@@ -473,10 +573,21 @@ body,
 }
 
 .current-wrap {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  flex-direction: column;
+  overflow: hidden;
   min-height: calc(var(--lyric-font-size, 28px) * 1.1);
 }
 
 .current-lyric {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--lyric-font-size, 28px);
   color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
 }
@@ -503,6 +614,12 @@ body,
 
 /* 滑块控制的整窗歌词不透明度：只作用于歌词内容层，不影响工具栏背景 */
 .lyric-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding-inline: 16px;
+  overflow: hidden;
+  box-sizing: border-box;
   opacity: var(--lyric-opacity, 1);
   transition: opacity 0.15s linear;
 }
@@ -512,26 +629,17 @@ body,
   display: inline-block;
   position: relative;
   white-space: nowrap;
+  transform-origin: center center;
+  transition: transform 0.15s ease-out;
 }
 
-/* 回退：整行双层擦（无逐字时间戳时，用 --lyric-pct） */
-.lyric-karaoke__sung {
+.plain-current-text {
   display: inline-block;
   white-space: nowrap;
-  color: var(--color-accent, #E85D3A);
+  color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
   text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
-  clip-path: inset(0 calc(100% - var(--lyric-pct, 0%)) 0 0);
-}
-
-.lyric-karaoke__pending {
-  position: absolute;
-  inset: 0;
-  display: inline-block;
-  white-space: nowrap;
-  color: rgba(255, 255, 255, 0.88);
-  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
-  pointer-events: none;
-  clip-path: inset(0 0 0 var(--lyric-pct, 0%));
+  transform-origin: center center;
+  transition: transform 0.15s ease-out;
 }
 
 /* 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除。
@@ -539,7 +647,7 @@ body,
 .lyric-char {
   display: inline-block;
   position: relative;
-  white-space: nowrap;
+  white-space: pre;
 }
 
 .lyric-char__sung {
@@ -557,6 +665,14 @@ body,
   text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
   pointer-events: none;
   clip-path: inset(0 0 0 var(--char-pct, 0%));
+}
+
+.lyric-karaoke:dir(rtl) .lyric-char__sung {
+  clip-path: inset(0 0 0 calc(100% - var(--char-pct, 0%)));
+}
+
+.lyric-karaoke:dir(rtl) .lyric-char__pending {
+  clip-path: inset(0 var(--char-pct, 0%) 0 0);
 }
 
 /* 工具条按钮样式 */

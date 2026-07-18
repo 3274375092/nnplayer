@@ -119,5 +119,12 @@ pub fn parse_ncm_song(val: &serde_json::Value, duration_field: &str) -> Option<S
         .pointer("/al/picUrl")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    Some(Song { id, name, artists, album, duration, pic_url })
+    Some(Song {
+        id,
+        name,
+        artists,
+        album,
+        duration,
+        pic_url,
+    })
 }

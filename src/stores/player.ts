@@ -3,7 +3,7 @@
 // 不直接操作 audio DOM（交给 useAudioPlayer），只持有业务状态。
 
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 
 import { useAudioPlayer } from "@/composables/useAudioPlayer";
 import type { PlayMode, Song } from "@/types/music";
@@ -30,11 +30,10 @@ export const usePlayerStore = defineStore("player", () => {
   });
 
   const hasNext = computed(() => {
-    if (playMode.value === "loop-one") return true;
-    return index.value < queue.value.length - 1;
+    return index.value >= 0 && queue.value.length > 1;
   });
 
-  const hasPrev = computed(() => index.value > 0);
+  const hasPrev = computed(() => index.value >= 0 && queue.value.length > 1);
 
   // =============== 队列管理（阶段4） ===============
 
@@ -44,17 +43,21 @@ export const usePlayerStore = defineStore("player", () => {
   /** 移除队列中某项（absIdx 是绝对索引，含已播过的） */
   function removeFromQueue(absIdx: number) {
     if (absIdx < 0 || absIdx >= queue.value.length) return;
+    const removingCurrent = absIdx === index.value;
     queue.value.splice(absIdx, 1);
-    // 修正 index：若移除项在当前之前，index-1；若就是当前，index 不变（指向下一首）
+    // 修正 index：若移除项在当前之前，index-1。
     if (absIdx < index.value) {
       index.value -= 1;
-    } else if (absIdx === index.value) {
-      // 当前歌曲被移除：index 指向它的下一首（即现在的 absIdx）
-      if (index.value >= queue.value.length) {
-        // 已播到队尾，停在这里
-        return;
+    } else if (removingCurrent) {
+      if (queue.value.length === 0) {
+        index.value = -1;
+        controller.stop();
+      } else {
+        index.value = Math.min(absIdx, queue.value.length - 1);
+        void playCurrent();
       }
     }
+    if (!removingCurrent) prefetchNextSongUrl();
   }
 
   /** 拖拽重排队列 [from, to)（abs 索引） */
@@ -73,12 +76,18 @@ export const usePlayerStore = defineStore("player", () => {
     } else if (from > index.value && to <= index.value) {
       index.value += 1;
     }
+    prefetchNextSongUrl();
   }
 
-  /** 清空队列（保留 index 0 之外的已播部分） */
+  /** 清空“下一首”列表，保留当前歌曲和已播放部分。 */
   function clearQueue() {
-    queue.value = [];
-    index.value = -1;
+    if (index.value >= 0 && index.value < queue.value.length) {
+      queue.value.splice(index.value + 1);
+    } else {
+      queue.value = [];
+      index.value = -1;
+      controller.stop();
+    }
   }
 
   /** 队列中"下一首"列表（index 之后），limit 控制最大返回数 */
@@ -109,22 +118,37 @@ export const usePlayerStore = defineStore("player", () => {
   /** 播放当前索引对应的歌曲 */
   let playFailCount = 0;
 
+  function prefetchNextSongUrl() {
+    // 只在列表循环下预取确定候选；随机不可预测，单曲循环无需下一首。
+    if (playMode.value !== "loop-list" || queue.value.length < 2) return;
+    const nextIndex = (index.value + 1) % queue.value.length;
+    const nextSong = queue.value[nextIndex];
+    if (!nextSong || nextSong.id === currentSong.value?.id) return;
+    controller.prefetchSongUrl(nextSong.id);
+  }
+
+  async function recoverFromPlaybackFailure(error: unknown) {
+    playFailCount++;
+    if (playFailCount >= 3) {
+      console.error("[player] 连续 3 次播放失败，停止自动切换", error);
+      playFailCount = 0;
+      return;
+    }
+    console.error("[player] 播放失败，自动跳到下一首", error);
+    await next();
+  }
+
   async function playCurrent() {
     const song = currentSong.value;
     if (!song) return;
     try {
-      await controller.playSong(song.id, song);
+      const started = await controller.playSong(song.id, song);
+      if (!started || currentSong.value?.id !== song.id) return;
       pushHistory(song);
       playFailCount = 0;
+      prefetchNextSongUrl();
     } catch (e) {
-      playFailCount++;
-      if (playFailCount >= 3) {
-        console.error("[player] 连续 3 次播放失败，停止自动切换");
-        playFailCount = 0;
-        return;
-      }
-      console.error("[player] 播放失败，自动跳到下一首", e);
-      await next();
+      await recoverFromPlaybackFailure(e);
     }
   }
 
@@ -142,6 +166,22 @@ export const usePlayerStore = defineStore("player", () => {
     await playCurrent();
   }
 
+  /** 播放/暂停；待加载请求被取消后再次播放时会重新取当前歌曲 URL。 */
+  function togglePlay() {
+    if (controller.state.playing || controller.state.loading) {
+      controller.pause();
+      return;
+    }
+    const hasCurrentSource =
+      currentSong.value?.id === controller.state.currentSongId &&
+      controller.hasSource();
+    if (hasCurrentSource) {
+      void controller.resume();
+    } else {
+      void playCurrent();
+    }
+  }
+
   /** 下一首 */
   async function next() {
     if (queue.value.length === 0) return;
@@ -155,15 +195,14 @@ export const usePlayerStore = defineStore("player", () => {
         }
         index.value = nextIdx;
       }
+    } else if (queue.value.length > 1) {
+      // 手动“下一首”不受单曲循环影响；单曲循环仅控制 ended 行为。
+      index.value = (index.value + 1) % queue.value.length;
     } else {
-      if (index.value < queue.value.length - 1) {
-        index.value += 1;
-      } else if (playMode.value === "loop-list") {
-        index.value = 0;
-      } else {
-        // 列表不循环：停在末尾
-        return;
+      if (playMode.value === "loop-list") {
+        await playCurrent();
       }
+      return;
     }
     await playCurrent();
   }
@@ -178,10 +217,8 @@ export const usePlayerStore = defineStore("player", () => {
       return;
     }
 
-    if (index.value > 0) {
-      index.value -= 1;
-    } else if (playMode.value === "loop-list") {
-      index.value = queue.value.length - 1;
+    if (queue.value.length > 1) {
+      index.value = (index.value - 1 + queue.value.length) % queue.value.length;
     } else {
       controller.seek(0);
       return;
@@ -194,38 +231,64 @@ export const usePlayerStore = defineStore("player", () => {
     const order: PlayMode[] = ["loop-list", "loop-one", "shuffle"];
     const cur = order.indexOf(playMode.value);
     playMode.value = order[(cur + 1) % order.length];
+    prefetchNextSongUrl();
   }
 
-  /** 监听 audio 的 ended 事件，触发自动下一首 + MediaSession 系统媒体键。
+  /** 监听稳定的播放事件总线，触发自动下一首 + MediaSession 系统媒体键。
    *  幂等：多次调用不会重复注册监听器。*/
   let autoNextBound = false;
+  const onPlaybackEnded = () => {
+    if (playMode.value === "loop-one") {
+      void playCurrent();
+    } else {
+      void next();
+    }
+  };
+  const onPlaybackError = () => {
+    void recoverFromPlaybackFailure(new Error("播放过程中媒体流中断"));
+  };
+  const onMediaPlay = () => {
+    if (!controller.state.playing && !controller.state.loading) togglePlay();
+  };
+  const onMediaPause = () => {
+    if (controller.state.playing || controller.state.loading) {
+      controller.pause();
+    }
+  };
+  const onMediaSeek = ((event: CustomEvent<number>) => {
+    controller.seek(event.detail);
+  }) as EventListener;
+  const onMediaPrev = () => {
+    void prev();
+  };
+  const onMediaNext = () => {
+    void next();
+  };
+
   function bindAutoNext() {
     if (autoNextBound) return;
     autoNextBound = true;
-    controller.audioEl.addEventListener("nnplayer:ended", () => {
-      if (playMode.value === "loop-one") {
-        void playCurrent();
-      } else {
-        void next();
-      }
-    });
+    controller.eventTarget.addEventListener("nnplayer:ended", onPlaybackEnded);
+    controller.eventTarget.addEventListener("nnplayer:error", onPlaybackError);
     // 系统媒体键（MediaSession）→ window 自定义事件桥接
-    window.addEventListener("nnplayer:media:play", () => {
-      if (!controller.state.playing) controller.resume();
-    });
-    window.addEventListener("nnplayer:media:pause", () => {
-      if (controller.state.playing) controller.pause();
-    });
-    window.addEventListener("nnplayer:media:seek", ((e: CustomEvent<number>) => {
-      controller.seek(e.detail);
-    }) as EventListener);
-    window.addEventListener("nnplayer:media:prev", () => {
-      void prev();
-    });
-    window.addEventListener("nnplayer:media:next", () => {
-      void next();
-    });
+    window.addEventListener("nnplayer:media:play", onMediaPlay);
+    window.addEventListener("nnplayer:media:pause", onMediaPause);
+    window.addEventListener("nnplayer:media:seek", onMediaSeek);
+    window.addEventListener("nnplayer:media:prev", onMediaPrev);
+    window.addEventListener("nnplayer:media:next", onMediaNext);
   }
+
+  onScopeDispose(() => {
+    if (!autoNextBound) return;
+    controller.eventTarget.removeEventListener("nnplayer:ended", onPlaybackEnded);
+    controller.eventTarget.removeEventListener("nnplayer:error", onPlaybackError);
+    window.removeEventListener("nnplayer:media:play", onMediaPlay);
+    window.removeEventListener("nnplayer:media:pause", onMediaPause);
+    window.removeEventListener("nnplayer:media:seek", onMediaSeek);
+    window.removeEventListener("nnplayer:media:prev", onMediaPrev);
+    window.removeEventListener("nnplayer:media:next", onMediaNext);
+    autoNextBound = false;
+  });
 
   return {
     // 状态
@@ -238,7 +301,9 @@ export const usePlayerStore = defineStore("player", () => {
     hasPrev,
     // 转发 audio 控制器
     audioState: controller.state,
-    togglePlay: controller.toggle,
+    getMediaCurrentTime: controller.getMediaCurrentTime,
+    getMediaPlaybackRate: controller.getMediaPlaybackRate,
+    togglePlay,
     seek: controller.seek,
     setVolume: controller.setVolume,
     toggleMute: controller.toggleMute,

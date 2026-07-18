@@ -17,12 +17,16 @@ import ProgressBar from "@/components/ProgressBar.vue";
 import { fmtDuration } from "@/utils/format";
 import ScrollText from "@/components/ScrollText.vue";
 import { usePlayerStore } from "@/stores/player";
+import { coverImageUrl } from "@/utils/coverImage";
 
 const player = usePlayerStore();
 const router = useRouter();
 
 const cur = computed(() => fmtDuration(player.audioState.currentTime));
 const dur = computed(() => fmtDuration(player.audioState.duration));
+const currentCover = computed(() =>
+  coverImageUrl(player.currentSong?.picUrl, 48),
+);
 
 function onSeek(v: number) {
   player.seek(v);
@@ -62,15 +66,15 @@ function openNowPlaying() {
 
 <template>
   <footer
-    class="group fixed bottom-3 left-1/2 -translate-x-1/2 w-[780px] max-w-[calc(100vw-24px)] h-[72px] bg-[rgba(18,18,20,0.9)] backdrop-blur-2xl border border-border shadow-[0_12px_40px_var(--color-shadow),0_-1px_0_var(--color-accent-subtle),inset_0_1px_0_rgba(255,255,255,0.05)] flex items-center px-5 gap-5 z-50 motion-reduce:transition-none mobile-player-bar"
+    class="player-bar-grid group fixed bottom-3 left-1/2 -translate-x-1/2 w-[780px] max-w-[calc(100vw-24px)] h-[72px] bg-[rgba(18,18,20,0.9)] backdrop-blur-2xl border border-border shadow-[0_12px_40px_var(--color-shadow),0_-1px_0_var(--color-accent-subtle),inset_0_1px_0_rgba(255,255,255,0.05)] items-center px-5 gap-5 z-50 motion-reduce:transition-none mobile-player-bar"
     role="region"
     aria-label="播放控制"
   >
     <!-- 左：cover + info -->
-    <div class="flex items-center gap-4 w-[280px] shrink-0 min-w-0">
+    <div class="mobile-song-section flex items-center gap-4 w-full min-w-0">
       <button
         type="button"
-        class="relative w-12 h-12 shrink-0 focus-visible:ring-2 ring-accent outline-none"
+        class="mobile-player-cover relative w-12 h-12 shrink-0 focus-visible:ring-2 ring-accent outline-none"
         :title="player.currentSong ? '进入正在播放' : '尚未播放'"
         @click="openNowPlaying"
       >
@@ -79,9 +83,12 @@ function openNowPlaying() {
         />
         <img
           v-if="player.currentSong?.picUrl"
-          :src="player.currentSong.picUrl"
+          :src="currentCover"
           alt=""
           class="w-full h-full object-cover shadow-lg"
+          loading="eager"
+          decoding="async"
+          fetchpriority="high"
         />
         <Music2
           v-else
@@ -90,7 +97,7 @@ function openNowPlaying() {
           class="text-[rgba(255,255,255,0.3)]"
         />
       </button>
-      <div class="min-w-0 flex-1">
+      <div class="mobile-song-info min-w-0 flex-1">
         <ScrollText
           :text="player.currentSong?.name ?? '尚未播放'"
           class="text-sm font-medium text-[rgba(255,255,255,0.9)]"
@@ -103,7 +110,7 @@ function openNowPlaying() {
     </div>
 
     <!-- 中：control + progress -->
-    <div class="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+    <div class="w-full flex flex-col items-center gap-1.5 min-w-0">
       <div class="flex items-center gap-3">
         <button
           type="button"
@@ -168,7 +175,7 @@ function openNowPlaying() {
 
     <!-- 右：volume -->
     <div
-      class="w-[140px] flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] mobile-hide-on-small"
+      class="w-[140px] justify-self-end flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] mobile-hide-on-small"
     >
       <Volume2
         :size="15"
@@ -190,3 +197,33 @@ function openNowPlaying() {
     </div>
   </footer>
 </template>
+
+<style scoped>
+.player-bar-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    clamp(240px, 42vw, 320px)
+    minmax(0, 1fr);
+}
+
+/* 极窄窗口只保留封面，左右各占同样宽度，中间控制区仍严格居中。 */
+@media (max-width: 520px) {
+  .player-bar-grid {
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+  }
+
+  .mobile-song-section {
+    gap: 0;
+  }
+
+  .mobile-song-info {
+    display: none;
+  }
+
+  .mobile-player-cover {
+    width: 40px;
+    height: 40px;
+  }
+}
+</style>

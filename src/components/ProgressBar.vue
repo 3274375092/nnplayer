@@ -15,14 +15,14 @@ const emit = defineEmits<{
   change: [v: number];
 }>();
 
-const ratio = computed(() => {
-  if (!props.max || props.max <= 0) return 0;
-  return Math.max(0, Math.min(100, (props.value / props.max) * 100));
-});
-
 const dragging = ref(false);
 const localValue = ref(props.value);
 const hovering = ref(false);
+
+const ratio = computed(() => {
+  if (!props.max || props.max <= 0) return 0;
+  return Math.max(0, Math.min(100, (localValue.value / props.max) * 100));
+});
 
 watch(
   () => props.value,

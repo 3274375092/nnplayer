@@ -5,50 +5,54 @@
 //   3. 支持手动回车立即触发
 //   4. （阶段3）右侧展示歌词面板
 
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
-import { searchSongs } from "@/composables/useNcmApi";
-import type { Song } from "@/types/music";
+import { searchSongs, type AppError } from "@/composables/useNcmApi";
+import { useQueryCache } from "@/composables/useQueryCache";
+import type { SearchResult } from "@/types/music";
 
 const route = useRoute();
 const router = useRouter();
 
 // 输入框双向绑定
 const keyword = ref<string>((route.query.q as string) || "");
-const results = ref<Song[]>([]);
-const loading = ref(false);
-const error = ref("");
+const query = useQueryCache<SearchResult, AppError>();
+const results = computed(() => query.data.value?.songs ?? []);
+const loading = query.loading;
+const error = computed(() => query.error.value?.message ?? "");
 
 // 防抖定时器
 let timer: number | undefined;
-let searchSeq = 0;
 
-async function doSearch(kw: string) {
-  if (!kw.trim()) {
-    results.value = [];
+function normalizeKeyword(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+async function doSearch(kw: string, force = false) {
+  const normalized = normalizeKeyword(kw);
+  if (!normalized) {
+    query.reset();
     return;
   }
-  const seq = ++searchSeq;
-  loading.value = true;
-  error.value = "";
-  try {
-    const res = await searchSongs(kw.trim(), 50);
-    if (seq !== searchSeq) return;
-    results.value = res.songs;
-  } catch (e) {
-    if (seq !== searchSeq) return;
-    error.value = e instanceof Error ? e.message : "搜索失败";
-    results.value = [];
-  } finally {
-    if (seq === searchSeq) loading.value = false;
-  }
+
+  await query.execute(
+    ["search-songs", normalized.toLocaleLowerCase(), 50],
+    () => searchSongs(normalized, 50),
+    {
+      staleTime: 20_000,
+      gcTime: 2 * 60 * 1000,
+      force,
+    },
+  );
 }
 
 // 输入防抖
 function onInput() {
   if (timer) window.clearTimeout(timer);
+  // 输入一变化就让旧请求失效，不等待下一次防抖真正发出请求。
+  query.cancel();
   timer = window.setTimeout(() => {
     router.replace({ query: keyword.value ? { q: keyword.value } : {} });
     void doSearch(keyword.value);
@@ -59,7 +63,7 @@ function onInput() {
 function onEnter() {
   if (timer) window.clearTimeout(timer);
   router.replace({ query: keyword.value ? { q: keyword.value } : {} });
-  void doSearch(keyword.value);
+  void doSearch(keyword.value, true);
 }
 
 // 监听路由 query 变化（外部跳转 / 后退时同步）

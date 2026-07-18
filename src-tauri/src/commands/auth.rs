@@ -93,10 +93,7 @@ pub async fn login_qr_key() -> AppResult<QrKeyResult> {
         .or_else(|| resp.body.pointer("/data/unikey"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
-            log::error!(
-                "[login_qr_key] 响应里没拿到 unikey, body = {}",
-                resp.body
-            );
+            log::error!("[login_qr_key] 响应里没拿到 unikey, body = {}", resp.body);
             AppError::Internal("未拿到 unikey".to_string())
         })?
         .to_string();
@@ -104,7 +101,11 @@ pub async fn login_qr_key() -> AppResult<QrKeyResult> {
     let qr_url = format!("https://music.163.com/login?codekey={unikey}");
     let qr_image = render_qr_png(&qr_url).ok();
 
-    Ok(QrKeyResult { unikey, qr_url, qr_image })
+    Ok(QrKeyResult {
+        unikey,
+        qr_url,
+        qr_image,
+    })
 }
 
 /// QR 登录 - 第二步：轮询扫码状态。
@@ -115,7 +116,7 @@ pub async fn login_qr_check(
     unikey: String,
 ) -> AppResult<QrCheckResponse> {
     let resp = {
-        let api = state.api.lock().await;
+        let api = state.api.read().await;
         api.login_qr_check(&Query::new().param("key", &unikey))
             .await
             .map_err(map_ncm_err)?
@@ -124,8 +125,11 @@ pub async fn login_qr_check(
     let code = AppState::response_code(&resp) as i32;
 
     if code == 200 || code == 803 {
-        let LoginResult { user_id, nickname, avatar_url } =
-            finalize_login(&app, &state, "qr", &resp).await?;
+        let LoginResult {
+            user_id,
+            nickname,
+            avatar_url,
+        } = finalize_login(&app, &state, "qr", &resp).await?;
         return Ok(QrCheckResponse {
             code: 803,
             message: "登录成功".to_string(),
@@ -172,12 +176,15 @@ pub async fn login_with_account(
     state: State<'_, AppState>,
     payload: AccountLoginPayload,
 ) -> AppResult<LoginResult> {
-    if payload.account.trim().is_empty() || payload.md5_password.len() != 32 {
+    if payload.account.trim().is_empty()
+        || payload.md5_password.len() != 32
+        || !payload.md5_password.chars().all(|c| c.is_ascii_hexdigit())
+    {
         return Err(AppError::InvalidParam("账号或密码格式错误".to_string()));
     }
 
     let resp = {
-        let api = state.api.lock().await;
+        let api = state.api.read().await;
         // 注意：ncm-api 的 login() 在 Query 中已传 md5_password 时不会再做 MD5
         api.login(
             &Query::new()
@@ -216,12 +223,16 @@ pub async fn login_send_captcha(
 ) -> AppResult<()> {
     let phone = payload.phone.trim();
     if phone.len() != 11 || !phone.chars().all(|c| c.is_ascii_digit()) {
-        return Err(AppError::InvalidParam("请输入有效的 11 位手机号".to_string()));
+        return Err(AppError::InvalidParam(
+            "请输入有效的 11 位手机号".to_string(),
+        ));
     }
-    let api = state.api.lock().await;
-    api.captcha_sent(&Query::new().param("phone", phone))
+    let api = state.api.read().await;
+    let resp = api
+        .captcha_sent(&Query::new().param("phone", phone))
         .await
         .map_err(map_ncm_err)?;
+    ensure_business_success(&resp, &[200], "发送验证码")?;
     Ok(())
 }
 
@@ -237,7 +248,7 @@ pub async fn login_with_captcha(
     }
 
     let resp = {
-        let api = state.api.lock().await;
+        let api = state.api.read().await;
         api.login_cellphone(
             &Query::new()
                 .param("phone", payload.phone.trim())
@@ -260,69 +271,88 @@ async fn finalize_login(
     method: &str,
     resp: &ApiResponse,
 ) -> AppResult<LoginResult> {
-    // 1. 合并 cookie：取上一次（state.auth.cookie）+ 本次响应的 Set-Cookie
-    let merged_cookie = {
-        let prev = state.auth.lock().await.cookie.clone();
-        let merged = merge_cookie(prev.as_deref(), resp);
-        if let Some(c) = merged.clone() {
-            state.api.lock().await.set_cookie(c.clone());
-        }
-        merged
-    }
-    .ok_or_else(|| AppError::Internal("未拿到登录 cookie".to_string()))?;
+    // 400/502 等业务码在 ncm-api 中可能以 Ok(ApiResponse) 返回，必须先校验。
+    ensure_business_success(resp, &[200, 803], "登录")?;
 
-    // 2. 拉取用户信息（/user/account）。强制带上合并后的 cookie
-    //    先锁 api 发请求，完成后释放，再锁 auth 写结果，避免嵌套锁
-    let fetch_profile = |r: &ApiResponse| -> (u64, String, Option<String>) {
-        let uid = r
-            .body
-            .pointer("/account/id")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let nick = r
-            .body
-            .pointer("/profile/nickname")
-            .and_then(|v| v.as_str())
-            .unwrap_or("网易云用户")
-            .to_string();
-        let avatar = r
-            .body
-            .pointer("/profile/avatarUrl")
-            .and_then(|v| v.as_str())
-            .and_then(normalize_avatar_url);
-        (uid, nick, avatar)
-    };
+    // 新登录不能混入旧账号 Cookie；只接受本次登录响应下发的会话字段。
+    let merged_cookie = merge_cookie(None, resp)
+        .filter(|cookie| !cookie.trim().is_empty())
+        .ok_or_else(|| AppError::Internal("未拿到登录 Cookie".to_string()))?;
 
-    let (user_id, nickname, avatar_url) = {
-        let api = state.api.lock().await;
-        match api
-            .user_account(&Query::new().cookie(&merged_cookie))
+    // 强制使用新 Cookie 拉取账户，并要求返回有效的非零用户 ID。
+    let account_resp = {
+        let api = state.api.read().await;
+        api.user_account(&Query::new().cookie(&merged_cookie))
             .await
-        {
-            Ok(r) => fetch_profile(&r),
-            Err(e) => {
-                log::warn!("[login] user_account 拉取失败: {e}");
-                let (uid, nick, _) = fetch_profile(resp);
-                (uid, nick, None)
-            }
-        }
+            .map_err(map_ncm_err)?
     };
+    ensure_business_success(&account_resp, &[200], "读取用户资料")?;
+    let (user_id, nickname, avatar_url) = extract_profile(&account_resp)
+        .or_else(|| extract_profile(resp))
+        .ok_or(AppError::Unauthorized)?;
 
-    // 3. 写内存（api 已释放，不会嵌套锁）
+    // 先完成持久化，再发布内存登录态，避免命令报错但 UI 已显示登录。
+    persist_session_meta(
+        user_id,
+        &nickname,
+        avatar_url.as_deref(),
+        method,
+        &merged_cookie,
+    )?;
+    if let Err(e) = persist_cookie(app, &merged_cookie) {
+        // session.toml 是恢复会话的权威来源；旧 plugin-store 仅做兼容备份。
+        log::warn!("[login] 写入兼容 Cookie store 失败: {e}");
+    }
+
+    state.api.write().await.set_cookie(merged_cookie.clone());
     {
         let mut auth = state.auth.lock().await;
         auth.user_id = Some(user_id);
         auth.nickname = Some(nickname.clone());
-        auth.cookie = Some(merged_cookie.clone());
+        auth.cookie = Some(merged_cookie);
         auth.login_method = Some(method.to_string());
         auth.avatar_url = avatar_url.clone();
     }
 
-    // 4. 持久化（plugin-store + TOML 双份）
-    persist_cookie(app, &merged_cookie)?;
-    persist_session_meta(user_id, &nickname, avatar_url.as_deref(), method, &merged_cookie)?;
+    Ok(LoginResult {
+        user_id,
+        nickname,
+        avatar_url,
+    })
+}
 
-    Ok(LoginResult { user_id, nickname, avatar_url })
+fn ensure_business_success(resp: &ApiResponse, accepted: &[i64], action: &str) -> AppResult<()> {
+    let code = AppState::response_code(resp);
+    if accepted.contains(&code) {
+        return Ok(());
+    }
+    Err(AppError::Ncm(format!(
+        "{action}失败 (code={code}): {}",
+        AppState::response_message(resp)
+    )))
+}
+
+fn extract_profile(resp: &ApiResponse) -> Option<(u64, String, Option<String>)> {
+    let user_id = resp
+        .body
+        .pointer("/account/id")
+        .or_else(|| resp.body.pointer("/data/account/id"))
+        .and_then(|v| v.as_u64())
+        .filter(|id| *id > 0)?;
+    let nickname = resp
+        .body
+        .pointer("/profile/nickname")
+        .or_else(|| resp.body.pointer("/data/profile/nickname"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("网易云用户")
+        .to_string();
+    let avatar_url = resp
+        .body
+        .pointer("/profile/avatarUrl")
+        .or_else(|| resp.body.pointer("/data/profile/avatarUrl"))
+        .and_then(|v| v.as_str())
+        .and_then(normalize_avatar_url);
+    Some((user_id, nickname, avatar_url))
 }
 
 /// 从 ApiResponse.cookie（Set-Cookie 数组）中合并出新的 cookie 字符串。
@@ -337,7 +367,11 @@ fn merge_cookie(prev: Option<&str>, resp: &ApiResponse) -> Option<String> {
     let mut map: HashMap<String, String> = prev
         .unwrap_or("")
         .split(';')
-        .filter_map(|kv| kv.trim().split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+        .filter_map(|kv| {
+            kv.trim()
+                .split_once('=')
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        })
         .collect();
 
     for raw in &resp.cookie {
@@ -367,6 +401,7 @@ fn merge_cookie(prev: Option<&str>, resp: &ApiResponse) -> Option<String> {
 
 #[tauri::command]
 pub async fn get_auth_state(state: State<'_, AppState>) -> AppResult<AuthStateDto> {
+    state.wait_restore_complete().await;
     let auth = state.auth.lock().await;
     Ok(AuthStateDto {
         logged_in: auth.is_logged_in(),
@@ -382,7 +417,7 @@ pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> AppResult<()>
     // 调用 NCM 退出（最好携带 cookie 以确保服务端失效）
     let cookie = state.auth.lock().await.cookie.clone();
     if let Some(c) = cookie {
-        let api = state.api.lock().await;
+        let api = state.api.read().await;
         let _ = api.logout(&Query::new().cookie(&c)).await;
     }
 
@@ -396,7 +431,7 @@ pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> AppResult<()>
     let _ = clear_session_meta();
 
     // 清空内存
-    state.api.lock().await.set_cookie(String::new());
+    state.api.write().await.set_cookie(String::new());
     *state.auth.lock().await = Default::default();
 
     Ok(())
@@ -415,44 +450,48 @@ pub async fn save_cookie(
     state: State<'_, AppState>,
     payload: CookiePayload,
 ) -> AppResult<LoginResult> {
+    if payload.cookie.trim().is_empty()
+        || !(payload.cookie.contains("MUSIC_U=") || payload.cookie.contains("MUSIC_A="))
+    {
+        return Err(AppError::InvalidParam(
+            "Cookie 中缺少有效的登录凭据".to_string(),
+        ));
+    }
     let resp = {
-        let mut api = state.api.lock().await;
-        api.set_cookie(payload.cookie.clone());
+        let api = state.api.read().await;
         api.user_account(&Query::new().cookie(&payload.cookie))
             .await
             .map_err(map_ncm_err)?
     };
+    ensure_business_success(&resp, &[200], "Cookie 登录")?;
+    let (user_id, nickname, avatar_url) = extract_profile(&resp).ok_or(AppError::Unauthorized)?;
 
-    let user_id = resp
-        .body
-        .pointer("/account/id")
-        .and_then(|v| v.as_u64())
-        .ok_or(AppError::Unauthorized)?;
-    let nickname = resp
-        .body
-        .pointer("/profile/nickname")
-        .and_then(|v| v.as_str())
-        .unwrap_or("网易云用户")
-        .to_string();
-    let avatar_url = resp
-        .body
-        .pointer("/profile/avatarUrl")
-        .and_then(|v| v.as_str())
-        .and_then(normalize_avatar_url);
+    persist_session_meta(
+        user_id,
+        &nickname,
+        avatar_url.as_deref(),
+        "cookie",
+        &payload.cookie,
+    )?;
+    if let Err(e) = persist_cookie(&app, &payload.cookie) {
+        log::warn!("[login] 写入兼容 Cookie store 失败: {e}");
+    }
 
+    state.api.write().await.set_cookie(payload.cookie.clone());
     {
         let mut auth = state.auth.lock().await;
         auth.user_id = Some(user_id);
         auth.nickname = Some(nickname.clone());
-        auth.cookie = Some(payload.cookie.clone());
+        auth.cookie = Some(payload.cookie);
         auth.login_method = Some("cookie".to_string());
         auth.avatar_url = avatar_url.clone();
     }
 
-    persist_cookie(&app, &payload.cookie)?;
-    persist_session_meta(user_id, &nickname, avatar_url.as_deref(), "cookie", &payload.cookie)?;
-
-    Ok(LoginResult { user_id, nickname, avatar_url })
+    Ok(LoginResult {
+        user_id,
+        nickname,
+        avatar_url,
+    })
 }
 
 // ============================================================
@@ -475,7 +514,8 @@ fn persist_session_meta(
     method: &str,
     cookie: &str,
 ) -> AppResult<()> {
-    let path = dirs_auth_session().ok_or_else(|| AppError::Internal("无法定位配置目录".to_string()))?;
+    let path =
+        dirs_auth_session().ok_or_else(|| AppError::Internal("无法定位配置目录".to_string()))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(AppError::Io)?;
     }
@@ -494,7 +534,9 @@ fn persist_session_meta(
 }
 
 pub fn clear_session_meta() -> AppResult<()> {
-    let Some(path) = dirs_auth_session() else { return Ok(()) };
+    let Some(path) = dirs_auth_session() else {
+        return Ok(());
+    };
     if path.is_file() {
         std::fs::remove_file(&path).map_err(AppError::Io)?;
     }
@@ -506,17 +548,6 @@ pub fn load_session_meta() -> Option<SessionRecord> {
     let path = dirs_auth_session()?;
     let raw = std::fs::read_to_string(&path).ok()?;
     toml::from_str(&raw).ok()
-}
-
-/// 从 session 记录中提取 AuthState 的初始值（同步，用于 AppState::new）。
-pub fn session_to_auth(record: &SessionRecord) -> crate::state::AuthState {
-    crate::state::AuthState {
-        user_id: Some(record.user_id),
-        nickname: Some(record.nickname.clone()),
-        cookie: Some(record.cookie.clone()),
-        login_method: Some(record.login_method.clone()),
-        avatar_url: record.avatar_url.clone(),
-    }
 }
 
 fn dirs_auth_session() -> Option<PathBuf> {
@@ -541,6 +572,8 @@ fn build_anonymous_client() -> AppResult<ncm_api::ApiClient> {
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         ))
         .cookie_store(true)
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(ncm_api::ApiClient::new(None, http))
@@ -614,4 +647,44 @@ fn render_qr_png(content: &str) -> anyhow::Result<String> {
     // 5. base64 编码，返回 data URI
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
     Ok(format!("data:image/png;base64,{b64}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn response(body: serde_json::Value, cookie: Vec<&str>) -> ApiResponse {
+        ApiResponse {
+            status: 200,
+            body,
+            cookie: cookie.into_iter().map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn failed_business_code_is_rejected_even_when_transport_succeeded() {
+        let resp = response(json!({ "code": 502, "message": "bad password" }), vec![]);
+        assert!(ensure_business_success(&resp, &[200], "登录").is_err());
+    }
+
+    #[test]
+    fn profile_requires_a_nonzero_user_id() {
+        let missing = response(json!({ "code": 200, "account": null }), vec![]);
+        let zero = response(json!({ "code": 200, "account": { "id": 0 } }), vec![]);
+        assert!(extract_profile(&missing).is_none());
+        assert!(extract_profile(&zero).is_none());
+    }
+
+    #[test]
+    fn login_cookie_merge_keeps_only_cookie_pairs() {
+        let resp = response(
+            json!({ "code": 200 }),
+            vec!["MUSIC_U=new; Path=/; HttpOnly", "__csrf=token; Path=/"],
+        );
+        let merged = merge_cookie(None, &resp).expect("cookie should be produced");
+        assert!(merged.contains("MUSIC_U=new"));
+        assert!(merged.contains("__csrf=token"));
+        assert!(!merged.contains("Path"));
+    }
 }

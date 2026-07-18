@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Music2, Play, Trash2, X } from "lucide-vue-next";
 import { usePlayerStore } from "@/stores/player";
+import { coverImageUrl } from "@/utils/coverImage";
 import { fmtDurationMs } from "@/utils/format";
 
 const open = ref(false);
@@ -45,7 +46,7 @@ function remove(absIdx: number) {
 }
 
 function clear() {
-  if (window.confirm("清空播放队列？")) {
+  if (window.confirm("清空下一首列表？")) {
     player.clearQueue();
   }
 }
@@ -72,6 +73,10 @@ watch(open, (v) => {
   } else {
     document.removeEventListener("keydown", onEsc);
   }
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", onEsc);
 });
 
 defineExpose({
@@ -140,8 +145,11 @@ defineExpose({
             <div class="w-9 h-9 overflow-hidden shrink-0 ring-1 ring-ring relative">
               <img
                 v-if="song.picUrl"
-                :src="song.picUrl"
+                :src="coverImageUrl(song.picUrl, 36)"
                 class="w-full h-full object-cover"
+                loading="lazy"
+                decoding="async"
+                fetchpriority="low"
                 alt=""
               />
               <div v-else class="w-full h-full bg-[rgba(255,255,255,0.04)] flex items-center justify-center">

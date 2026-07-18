@@ -79,6 +79,7 @@ function hideSuggest() {
 async function fetchSuggest() {
   const q = keyword.value.trim();
   if (!q) {
+    inFlightSeq += 1;
     suggestions.value = [];
     showSuggest.value = false;
     return;
@@ -99,6 +100,8 @@ async function fetchSuggest() {
 
 function onInput() {
   if (debounceTimer) window.clearTimeout(debounceTimer);
+  // 立即使旧请求失效，避免防抖窗口内显示上一关键词的结果。
+  inFlightSeq += 1;
   debounceTimer = window.setTimeout(fetchSuggest, 300);
 }
 
@@ -193,6 +196,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  inFlightSeq += 1;
   document.removeEventListener("click", onDocClick);
   if (debounceTimer) window.clearTimeout(debounceTimer);
 });

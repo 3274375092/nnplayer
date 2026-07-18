@@ -28,7 +28,15 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
     try {
       const raw = localStorage.getItem(GEOM_KEY);
       if (!raw) return undefined;
-      const g = JSON.parse(raw) as { x: number; y: number };
+      const g = JSON.parse(raw) as { x?: unknown; y?: unknown };
+      if (
+        typeof g.x !== "number" ||
+        typeof g.y !== "number" ||
+        !Number.isFinite(g.x) ||
+        !Number.isFinite(g.y)
+      ) {
+        return undefined;
+      }
       const onScreen = await isPositionOnScreen(g.x, g.y);
       return onScreen ? { x: g.x, y: g.y } : undefined;
     } catch {

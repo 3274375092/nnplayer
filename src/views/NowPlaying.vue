@@ -1,12 +1,19 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { Music2, X } from "lucide-vue-next";
 import LyricPanel from "@/components/LyricPanel.vue";
 import { usePlayerStore } from "@/stores/player";
+import { coverImageUrl } from "@/utils/coverImage";
 
 const player = usePlayerStore();
 const router = useRouter();
+const currentCover = computed(() =>
+  coverImageUrl(player.currentSong?.picUrl, 400),
+);
+const blurredBackgroundCover = computed(() =>
+  coverImageUrl(player.currentSong?.picUrl, 128),
+);
 
 function close() {
   void router.back();
@@ -36,10 +43,14 @@ onBeforeUnmount(() => {
       class="absolute inset-0 z-0"
     >
       <img
-        :src="player.currentSong.picUrl"
+        :src="blurredBackgroundCover"
         class="absolute inset-0 w-full h-full object-cover"
         style="filter: blur(80px) saturate(1.6) brightness(0.35); transform: scale(1.1);"
         alt=""
+        aria-hidden="true"
+        loading="eager"
+        decoding="async"
+        fetchpriority="low"
       />
       <div class="absolute inset-0 bg-gradient-to-b from-bg/70 via-bg/50 to-bg/90" />
     </div>
@@ -76,9 +87,12 @@ onBeforeUnmount(() => {
         >
           <img
             v-if="player.currentSong?.picUrl"
-            :src="player.currentSong.picUrl"
+            :src="currentCover"
             class="w-full h-full object-cover"
             alt=""
+            loading="eager"
+            decoding="async"
+            fetchpriority="high"
           />
           <Music2
             v-else

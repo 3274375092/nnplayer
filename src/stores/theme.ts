@@ -25,21 +25,25 @@ export const useThemeStore = defineStore("theme", () => {
 
   // debounce 句柄：清旧任务
   let pending: ReturnType<typeof setTimeout> | null = null;
+  let applySeq = 0;
 
   /** 切歌时调用：debounce 200ms 后从封面提取并应用主题色 */
   function applyFromCover(imgUrl: string) {
+    const seq = ++applySeq;
     if (pending) {
       clearTimeout(pending);
     }
     pending = setTimeout(() => {
-      void doApply(imgUrl);
+      pending = null;
+      void doApply(imgUrl, seq);
     }, 200);
   }
 
-  async function doApply(imgUrl: string) {
+  async function doApply(imgUrl: string, seq: number) {
     applying.value = true;
     try {
       const result = await extractPalette(imgUrl);
+      if (seq !== applySeq) return;
       seed.value = result.seed;
       palette.value = result.palette;
       applyToCssVars(result.seed);
@@ -48,18 +52,20 @@ export const useThemeStore = defineStore("theme", () => {
       // eslint-disable-next-line no-console
       console.warn("[theme] 主题色提取失败，保持当前色", e);
     } finally {
-      applying.value = false;
+      if (seq === applySeq) applying.value = false;
     }
   }
 
   /** 清除 CSS 变量，回到 :root 默认值（米黄） */
   function resetToDefault() {
+    applySeq += 1;
     if (pending) {
       clearTimeout(pending);
       pending = null;
     }
     palette.value = [];
     seed.value = "#E85D3A";
+    applying.value = false;
     resetCssVars();
   }
 

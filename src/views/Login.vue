@@ -23,32 +23,51 @@ const qr = ref<{ unikey: string; qrUrl: string; qrImage: string | null } | null>
 const qrStatus = ref<string>("请使用网易云音乐 App 扫码登录");
 const qrLoading = ref(false);
 let pollTimer: number | undefined;
+let pollGeneration = 0;
+let qrLoadSeq = 0;
+let disposed = false;
 
 async function loadQr() {
+  const seq = ++qrLoadSeq;
+  stopPolling();
   qrLoading.value = true;
   try {
-    qr.value = await userStore.startQrLogin();
+    const nextQr = await userStore.startQrLogin();
+    if (disposed || seq !== qrLoadSeq || tab.value !== "qr") return;
+    qr.value = nextQr;
     qrStatus.value = "请使用网易云音乐 App 扫码登录";
     startPolling();
   } catch (e) {
+    if (disposed || seq !== qrLoadSeq) return;
     qrStatus.value = e instanceof Error ? e.message : "二维码加载失败";
     qr.value = null;
   } finally {
-    qrLoading.value = false;
+    if (seq === qrLoadSeq) qrLoading.value = false;
   }
 }
 
 function startPolling() {
   stopPolling();
   if (!qr.value) return;
-  pollTimer = window.setInterval(async () => {
-    if (!qr.value) return;
+  const generation = ++pollGeneration;
+  const unikey = qr.value.unikey;
+
+  const isActive = () =>
+    !disposed && generation === pollGeneration && tab.value === "qr";
+  const scheduleNext = () => {
+    if (!isActive()) return;
+    pollTimer = window.setTimeout(() => void pollOnce(), 1500);
+  };
+  const pollOnce = async () => {
+    if (!isActive()) return;
     try {
-      const res = await userStore.pollQrLogin(qr.value.unikey);
+      const res = await userStore.pollQrLogin(unikey);
+      if (!isActive()) return;
       if (res.code === 800) {
         qrStatus.value = "二维码已过期，正在刷新…";
         stopPolling();
         await loadQr();
+        return;
       } else if (res.code === 801) {
         qrStatus.value = "等待扫码…";
       } else if (res.code === 802) {
@@ -57,16 +76,22 @@ function startPolling() {
         qrStatus.value = "登录成功，正在跳转…";
         stopPolling();
         redirectAfterLogin();
+        return;
       }
     } catch (e) {
+      if (!isActive()) return;
       qrStatus.value = e instanceof Error ? e.message : "轮询失败";
     }
-  }, 1500);
+    scheduleNext();
+  };
+
+  scheduleNext();
 }
 
 function stopPolling() {
+  pollGeneration += 1;
   if (pollTimer) {
-    window.clearInterval(pollTimer);
+    window.clearTimeout(pollTimer);
     pollTimer = undefined;
   }
 }
@@ -83,7 +108,7 @@ const accountValid = computed(
 );
 
 async function submitAccount() {
-  if (!accountValid.value) return;
+  if (!accountValid.value || accountLoading.value) return;
   accountLoading.value = true;
   accountError.value = "";
   try {
@@ -107,6 +132,7 @@ const phoneValid = computed(() => isValidPhone(phone.value) && captcha.value.len
 
 // 60s 倒计时
 const countdown = ref(0);
+const captchaSending = ref(false);
 let countdownTimer: number | undefined;
 
 async function sendCaptcha() {
@@ -114,8 +140,9 @@ async function sendCaptcha() {
     phoneError.value = "请输入有效的 11 位手机号";
     return;
   }
-  if (countdown.value > 0) return;
+  if (countdown.value > 0 || captchaSending.value) return;
   phoneError.value = "";
+  captchaSending.value = true;
   try {
     await userStore.sendPhoneCaptcha(phone.value);
     countdown.value = 60;
@@ -128,11 +155,13 @@ async function sendCaptcha() {
     }, 1000);
   } catch (e) {
     phoneError.value = e instanceof Error ? e.message : "发送失败";
+  } finally {
+    captchaSending.value = false;
   }
 }
 
 async function submitPhone() {
-  if (!phoneValid.value) return;
+  if (!phoneValid.value || phoneLoading.value) return;
   phoneLoading.value = true;
   phoneError.value = "";
   try {
@@ -148,24 +177,31 @@ async function submitPhone() {
 // =============== 通用 ===============
 
 function redirectAfterLogin() {
-  const redirect = (route.query.redirect as string) || "/daily";
+  const raw = typeof route.query.redirect === "string" ? route.query.redirect : "";
+  const redirect = raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/login")
+    ? raw
+    : "/daily";
   router.replace(redirect);
 }
 
 function switchTab(t: Tab) {
+  qrLoadSeq += 1;
   stopPolling();
   tab.value = t;
-  // 切到 QR 时自动加载
-  if (t === "qr" && !qr.value) {
+  // 每次回到 QR 都生成新二维码，避免恢复一个已停止轮询的旧 key。
+  if (t === "qr") {
     void loadQr();
   }
 }
 
 onMounted(() => {
+  disposed = false;
   if (tab.value === "qr") void loadQr();
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  qrLoadSeq += 1;
   stopPolling();
   if (countdownTimer) window.clearInterval(countdownTimer);
 });
@@ -316,10 +352,10 @@ const accountHint = computed(() => {
           <button
             type="button"
             class="btn btn-ghost shrink-0 px-3 text-xs"
-            :disabled="!isValidPhone(phone) || countdown > 0"
+            :disabled="!isValidPhone(phone) || countdown > 0 || captchaSending"
             @click="sendCaptcha"
           >
-            {{ countdown > 0 ? `${countdown}s 后重试` : "发送验证码" }}
+            {{ captchaSending ? "发送中…" : countdown > 0 ? `${countdown}s 后重试` : "发送验证码" }}
           </button>
         </div>
 

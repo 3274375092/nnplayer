@@ -18,6 +18,19 @@ export interface LyricLine {
   translation?: string;
 }
 
+function readLrcOffset(lrc: string | null | undefined): number {
+  if (!lrc) return 0;
+  let offsetMs = 0;
+  const offsetRe = /^\s*\[\s*offset\s*:\s*([+-]?\d+)\s*\]\s*$/i;
+  for (const rawLine of lrc.split(/\r\n?|\n/)) {
+    const match = offsetRe.exec(rawLine);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (Number.isSafeInteger(value)) offsetMs = value;
+  }
+  return offsetMs;
+}
+
 /**
  * 解析 LRC 字符串。
  * - 容忍空字符串
@@ -29,8 +42,14 @@ export interface LyricLine {
 export function parseLrc(lrc: string | null | undefined): LyricLine[] {
   if (!lrc) return [];
   const out: LyricLine[] = [];
+  const rawLines = lrc.split(/\r\n?|\n/);
 
-  for (const rawLine of lrc.split(/\r?\n/)) {
+  // offset 是整份 LRC 的全局元数据，可能出现在任意歌词行之前或之后。
+  // 先完整扫描再解析时间戳，避免只影响 offset 标签之后的歌词。
+  // 多个合法 offset 标签时采用最后一个，和常见播放器的覆盖语义一致。
+  const offsetMs = readLrcOffset(lrc);
+
+  for (const rawLine of rawLines) {
     const line = rawLine.trim();
     if (!line) continue;
 
@@ -56,7 +75,11 @@ export function parseLrc(lrc: string | null | undefined): LyricLine[] {
     if (!text) continue;
 
     for (const t of tags) {
-      out.push({ time: t, text });
+      const shiftedTime = Math.max(0, t + offsetMs);
+      out.push({
+        time: Math.min(Number.MAX_SAFE_INTEGER, shiftedTime),
+        text,
+      });
     }
   }
 
@@ -82,7 +105,13 @@ export function parseLrcWithTranslation(
   if (lines.length === 0 || !tLrc) return lines;
 
   // 翻译表：时间戳 → 文本（取首个，重复时间戳取最后一条覆盖）
-  const tLines = parseLrc(tLrc);
+  const sourceOffset = readLrcOffset(lrc);
+  const translationOffset = readLrcOffset(tLrc);
+  const translationShift = sourceOffset - translationOffset;
+  const tLines = parseLrc(tLrc).map((line) => ({
+    ...line,
+    time: Math.max(0, line.time + translationShift),
+  }));
   const tMap = new Map<number, string>();
   for (const t of tLines) {
     tMap.set(t.time, t.text);
@@ -179,6 +208,51 @@ export interface YrcLine {
   words: YrcWord[];
 }
 
+function splitGraphemes(text: string): string[] {
+  type SegmenterLike = {
+    segment(input: string): Iterable<{ segment: string }>;
+  };
+  type SegmenterConstructor = new (
+    locales?: string | string[],
+    options?: { granularity: "grapheme" },
+  ) => SegmenterLike;
+  const Segmenter = (
+    Intl as typeof Intl & { Segmenter?: SegmenterConstructor }
+  ).Segmenter;
+  if (!Segmenter) return Array.from(text);
+  const segmenter = new Segmenter(undefined, { granularity: "grapheme" });
+  return Array.from(segmenter.segment(text), ({ segment }) => segment);
+}
+
+/**
+ * 返回 YRC 行的可见文本。
+ *
+ * 只移除整行首尾的空白，保留歌词内部空格。它和
+ * {@link getYrcLineStartMs} 使用相同的“可见字符”判定，避免显示文本已经去掉
+ * 前导空格、行起点却仍落在空格时间上的偏差。
+ */
+export function getYrcLineText(line: YrcLine): string {
+  return line.words.map((word) => word.char).join("").trim();
+}
+
+/**
+ * 返回 YRC 行第一个实际可见字符/词的绝对毫秒时间。
+ *
+ * 无可见字符时回退到第一个有效字时间，再回退到行级时间；外部构造的不合法
+ * 数据也不会令结果变成 NaN 或负数。
+ */
+export function getYrcLineStartMs(line: YrcLine): number {
+  const isValidMs = (value: number) => Number.isFinite(value) && value >= 0;
+  const firstVisible = line.words.find(
+    (word) => word.char.trim().length > 0 && isValidMs(word.startMs),
+  );
+  if (firstVisible) return firstVisible.startMs;
+
+  const firstTimed = line.words.find((word) => isValidMs(word.startMs));
+  if (firstTimed) return firstTimed.startMs;
+  return isValidMs(line.time) ? line.time : 0;
+}
+
 /**
  * 解析 NCM YRC 逐字歌词。
  *
@@ -197,75 +271,85 @@ export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
   if (!yrcText) return [];
   const lines: YrcLine[] = [];
 
-  // 匹配行级： [offset,duration]content
-  const lineRe = /\[(\d+),(\d+)](.*?)(?:\r?\n|$)/g;
-  let m: RegExpExecArray | null;
-  while ((m = lineRe.exec(yrcText)) !== null) {
-    const lineStart = Number(m[1]);
-    const lineDuration = Number(m[2]);
-    const content = m[3];
-    if (!content) continue;
+  // 按物理行解析，避免一条损坏的标签吞掉后续歌词。允许数字周围出现空格，
+  // 同时保留 ] 后的歌词内容（包括有意义的空格）。
+  const lineRe = /^\s*\[\s*(\d+)\s*,\s*(\d+)\s*\](.*)$/;
+  for (const rawLine of yrcText.split(/\r\n?|\n/)) {
+    const lineMatch = lineRe.exec(rawLine.replace(/^\uFEFF/, ""));
+    if (!lineMatch) continue;
 
-    // 匹配字级：(offset,dur,vol)文本
-    // 文本用 [^(]（非 ( 字符）匹配，因为 YRC 每个标签对应一个字
+    const lineStart = Number(lineMatch[1]);
+    const lineDuration = Number(lineMatch[2]);
+    const content = lineMatch[3];
+    if (
+      !Number.isSafeInteger(lineStart) ||
+      !Number.isSafeInteger(lineDuration) ||
+      !content
+    ) {
+      continue;
+    }
+
+    // YRC 字标签为 (absoluteStart,duration,volume)。只把合法时间标签当边界，
+    // 因此歌词文本中的普通括号不会截断字符。第三项不参与时间计算，但允许
+    // 常见的正负数和小数写法。
+    const wordTagRe =
+      /\(\s*(\d+)\s*,\s*(\d+)\s*,\s*[+-]?\d+(?:\.\d+)?\s*\)/g;
+    const wordTags: {
+      startMs: number;
+      duration: number;
+      tagIndex: number;
+      textIndex: number;
+    }[] = [];
+    let wordMatch: RegExpExecArray | null;
+    while ((wordMatch = wordTagRe.exec(content)) !== null) {
+      const startMs = Number(wordMatch[1]);
+      const duration = Number(wordMatch[2]);
+      if (!Number.isSafeInteger(startMs) || !Number.isSafeInteger(duration)) {
+        continue;
+      }
+      wordTags.push({
+        startMs,
+        duration,
+        tagIndex: wordMatch.index,
+        textIndex: wordTagRe.lastIndex,
+      });
+    }
+
     const words: YrcWord[] = [];
-    const wordRe = /\((\d+),(\d+),\d+\)([^(]+)/g;
-    let wm: RegExpExecArray | null;
-    while ((wm = wordRe.exec(content)) !== null) {
-      const offset = Number(wm[1]);
-      const dur = Number(wm[2]);
-      const text = wm[3];
+    for (const [tagIndex, tag] of wordTags.entries()) {
+      const nextTag = wordTags[tagIndex + 1];
+      const text = content.slice(
+        tag.textIndex,
+        nextTag?.tagIndex ?? content.length,
+      );
       if (!text) continue;
 
-      for (const ch of Array.from(text)) {
-        words.push({ char: ch, startMs: offset, duration: dur });
+      // 按可见字素切分，避免组合音标或 ZWJ emoji 被拆成多个错误 token。
+      const chars = splitGraphemes(text);
+      const visibleCount = chars.filter((char) => char.trim().length > 0).length;
+      const perCharDuration = visibleCount > 0 ? tag.duration / visibleCount : 0;
+      let visibleIndex = 0;
+      for (const char of chars) {
+        const isWhitespace = char.trim().length === 0;
+        words.push({
+          char,
+          // 字标签起点本身就是歌曲内绝对毫秒，不能再叠加 lineStart。
+          startMs: tag.startMs + visibleIndex * perCharDuration,
+          // 分隔空格保留显示宽度，但不吞掉真实字符的演唱时长。
+          duration: isWhitespace ? 0 : perCharDuration,
+        });
+        if (!isWhitespace) visibleIndex += 1;
       }
       // 如果标签包含多字符（如英文词），在词内均分 duration
       // 这样每个字符都有递增的时间戳，而非全部挤在同一时刻
     }
 
     if (words.length === 0) continue;
+    // 损坏或非规范来源偶尔会把字标签乱序；渲染层需要时间单调递增。
+    words.sort((a, b) => a.startMs - b.startMs);
     lines.push({ time: lineStart, duration: lineDuration, words });
   }
 
+  lines.sort((a, b) => a.time - b.time);
   return lines;
-}
-
-/**
- * 卡拉OK 字符级时间标签。
- * 按字符数等分 [prevMs, nextMs] 时间窗（伪卡拉OK，NCM LRC 无逐字时间戳）。
- */
-export interface CharToken {
-  char: string;
-  startMs: number;
-  endMs: number;
-}
-
-/**
- * 把一行歌词按字符数等分为 CharToken[]。
- * - prevMs / nextMs：上一行结束 / 下一行开始（毫秒）
- * - prevMs < 0 时退化为 nextMs - 5000
- * - nextMs <= prevMs 时退化为 prevMs + 5000
- * - 空文本返回 []
- * - 字符可以是汉字、英文、标点、空格（空格保留可见宽度，不去掉）
- */
-export function parseKaraokeLine(
-  text: string,
-  prevMs: number,
-  nextMs: number,
-): CharToken[] {
-  if (!text) return [];
-  // 退化窗口：边界缺失时给一个合理长度
-  let start = prevMs >= 0 ? prevMs : nextMs - 5000;
-  let end = nextMs > start ? nextMs : start + 5000;
-  if (end <= start) end = start + 1000;
-  const chars = Array.from(text); // 按 code point 切，避免 surrogate pair 错位
-  if (chars.length === 0) return [];
-  const span = end - start;
-  const per = span / chars.length;
-  return chars.map((c, i) => ({
-    char: c,
-    startMs: start + i * per,
-    endMs: start + (i + 1) * per,
-  }));
 }

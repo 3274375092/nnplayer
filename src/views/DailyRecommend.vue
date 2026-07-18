@@ -2,29 +2,53 @@
 // 每日推荐页：调用 get_daily_recommend，展示列表 + 歌词面板。
 // 鉴权接口：未登录会被路由守卫拦截。
 
-import { onMounted, ref } from "vue";
+import { computed, onMounted } from "vue";
 import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
-import { getDailyRecommend } from "@/composables/useNcmApi";
+import {
+  getDailyRecommend,
+  type AppError,
+} from "@/composables/useNcmApi";
+import { useQueryCache } from "@/composables/useQueryCache";
+import { useUserStore } from "@/stores/user";
 import type { DailyRecommend } from "@/types/music";
 
-const data = ref<DailyRecommend | null>(null);
-const loading = ref(false);
-const error = ref("");
+const DAY = 24 * 60 * 60 * 1000;
+const userStore = useUserStore();
+const query = useQueryCache<DailyRecommend, AppError>();
+const { data, loading } = query;
+const error = computed(() => query.error.value?.message ?? "");
 
-async function load() {
-  loading.value = true;
-  error.value = "";
-  try {
-    data.value = await getDailyRecommend();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "加载失败";
-  } finally {
-    loading.value = false;
-  }
+// 极少数登录态尚未带 userId 的场景不共享缓存，避免账号间复用数据。
+const unresolvedUserScope = `unresolved:${Date.now()}:${Math.random()}`;
+
+function currentUserScope(): string {
+  return userStore.userId === null
+    ? unresolvedUserScope
+    : `user:${userStore.userId}`;
 }
 
-onMounted(load);
+function localDateKey(now = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function load(force = false) {
+  return query.execute(
+    ["daily-recommend", currentUserScope(), localDateKey()],
+    getDailyRecommend,
+    {
+      // 推荐以日期为版本；跨日后 key 自动变化。
+      staleTime: DAY,
+      gcTime: 26 * 60 * 60 * 1000,
+      force,
+    },
+  );
+}
+
+onMounted(() => void load());
 </script>
 
 <template>
@@ -42,7 +66,7 @@ onMounted(load);
 
     <div v-else-if="error" class="card p-6 text-center">
       <div class="text-accent mb-3">{{ error }}</div>
-      <button class="btn btn-primary" @click="load">重试</button>
+      <button class="btn btn-primary" @click="load(true)">重试</button>
     </div>
 
     <div

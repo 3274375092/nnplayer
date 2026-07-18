@@ -2,35 +2,43 @@
 // 我的歌单页：网格展示用户歌单封面，点击进入详情。
 // （阶段4）数据未到达时展示 SkeletonCard 骨架屏。
 
-import { onMounted, ref } from "vue";
+import { computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import SongListItem from "@/components/SongListItem.vue";
 import SkeletonCard from "@/components/SkeletonCard.vue";
-import { getUserPlaylists } from "@/composables/useNcmApi";
+import {
+  getUserPlaylists,
+  type AppError,
+} from "@/composables/useNcmApi";
+import { useQueryCache } from "@/composables/useQueryCache";
+import { useUserStore } from "@/stores/user";
 import type { Playlist } from "@/types/music";
 
 const router = useRouter();
-const playlists = ref<Playlist[]>([]);
-const loading = ref(false);
-const error = ref("");
+const userStore = useUserStore();
+const query = useQueryCache<Playlist[], AppError>();
+const playlists = computed(() => query.data.value ?? []);
+const loading = query.loading;
+const error = computed(() => query.error.value?.message ?? "");
+const unresolvedUserScope = `unresolved:${Date.now()}:${Math.random()}`;
 
-async function load() {
-  loading.value = true;
-  error.value = "";
-  try {
-    playlists.value = await getUserPlaylists();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "加载失败";
-  } finally {
-    loading.value = false;
-  }
+function load(force = false) {
+  const userScope =
+    userStore.userId === null
+      ? unresolvedUserScope
+      : `user:${userStore.userId}`;
+  return query.execute(["user-playlists", userScope], getUserPlaylists, {
+    staleTime: 2 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    force,
+  });
 }
 
 function openPlaylist(p: Playlist) {
   router.push({ name: "PlaylistDetail", params: { id: String(p.id) } });
 }
 
-onMounted(load);
+onMounted(() => void load());
 </script>
 
 <template>
@@ -54,7 +62,7 @@ onMounted(load);
 
     <div v-else-if="error" class="card p-6 text-center">
       <div class="text-accent mb-3">{{ error }}</div>
-      <button class="btn btn-primary" @click="load">重试</button>
+      <button class="btn btn-primary" @click="load(true)">重试</button>
     </div>
 
     <div

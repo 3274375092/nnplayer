@@ -15,7 +15,7 @@ pub enum AppError {
     Ncm(String),
 
     #[error("网络请求失败: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(String),
 
     #[error("JSON 解析失败: {0}")]
     Json(#[from] serde_json::Error),
@@ -34,6 +34,12 @@ pub enum AppError {
 
     #[error("内部错误: {0}")]
     Internal(String),
+}
+
+impl From<reqwest::Error> for AppError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Network(error.to_string())
+    }
 }
 
 // 自定义序列化，前端拿到的是 { kind, message } 结构，便于统一处理。
@@ -63,8 +69,18 @@ impl Serialize for AppError {
 /// 项目内部使用的统一 Result 类型别名。
 pub type AppResult<T> = Result<T, AppError>;
 
-/// 将 ncm_api::NcmError 转换为 AppError::Ncm。
+/// 将 ncm_api::NcmError 保真映射到应用的统一错误边界。
 /// 供各 commands 子模块共用，避免跨模块引用 auth 内部函数。
 pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
-    AppError::Ncm(e.to_string())
+    match e {
+        ncm_api::NcmError::AuthRequired(_) => AppError::Unauthorized,
+        ncm_api::NcmError::Http(error) => AppError::Network(error.to_string()),
+        ncm_api::NcmError::Timeout(message) => AppError::Network(message),
+        ncm_api::NcmError::Json(error) => AppError::Json(error),
+        ncm_api::NcmError::InvalidParam(message) => AppError::InvalidParam(message),
+        ncm_api::NcmError::Crypto(message) => {
+            AppError::Internal(format!("NCM 加密错误: {message}"))
+        }
+        error => AppError::Ncm(error.to_string()),
+    }
 }

@@ -12,44 +12,78 @@ use crate::state::AppState;
 pub async fn get_user_playlists(state: State<'_, AppState>) -> AppResult<Vec<Playlist>> {
     state.check_login().await?;
 
-    let user_id = state.auth.lock().await.user_id.ok_or(AppError::Unauthorized)?;
+    let user_id = state
+        .auth
+        .lock()
+        .await
+        .user_id
+        .ok_or(AppError::Unauthorized)?;
     let cookie = state.cookie().await;
 
-    let api = state.api.lock().await;
-    let resp = api
-        .user_playlist(
-            &Query::new()
-                .cookie(&cookie)
-                .param("uid", &user_id.to_string())
-                .param("limit", "50")
-                .param("offset", "0"),
-        )
-        .await
-        .map_err(crate::error::map_ncm_err)?;
-    drop(api);
+    let api = state.api.read().await;
+    const PAGE_SIZE: usize = 100;
+    const MAX_PAGES: usize = 100;
+    let mut playlists = Vec::new();
 
-    let playlists: Vec<Playlist> = resp
-        .body
-        .get("playlist")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|p| {
-                    let id = p.get("id")?.as_u64()?;
-                    let name = p.get("name")?.as_str()?.to_string();
-                    let cover_url = p.get("coverImgUrl")?.as_str()?.to_string();
-                    let track_count = p.get("trackCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let creator = p
-                        .pointer("/creator/nickname")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    Some(Playlist { id, name, cover_url, track_count, creator })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    for page in 0..MAX_PAGES {
+        let offset = page * PAGE_SIZE;
+        let resp = api
+            .user_playlist(
+                &Query::new()
+                    .cookie(&cookie)
+                    .param("uid", &user_id.to_string())
+                    .param("limit", &PAGE_SIZE.to_string())
+                    .param("offset", &offset.to_string()),
+            )
+            .await
+            .map_err(crate::error::map_ncm_err)?;
+
+        let code = AppState::response_code(&resp);
+        if code != 200 {
+            return Err(AppError::Ncm(format!(
+                "读取歌单失败 (code={code}): {}",
+                AppState::response_message(&resp)
+            )));
+        }
+
+        let raw = resp
+            .body
+            .get("playlist")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let raw_len = raw.len();
+        playlists.extend(raw.iter().filter_map(parse_playlist));
+
+        let more = resp
+            .body
+            .get("more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(raw_len == PAGE_SIZE);
+        if !more || raw_len == 0 {
+            break;
+        }
+    }
 
     Ok(playlists)
+}
+
+fn parse_playlist(p: &serde_json::Value) -> Option<Playlist> {
+    let id = p.get("id")?.as_u64()?;
+    let name = p.get("name")?.as_str()?.to_string();
+    let cover_url = p.get("coverImgUrl")?.as_str()?.to_string();
+    let track_count = p.get("trackCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let creator = p
+        .pointer("/creator/nickname")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(Playlist {
+        id,
+        name,
+        cover_url,
+        track_count,
+        creator,
+    })
 }
 
 /// 获取歌单详情。
@@ -61,7 +95,7 @@ pub async fn get_playlist_detail(
     state.check_login().await?;
 
     let cookie = state.cookie().await;
-    let api = state.api.lock().await;
+    let api = state.api.read().await;
     let resp = api
         .playlist_detail(
             &Query::new()

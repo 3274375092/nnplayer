@@ -65,19 +65,24 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   const userStore = useUserStore();
 
+  // 桌面歌词等完全公开页面不需要等待主窗登录态恢复。
+  if (to.meta.public && to.name !== "Login") return true;
+
   if (!userStore.loggedIn && userStore.loginMethod === "unknown") {
     await userStore.refresh();
   }
 
-  if (to.meta.public) return true;
+  if (to.name === "Login") {
+    if (!userStore.loggedIn) return true;
+    const rawRedirect = typeof to.query.redirect === "string" ? to.query.redirect : "";
+    const redirect = rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
+      ? rawRedirect
+      : "/daily";
+    return redirect.startsWith("/login") ? "/daily" : redirect;
+  }
 
   if (!userStore.loggedIn) {
     return { path: "/login", query: { redirect: to.fullPath } };
-  }
-
-  if (to.name === "Login") {
-    const redirect = (to.query.redirect as string) || "/daily";
-    return { path: redirect };
   }
 
   return true;

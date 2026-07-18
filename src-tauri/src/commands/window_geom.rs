@@ -17,10 +17,7 @@ pub fn is_position_on_screen(app: tauri::AppHandle, x: i32, y: i32) -> bool {
     monitors.iter().any(|m| {
         let pos = m.position();
         let size = m.size();
-        x >= pos.x
-            && y >= pos.y
-            && x < pos.x + size.width as i32
-            && y < pos.y + size.height as i32
+        x >= pos.x && y >= pos.y && x < pos.x + size.width as i32 && y < pos.y + size.height as i32
     })
 }
 

@@ -1,9 +1,11 @@
 ﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from "vue";
+import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Sidebar from "@/components/Sidebar.vue";
 import PlayerBarFloating from "@/components/PlayerBarFloating.vue";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
+import { useLyric } from "@/composables/useLyric";
 import { useTauriBridge } from "@/composables/useTauriBridge";
 
 const desktopLyricsStore = useDesktopLyricsStore();
@@ -19,6 +21,13 @@ const isDesktopLyrics = computed(() => {
 
 onMounted(async () => {
   if (isDesktopLyrics.value) return;
+
+  // 歌词时钟属于主窗口全局播放能力，不能依赖当前路由是否渲染 LyricPanel。
+  useLyric();
+
+  // Vite 浏览器预览没有 Tauri runtime。歌词/播放器本身仍可正常挂载，
+  // 仅跳过原生窗口生命周期与跨窗口事件桥接。
+  if (!isTauri()) return;
 
   getCurrentWindow().once("tauri://destroyed", () => {
     void desktopLyricsStore.closeWindow();

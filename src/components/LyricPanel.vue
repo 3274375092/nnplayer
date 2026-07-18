@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 歌词面板（阶段3 升级版）。
 //   - 弹簧物理滚动：useSpringScroll 跟踪 activeLineIndex
-//   - 卡拉OK 逐字渐变（伪）：双层 span + clip-path 模拟单行渐变
+//   - 卡拉 OK 逐字渐变：每个 YRC token 独立计算并渲染字内进度
 //   - 行间距离模糊：距当前 3 行外开始模糊
 //   - 减少动效：弹簧退化为直接平移，跳过 rAF
 //   - 点击某行歌词 → audioPlayer.seek(行 time)
@@ -9,13 +9,14 @@
 // 行高策略（修复 1.5 行歌词与下一行重叠 bug）：
 //   - 不再硬锁 height: lineHeight，而是用 min-height + line-height: 1.6
 //   - 偏移量通过 ResizeObserver 测量每行实际高度累加，不再假设等高
-//   - 当前行卡拉OK 字符用双层 span + clip-path，字符始终是单行 inline，撑不高父容器
-//   - 超长行用 white-space: nowrap + ellipsis 截断，避免无止境换行
+//   - 当前行每个字符独立双层渲染，换行后仍按演唱顺序染色
+//   - 超长行允许换行，并由 ResizeObserver 把真实高度计入滚动定位
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useLyric } from "@/composables/useLyric";
 import { useSpringValue } from "@/composables/useSpringScroll";
 import { usePlayerStore } from "@/stores/player";
+import { getKaraokeTokenProgress } from "@/utils/lyricTiming";
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +37,8 @@ const {
   loading,
   error,
   hasLyric,
+  retry,
+  acquireRealtimeUpdates,
   seekTo,
 } = useLyric();
 
@@ -51,6 +54,7 @@ const lineHeights = ref<number[]>([]);
 const containerRef = ref<HTMLElement | null>(null);
 
 let ro: ResizeObserver | null = null;
+let releaseRealtimeUpdates: (() => void) | null = null;
 
 function setLineRef(el: Element | { $el?: Element } | null, idx: number) {
   // v-for + ref=fn 时 el 可能是组件实例(带 $el)或原生 Element
@@ -72,15 +76,27 @@ function measureAll() {
   lineHeights.value = heights;
 }
 
+function observeAllLines() {
+  if (!ro) return;
+  ro.disconnect();
+  const nodes = containerRef.value?.querySelectorAll<HTMLElement>(".lyric-line");
+  nodes?.forEach((node) => ro?.observe(node));
+  measureAll();
+}
+
 onMounted(() => {
   ro = new ResizeObserver(measureAll);
+  releaseRealtimeUpdates = acquireRealtimeUpdates();
+  // 全局引擎可能早已加载完歌词，此时 ref 回调先于 onMounted 执行，
+  // 必须主动补绑现有节点。
+  void nextTick(observeAllLines);
 });
 
 watch(
   lines,
   () => {
     lineHeights.value = []; // 切歌清空
-    void nextTick(measureAll);
+    void nextTick(observeAllLines);
   },
   { flush: "post" },
 );
@@ -99,6 +115,8 @@ watch(
 onBeforeUnmount(() => {
   ro?.disconnect();
   ro = null;
+  releaseRealtimeUpdates?.();
+  releaseRealtimeUpdates = null;
 });
 
 // 减少动效时直接同步，不走弹簧
@@ -136,31 +154,30 @@ watch(
   },
 );
 
-// 行间距离模糊：距当前 3 行外开始模糊，每多 1 行 +0.5px，最大 4px
-function blurFor(idx: number): string {
+// 只对当前视口附近的行做 GPU blur。远行本来不可见，继续保留 filter 会让
+// 浏览器为整首歌词创建昂贵的离屏图层；跳过它不影响行高测量或弹簧定位。
+function filterFor(idx: number): string {
   const cur = activeLineIndex.value;
-  if (cur < 0) return "0px";
-  const dist = Math.max(0, Math.abs(idx - cur) - 2);
-  return `${Math.min(4, dist * 0.5).toFixed(2)}px`;
+  if (cur < 0 || idx === cur) return "none";
+  const absoluteDistance = Math.abs(idx - cur);
+  if (absoluteDistance > 8) return "none";
+  const dist = Math.max(0, absoluteDistance - 2);
+  return dist > 0
+    ? `blur(${Math.min(4, dist * 0.5).toFixed(2)}px)`
+    : "none";
 }
 
-/**
- * 卡拉OK 已唱百分比：写入 CSS 自定义属性 --lyric-pct,
- * 让 CSS 通过 clip-path: inset(0 calc(100% - var(--lyric-pct)) 0 0) 裁出已唱区域。
- */
-function activeLineStyle() {
-  const idx = activeLineIndex.value;
-  if (idx < 0) return {};
-  const cur = lines.value[idx];
-  if (!cur) return {};
-  const next = lines.value[idx + 1];
-  const span = Math.max(1, (next?.time ?? cur.time + 5000) - cur.time);
-  const pct = Math.max(0, Math.min(1, progressMs.value / span));
-  return { "--lyric-pct": `${(pct * 100).toFixed(1)}%` };
-}
+const renderedKaraokeTokens = computed(() => {
+  const tokens = karaokeTokens.value;
+  if (tokens.length === 0) return [];
+  const now = progressMs.value;
+  return tokens.map((token) => {
+    return { ...token, pct: getKaraokeTokenProgress(token, now) };
+  });
+});
 
 function onLineClick(timeMs: number) {
-  seekTo(Math.floor(timeMs / 1000));
+  seekTo(timeMs / 1000);
 }
 
 const hasSong = computed(() => player.currentSong !== null);
@@ -199,10 +216,17 @@ const hasSong = computed(() => player.currentSong !== null);
     </div>
     <div
       v-else-if="error"
-      class="flex items-center justify-center text-accent text-sm"
+      class="flex flex-col gap-2 items-center justify-center text-accent text-sm"
       :style="{ height: `${panelHeight - 40}px` }"
     >
-      {{ error }}
+      <span>{{ error }}</span>
+      <button
+        type="button"
+        class="px-3 py-1 rounded-md border border-accent/30 hover:bg-accent/10"
+        @click="retry"
+      >
+        重试
+      </button>
     </div>
     <div
       v-else-if="!hasLyric"
@@ -225,28 +249,35 @@ const hasSong = computed(() => player.currentSong !== null);
         <div
           v-for="(line, idx) in lines"
           :key="`${line.time}-${idx}`"
+          v-memo="[
+            line.text,
+            line.translation,
+            idx === activeLineIndex,
+            filterFor(idx),
+            idx === activeLineIndex ? progressMs : 0,
+          ]"
           :ref="(el) => setLineRef(el, idx)"
           class="lyric-line px-2 cursor-pointer"
-          :class="{ 'is-active': idx === activeLineIndex }"
-          :style="idx === activeLineIndex ? activeLineStyle() : { filter: `blur(${blurFor(idx)})` }"
+          :class="{
+            'is-active': idx === activeLineIndex,
+            'has-karaoke': idx === activeLineIndex && renderedKaraokeTokens.length > 0,
+          }"
+          :style="{ filter: filterFor(idx) }"
           @click="onLineClick(line.time)"
         >
-          <!-- 当前行：双层 span 实现卡拉OK 单行渐变（不影响行高） -->
-          <template v-if="idx === activeLineIndex && karaokeTokens.length > 0">
-            <span class="lyric-karaoke" aria-hidden="true">
-              <!-- 底层：已唱部分 accent 色，靠 clip-path 裁出 -->
-              <span class="lyric-karaoke__sung">
+          <!-- 当前行：每个 YRC 字符独立计算字内擦色，可自然换行。 -->
+          <template v-if="idx === activeLineIndex && renderedKaraokeTokens.length > 0">
+            <span class="lyric-karaoke" dir="auto" aria-hidden="true">
+              <span
+                v-for="(token, i) in renderedKaraokeTokens"
+                :key="i"
+                class="lyric-char"
+                :style="{ '--char-pct': `${(token.pct * 100).toFixed(2)}%` }"
+              >
+                <span class="lyric-char__sung">{{ token.char }}</span>
                 <span
-                  v-for="(tk, i) in karaokeTokens"
-                  :key="i"
-                >{{ tk.char }}</span>
-              </span>
-              <!-- 上层：未唱部分覆盖在灰色（绝对定位，clip-path 反向） -->
-              <span class="lyric-karaoke__pending">
-                <span
-                  v-for="(tk, i) in karaokeTokens"
-                  :key="i"
-                >{{ tk.char }}</span>
+                  class="lyric-char__pending"
+                >{{ token.char }}</span>
               </span>
             </span>
           </template>
@@ -270,51 +301,64 @@ const hasSong = computed(() => player.currentSong !== null);
 </template>
 
 <style scoped>
-/* 行基础样式：不锁 height，单行截断（避免无止境换行），用 min-height 保证行间距 */
+/* 行基础样式：允许长歌词换行，真实高度由 ResizeObserver 参与居中计算。 */
 .lyric-line {
   min-height: v-bind(lineHeight + 'px');
   line-height: 1.6;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: var(--color-text-secondary);
   transition: color 0.3s linear, filter 0.3s linear, font-size 0.2s linear;
 }
 
 .lyric-line.is-active {
-  color: transparent; /* 主层透明让卡拉OK 透出 */
+  color: var(--color-text-primary);
   font-weight: 500;
   font-size: 1rem;
   filter: none !important;
 }
 
-/* 卡拉OK：双层 span 模拟单行渐变，字符始终是单行 inline,不会撑高父行 */
+.lyric-line.is-active.has-karaoke {
+  color: transparent;
+}
+
+/* 每个字符各自擦色，inline-block 字符之间仍可自然换行。 */
 .lyric-karaoke {
-  display: inline-block; /* 需要块级 box,子 absolute 元素才能用 inset 定位 */
-  position: relative;
-  white-space: nowrap;
+  display: inline;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.lyric-karaoke__sung,
-.lyric-karaoke__pending {
+.lyric-char {
   display: inline-block;
-  white-space: nowrap;
+  position: relative;
+  white-space: pre;
 }
 
-.lyric-karaoke__sung {
+.lyric-char__sung {
+  display: inline-block;
   color: var(--color-accent);
-  clip-path: inset(0 calc(100% - var(--lyric-pct, 0%)) 0 0);
-  transition: clip-path 0.1s linear;
+  clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
   text-shadow: 0 0 8px var(--color-glow);
 }
 
-.lyric-karaoke__pending {
+.lyric-char__pending {
   position: absolute;
   inset: 0;
+  display: inline-block;
   color: var(--color-text-secondary);
-  /* 关键：只覆盖"未唱"区域,左边已唱部分让底层 accent 透出 */
-  clip-path: inset(0 0 0 var(--lyric-pct, 0%));
+  clip-path: inset(0 0 0 var(--char-pct, 0%));
   pointer-events: none;
+}
+
+.lyric-karaoke:dir(rtl) .lyric-char__sung {
+  clip-path: inset(0 0 0 calc(100% - var(--char-pct, 0%)));
+}
+
+.lyric-karaoke:dir(rtl) .lyric-char__pending {
+  clip-path: inset(0 var(--char-pct, 0%) 0 0);
 }
 
 .will-change-transform {

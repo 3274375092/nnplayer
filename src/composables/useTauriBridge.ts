@@ -26,7 +26,6 @@ export function useTauriBridge() {
 
   async function setup() {
     playerStore.bindAutoNext();
-    await desktopLyricsStore.syncFromSystem();
 
     const register = async <T>(event: string, handler: EventCallback<T>) => {
       if (tornDown) return;
@@ -38,7 +37,14 @@ export function useTauriBridge() {
       unlistens.push(un);
     };
 
+    // 快照请求必须最先注册；窗口状态同步可能包含 IPC，不能让子窗在此期间
+    // 发出的唯一请求落空。
+    await register("desktop-lyrics:request-snapshot", () => {
+      triggerDesktopLyricsPush();
+    });
+
     await Promise.all([
+      desktopLyricsStore.syncFromSystem(),
       register("player:toggle", () => playerStore.togglePlay()),
       register("player:prev", () => void playerStore.prev()),
       register("player:next", () => void playerStore.next()),
@@ -48,9 +54,6 @@ export function useTauriBridge() {
         } catch (e) {
           console.warn("[desktop-lyrics] toggle 失败", e);
         }
-      }),
-      register("desktop-lyrics:request-snapshot", () => {
-        triggerDesktopLyricsPush();
       }),
       register<{ action: string; value?: unknown }>("desktop-lyrics:control", async (e) => {
         switch (e.payload.action) {
@@ -74,6 +77,10 @@ export function useTauriBridge() {
         }
       }),
     ]);
+
+    // 主窗口重载而桌面歌词窗口仍存活时，子窗不会重新 mounted 请求快照；
+    // setup 完成后主动广播新 session 的首包。
+    if (!tornDown) triggerDesktopLyricsPush();
   }
 
   function teardown() {

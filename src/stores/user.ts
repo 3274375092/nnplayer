@@ -17,6 +17,7 @@ import {
   logout as apiLogout,
   saveCookie,
 } from "@/composables/useNcmApi";
+import { rotateAuthEpoch } from "@/services/authEpoch";
 
 export type LoginMethod = "qr" | "account" | "phone" | "cookie" | "unknown" | "failed";
 
@@ -36,18 +37,27 @@ export const useUserStore = defineStore("user", () => {
   // refresh 调用去重：允许多次调用但只发一次请求
   let refreshPromise: Promise<void> | null = null;
 
-  function setAuthState(opts: {
-    loggedIn: boolean;
-    nickname?: string;
-    userId?: number | null;
-    loginMethod?: LoginMethod;
-    avatarUrl?: string;
-  }) {
+  function setAuthState(
+    opts: {
+      loggedIn: boolean;
+      nickname?: string;
+      userId?: number | null;
+      loginMethod?: LoginMethod;
+      avatarUrl?: string;
+    },
+    credentialsChanged = false,
+  ) {
+    const authChanged =
+      loggedIn.value !== opts.loggedIn ||
+      userId.value !== (opts.userId ?? null);
+
     loggedIn.value = opts.loggedIn;
     nickname.value = opts.nickname ?? "";
     userId.value = opts.userId ?? null;
     loginMethod.value = opts.loginMethod ?? "unknown";
     avatarUrl.value = opts.avatarUrl ?? "";
+
+    if (authChanged || credentialsChanged) rotateAuthEpoch();
   }
 
   // =============== 会话恢复 ===============
@@ -95,38 +105,47 @@ export const useUserStore = defineStore("user", () => {
   async function pollQrLogin(unikey: string) {
     const res = await loginQrCheck(unikey);
     if (res.code === 803) {
-      setAuthState({
-        loggedIn: true,
-        nickname: res.nickname ?? "网易云用户",
-        userId: res.userId ?? null,
-        loginMethod: "qr",
-        avatarUrl: res.avatarUrl ?? "",
-      });
+      setAuthState(
+        {
+          loggedIn: true,
+          nickname: res.nickname ?? "网易云用户",
+          userId: res.userId ?? null,
+          loginMethod: "qr",
+          avatarUrl: res.avatarUrl ?? "",
+        },
+        true,
+      );
     }
     return res;
   }
 
   async function loginByAccount(account: string, md5Password: string) {
     const res = await loginWithAccount(account, md5Password);
-    setAuthState({
-      loggedIn: true,
-      nickname: res.nickname,
-      userId: res.userId ?? null,
-      loginMethod: "account",
-      avatarUrl: res.avatarUrl ?? "",
-    });
+    setAuthState(
+      {
+        loggedIn: true,
+        nickname: res.nickname,
+        userId: res.userId ?? null,
+        loginMethod: "account",
+        avatarUrl: res.avatarUrl ?? "",
+      },
+      true,
+    );
     return res;
   }
 
   async function loginByCookie(cookie: string) {
     const res = await saveCookie(cookie);
-    setAuthState({
-      loggedIn: true,
-      nickname: res.nickname,
-      userId: res.userId ?? null,
-      loginMethod: "cookie",
-      avatarUrl: res.avatarUrl ?? "",
-    });
+    setAuthState(
+      {
+        loggedIn: true,
+        nickname: res.nickname,
+        userId: res.userId ?? null,
+        loginMethod: "cookie",
+        avatarUrl: res.avatarUrl ?? "",
+      },
+      true,
+    );
     return res;
   }
 
@@ -136,13 +155,16 @@ export const useUserStore = defineStore("user", () => {
 
   async function loginByPhone(phone: string, captcha: string) {
     const res = await loginWithCaptcha(phone, captcha);
-    setAuthState({
-      loggedIn: true,
-      nickname: res.nickname,
-      userId: res.userId ?? null,
-      loginMethod: "phone",
-      avatarUrl: res.avatarUrl ?? "",
-    });
+    setAuthState(
+      {
+        loggedIn: true,
+        nickname: res.nickname,
+        userId: res.userId ?? null,
+        loginMethod: "phone",
+        avatarUrl: res.avatarUrl ?? "",
+      },
+      true,
+    );
     return res;
   }
 

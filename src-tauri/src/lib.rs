@@ -15,10 +15,8 @@ pub fn run() {
         .try_init();
 
     let session = commands::load_session_meta();
-    let initial_cookie = session.as_ref().map(|r| r.cookie.clone());
-    let initial_auth = session.as_ref().map(commands::session_to_auth).unwrap_or_default();
-    let initial_app_state = AppState::new(initial_cookie, initial_auth)
-        .expect("创建 AppState 失败");
+    // 持久化会话在远端校验成功前绝不能暴露为“已登录”。
+    let initial_app_state = AppState::new(None, Default::default()).expect("创建 AppState 失败");
 
     let mut builder = tauri::Builder::default();
 
@@ -35,9 +33,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default()
-            .with_denylist(&["desktop-lyrics"])
-            .build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["desktop-lyrics"])
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(initial_app_state.clone())
         .setup(move |app| {
@@ -45,6 +45,7 @@ pub fn run() {
             let state = initial_app_state.clone();
             tauri::async_runtime::spawn(async move {
                 restore_session(&app_handle, &state, session).await;
+                state.mark_restore_complete();
             });
 
             if let Err(e) = build_tray(app.handle()) {
@@ -93,9 +94,9 @@ async fn restore_session(
         return;
     }
 
-    state.api.lock().await.set_cookie(record.cookie.clone());
+    state.api.write().await.set_cookie(record.cookie.clone());
 
-    let api = state.api.lock().await;
+    let api = state.api.read().await;
     match api
         .login_status(&ncm_api::Query::new().cookie(&record.cookie))
         .await
@@ -106,7 +107,13 @@ async fn restore_session(
                 .pointer("/data/account/id")
                 .or_else(|| resp.body.pointer("/account/id"))
                 .and_then(|v| v.as_u64())
-                .unwrap_or(record.user_id);
+                .filter(|id| *id > 0);
+            let Some(uid) = uid else {
+                log::warn!("[startup] login_status 未返回有效账户，会话已失效");
+                drop(api);
+                clear_invalid_session(app, state).await;
+                return;
+            };
             let nick = resp
                 .body
                 .pointer("/data/profile/nickname")
@@ -129,19 +136,26 @@ async fn restore_session(
             auth.cookie = Some(record.cookie.clone());
             auth.login_method = Some(record.login_method.clone());
             auth.avatar_url = avatar_url;
-            log::info!("[startup] 会话恢复成功: user_id={uid}, method={}", record.login_method);
+            log::info!(
+                "[startup] 会话恢复成功: user_id={uid}, method={}",
+                record.login_method
+            );
         }
         Err(e) => {
             log::warn!("[startup] 会话已失效，清空: {e}");
             drop(api);
-            state.api.lock().await.set_cookie(String::new());
-            *state.auth.lock().await = Default::default();
-            let _ = commands::clear_session_meta();
-            if let Ok(store) = app.store("auth.json") {
-                store.delete("cookie");
-                let _ = store.save();
-            }
+            clear_invalid_session(app, state).await;
         }
+    }
+}
+
+async fn clear_invalid_session(app: &tauri::AppHandle, state: &AppState) {
+    state.api.write().await.set_cookie(String::new());
+    *state.auth.lock().await = Default::default();
+    let _ = commands::clear_session_meta();
+    if let Ok(store) = app.store("auth.json") {
+        store.delete("cookie");
+        let _ = store.save();
     }
 }
 
@@ -158,7 +172,14 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&toggle_item, &prev_item, &next_item, &lyrics_item, &separator, &quit_item],
+        &[
+            &toggle_item,
+            &prev_item,
+            &next_item,
+            &lyrics_item,
+            &separator,
+            &quit_item,
+        ],
     )?;
 
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
@@ -189,7 +210,11 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
                     if window.is_visible().unwrap_or(false) {

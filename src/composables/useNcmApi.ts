@@ -6,6 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppErrorPayload,
   AuthState,
   DailyRecommend,
   LyricResult,
@@ -16,6 +17,80 @@ import type {
   Song,
   SongUrl,
 } from "@/types/music";
+
+export type AppErrorKind = AppErrorPayload["kind"] | "Unknown";
+
+/** 前端保留后端错误类别，调用方可通过 kind 做可靠分支。 */
+export class AppError extends Error {
+  readonly name = "AppError";
+
+  constructor(
+    readonly kind: AppErrorKind,
+    message: string,
+    readonly original?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+const APP_ERROR_KINDS = new Set<AppErrorPayload["kind"]>([
+  "Unauthorized",
+  "Ncm",
+  "Network",
+  "Json",
+  "Io",
+  "Store",
+  "InvalidParam",
+  "Internal",
+]);
+
+function readErrorPayload(value: unknown): AppErrorPayload | null {
+  if (!value || typeof value !== "object") return null;
+
+  const candidate = value as { kind?: unknown; message?: unknown };
+  if (
+    typeof candidate.kind !== "string" ||
+    !APP_ERROR_KINDS.has(candidate.kind as AppErrorPayload["kind"]) ||
+    typeof candidate.message !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    kind: candidate.kind as AppErrorPayload["kind"],
+    message: candidate.message,
+  };
+}
+
+/** 把 Tauri 的结构化拒绝值规范化，同时保留 Rust 的 kind。 */
+export function toAppError(error: unknown): AppError {
+  if (error instanceof AppError) return error;
+
+  let payload = readErrorPayload(error);
+  if (!payload && typeof error === "string") {
+    try {
+      payload = readErrorPayload(JSON.parse(error));
+    } catch {
+      // 普通字符串不是结构化 JSON，下面仍会保留其消息。
+    }
+  }
+
+  if (payload) return new AppError(payload.kind, payload.message, error);
+  if (error instanceof Error) {
+    return new AppError("Unknown", error.message || "未知错误", error);
+  }
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (message !== undefined && message !== null && String(message).trim()) {
+      return new AppError("Unknown", String(message), error);
+    }
+  }
+  if (typeof error === "string" && error.trim()) {
+    return new AppError("Unknown", error, error);
+  }
+  return new AppError("Unknown", "未知错误", error);
+}
 
 /**
  * 后端命令名称常量。
@@ -45,17 +120,13 @@ export const Commands = {
 } as const;
 
 /**
- * 统一调用入口：成功返回 data，失败抛出 Error，message 为后端 message。
+ * 统一调用入口：成功返回 data，失败抛出保留后端 kind 的 AppError。
  */
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
   } catch (err) {
-    const message =
-      err && typeof err === "object" && "message" in err
-        ? String((err as { message: unknown }).message)
-        : "未知错误";
-    throw new Error(message);
+    throw toAppError(err);
   }
 }
 

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { Music2, Play } from "lucide-vue-next";
 import type { Playlist, Song } from "@/types/music";
+import { coverImageUrl } from "@/utils/coverImage";
 
 interface Props {
   playlist?: Playlist;
@@ -9,6 +11,9 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), { variant: "playlist" });
+const playlistCover = computed(() =>
+  coverImageUrl(props.playlist?.coverUrl, 240),
+);
 
 defineEmits<{
   (e: "click"): void;
@@ -24,9 +29,12 @@ defineEmits<{
     <div class="aspect-square rounded-xl bg-[rgba(255,255,255,0.04)] mb-3 overflow-hidden ring-1 ring-ring relative">
       <img
         v-if="playlist.coverUrl"
-        :src="playlist.coverUrl"
+        :src="playlistCover"
         :alt="playlist.name"
         class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
+        loading="lazy"
+        decoding="async"
+        fetchpriority="low"
       />
       <div class="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
       <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">

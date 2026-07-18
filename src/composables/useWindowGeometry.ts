@@ -16,6 +16,7 @@ export function useWindowGeometry() {
   const current = getCurrentWindow();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const unlisteners: (() => void)[] = [];
+  let disposed = false;
 
   async function save() {
     if (timer) clearTimeout(timer);
@@ -34,11 +35,28 @@ export function useWindowGeometry() {
   }
 
   onMounted(async () => {
-    unlisteners.push(await current.onMoved(save));
-    unlisteners.push(await current.onResized(save));
+    disposed = false;
+    try {
+      const stopMoved = await current.onMoved(save);
+      if (disposed) {
+        stopMoved();
+        return;
+      }
+      unlisteners.push(stopMoved);
+
+      const stopResized = await current.onResized(save);
+      if (disposed) {
+        stopResized();
+        return;
+      }
+      unlisteners.push(stopResized);
+    } catch {
+      // 窗口在监听注册期间已销毁
+    }
   });
 
   onBeforeUnmount(() => {
+    disposed = true;
     unlisteners.forEach((fn) => fn());
     if (timer) clearTimeout(timer);
   });

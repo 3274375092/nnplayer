@@ -28,11 +28,35 @@ const DEFAULTS: LyricWindowPrefs = {
   showPrevNext: true,
 };
 
+function normalize(value: unknown, base: LyricWindowPrefs = DEFAULTS): LyricWindowPrefs {
+  const input = value && typeof value === "object"
+    ? value as Partial<Record<keyof LyricWindowPrefs, unknown>>
+    : {};
+  const fontSize = typeof input.fontSize === "number" && Number.isFinite(input.fontSize)
+    ? Math.max(14, Math.min(48, input.fontSize))
+    : base.fontSize;
+  const opacity = typeof input.opacity === "number" && Number.isFinite(input.opacity)
+    ? Math.max(0.2, Math.min(1, input.opacity))
+    : base.opacity;
+  const textColor = typeof input.textColor === "string" && input.textColor.trim().length > 0
+    ? input.textColor
+    : base.textColor;
+  return {
+    fontSize,
+    opacity,
+    textColor,
+    locked: typeof input.locked === "boolean" ? input.locked : base.locked,
+    showPrevNext: typeof input.showPrevNext === "boolean"
+      ? input.showPrevNext
+      : base.showPrevNext,
+  };
+}
+
 function load(): LyricWindowPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    return normalize(JSON.parse(raw));
   } catch {
     return { ...DEFAULTS };
   }
@@ -62,5 +86,9 @@ export function useLyricWindowPrefs() {
     prefs.value = { ...DEFAULTS };
   }
 
-  return { prefs, reset };
+  function apply(next: unknown) {
+    prefs.value = normalize(next, prefs.value);
+  }
+
+  return { prefs, reset, apply };
 }

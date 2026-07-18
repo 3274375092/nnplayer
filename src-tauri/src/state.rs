@@ -3,7 +3,8 @@
 // 与 CNMPlayer 保持一致的设计：
 //   - 持有 ncm_api::ApiClient（自带 Cookie 存储 + 设备指纹 + 加密层）
 //   - 同时维护一个轻量的 AuthState（用户 id、昵称），方便前端展示
-//   - 二者均用 Arc<Mutex> 包裹，保证多线程安全
+//   - ApiClient 用 RwLock：普通业务请求可以并发，登录/退出时才需要写锁
+//   - AuthState 用 Mutex，保证登录态更新原子化
 //
 // ApiClient 是 ncm-api-rs 提供的"开箱即用"客户端：
 //   - 自动注入 NCM 风控所需的 cookie 字段（os、deviceId、NMTID 等）
@@ -11,11 +12,15 @@
 //   - 自动按 CryptoType 进行 weapi/eapi 加密
 // 调用方只需 login_status / login / login_cellphone 等接口即可。
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 use ncm_api::{ApiClient, ApiResponse};
 use reqwest::Client;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::error::AppError;
 
@@ -35,7 +40,11 @@ pub struct AuthState {
 
 impl AuthState {
     pub fn is_logged_in(&self) -> bool {
-        self.user_id.is_some() && self.cookie.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+        self.user_id.is_some_and(|id| id > 0)
+            && self
+                .cookie
+                .as_deref()
+                .is_some_and(|cookie| !cookie.trim().is_empty())
     }
 
     pub fn require_login(&self) -> Result<(), AppError> {
@@ -51,9 +60,12 @@ impl AuthState {
 #[derive(Clone)]
 pub struct AppState {
     /// ncm-api 客户端。已配置好 cookie 存储 + UA + 加密。
-    pub api: Arc<Mutex<ApiClient>>,
+    pub api: Arc<RwLock<ApiClient>>,
     /// 轻量用户信息（user_id、nickname）。
     pub auth: Arc<Mutex<AuthState>>,
+    /// 启动会话校验完成通知。前端读取登录态前必须等待它。
+    restore_ready: Arc<Notify>,
+    restore_complete: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -64,30 +76,47 @@ impl AppState {
                 "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/53736"
             ))
             .cookie_store(true)
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
             .build()?;
 
         let api = ApiClient::new(cookie, http);
 
         Ok(Self {
-            api: Arc::new(Mutex::new(api)),
+            api: Arc::new(RwLock::new(api)),
             auth: Arc::new(Mutex::new(auth)),
+            restore_ready: Arc::new(Notify::new()),
+            restore_complete: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// 标记启动会话校验结束，并唤醒等待中的前端命令。
+    pub fn mark_restore_complete(&self) {
+        self.restore_complete.store(true, Ordering::Release);
+        self.restore_ready.notify_waiters();
+    }
+
+    /// 等待启动会话校验。双重检查避免 notify 发生在 await 之前造成丢失唤醒。
+    pub async fn wait_restore_complete(&self) {
+        if self.restore_complete.load(Ordering::Acquire) {
+            return;
+        }
+        let notified = self.restore_ready.notified();
+        if !self.restore_complete.load(Ordering::Acquire) {
+            notified.await;
+        }
     }
 
     /// 校验登录态。仅锁 auth，不锁 api，避免嵌套锁死锁。
     pub async fn check_login(&self) -> Result<(), AppError> {
+        self.wait_restore_complete().await;
         self.auth.lock().await.require_login()
     }
 
     /// 获取当前 cookie 字符串。仅锁 auth，不锁 api。
     /// 命令中应先调此方法拿到 cookie，再锁 api 发请求，避免 ABBA 死锁。
     pub async fn cookie(&self) -> String {
-        self.auth
-            .lock()
-            .await
-            .cookie
-            .clone()
-            .unwrap_or_default()
+        self.auth.lock().await.cookie.clone().unwrap_or_default()
     }
 
     /// 提取 NCM 业务码。

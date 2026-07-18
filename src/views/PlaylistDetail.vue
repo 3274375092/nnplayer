@@ -3,43 +3,52 @@
 // 头部展示封面与简介，下方展示歌曲列表 + 歌词面板。
 // （阶段4）加载中显示 SkeletonCard。
 
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, watch } from "vue";
 import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
 import SkeletonCard from "@/components/SkeletonCard.vue";
-import { getPlaylistDetail } from "@/composables/useNcmApi";
+import {
+  getPlaylistDetail,
+  type AppError,
+} from "@/composables/useNcmApi";
+import { useQueryCache } from "@/composables/useQueryCache";
+import { useUserStore } from "@/stores/user";
 import type { PlaylistDetail } from "@/types/music";
+import { coverImageUrl } from "@/utils/coverImage";
 
 interface Props {
   id: string;
 }
 const props = defineProps<Props>();
 
-const detail = ref<PlaylistDetail | null>(null);
-const loading = ref(false);
-const error = ref("");
-let loadSeq = 0;
+const userStore = useUserStore();
+const query = useQueryCache<PlaylistDetail, AppError>();
+const detail = query.data;
+const loading = query.loading;
+const error = computed(() => query.error.value?.message ?? "");
+const unresolvedUserScope = `unresolved:${Date.now()}:${Math.random()}`;
 
-async function load() {
-  const seq = ++loadSeq;
-  loading.value = true;
-  error.value = "";
-  detail.value = null;
-  try {
-    detail.value = await getPlaylistDetail(Number(props.id));
-    if (seq !== loadSeq) return;
-  } catch (e) {
-    if (seq !== loadSeq) return;
-    error.value = e instanceof Error ? e.message : "加载失败";
-  } finally {
-    if (seq === loadSeq) loading.value = false;
-  }
+function load(force = false) {
+  const playlistId = Number(props.id);
+  const userScope =
+    userStore.userId === null
+      ? unresolvedUserScope
+      : `user:${userStore.userId}`;
+  return query.execute(
+    ["playlist-detail", playlistId, userScope],
+    () => getPlaylistDetail(playlistId),
+    {
+      staleTime: 5 * 60 * 1000,
+      gcTime: 30 * 60 * 1000,
+      force,
+    },
+  );
 }
 
 // 监听 id 变化，路由复用时重新加载
-watch(() => props.id, load);
+watch(() => props.id, () => void load());
 
-onMounted(load);
+onMounted(() => void load());
 </script>
 
 <template>
@@ -59,7 +68,7 @@ onMounted(load);
 
     <div v-else-if="error" class="card p-6 text-center">
       <div class="text-accent mb-3">{{ error }}</div>
-      <button class="btn btn-primary" @click="load">重试</button>
+      <button class="btn btn-primary" @click="load(true)">重试</button>
     </div>
 
     <template v-else-if="detail">
@@ -70,9 +79,12 @@ onMounted(load);
         >
           <img
             v-if="detail.playlist.coverUrl"
-            :src="detail.playlist.coverUrl"
+            :src="coverImageUrl(detail.playlist.coverUrl, 176)"
             :alt="detail.playlist.name"
             class="w-full h-full object-cover"
+            loading="eager"
+            decoding="async"
+            fetchpriority="high"
           />
         </div>
         <div class="flex-1 min-w-0">

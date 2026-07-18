@@ -11,4 +11,4 @@ pub mod music;
 pub mod user;
 pub mod window_geom;
 
-pub use auth::{clear_session_meta, load_session_meta, session_to_auth};
+pub use auth::{clear_session_meta, load_session_meta};
