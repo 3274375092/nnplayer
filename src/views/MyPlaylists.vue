@@ -42,16 +42,18 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <div class="px-8 py-6">
-    <header class="mb-6">
-      <h1 class="text-2xl font-semibold">我的歌单</h1>
+  <div class="playlist-page px-8 py-6">
+    <header class="mb-7 flex items-baseline gap-3">
+      <h1 class="text-2xl font-semibold tracking-[-0.02em]">我的歌单</h1>
+      <span v-if="!loading && !error" class="playlist-count">
+        {{ playlists.length }} 个
+      </span>
     </header>
 
     <!-- 阶段4：骨架屏 -->
     <div
       v-if="loading"
-      class="grid gap-4"
-      style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))"
+      class="playlist-grid"
     >
       <SkeletonCard
         v-for="i in 8"
@@ -67,8 +69,7 @@ onMounted(() => void load());
 
     <div
       v-else
-      class="grid gap-4"
-      style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))"
+      class="playlist-grid"
     >
       <SongListItem
         v-for="p in playlists"
@@ -80,3 +81,36 @@ onMounted(() => void load());
     </div>
   </div>
 </template>
+
+<style scoped>
+.playlist-page {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+}
+
+.playlist-count {
+  color: var(--color-text-tertiary);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.playlist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  column-gap: 22px;
+  row-gap: 28px;
+}
+
+@media (max-width: 680px) {
+  .playlist-page {
+    padding-inline: 20px;
+  }
+
+  .playlist-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    column-gap: 16px;
+    row-gap: 24px;
+  }
+}
+</style>

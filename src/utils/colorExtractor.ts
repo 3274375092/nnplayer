@@ -1,7 +1,17 @@
+import { coverImageUrl } from "@/utils/coverImage";
+
 const SAMPLE_SIZE = 112;
 const HUE_BUCKETS = 12;
 const SAT_BUCKETS = 4;
 const LIGHT_BUCKETS = 5;
+const PALETTE_CACHE_LIMIT = 24;
+
+interface ExtractedPalette {
+  seed: string;
+  palette: string[];
+}
+
+const paletteCache = new Map<string, ExtractedPalette>();
 
 interface HSL {
   h: number;
@@ -76,16 +86,81 @@ function parseHex(hex: string): HSL {
   );
 }
 
+function relativeLuminance(hex: string): number {
+  const channels = [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ].map((value) => {
+    const channel = value / 255;
+    return channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrastRatio(a: string, b: string): number {
+  const lighter = Math.max(relativeLuminance(a), relativeLuminance(b));
+  const darker = Math.min(relativeLuminance(a), relativeLuminance(b));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function foregroundFor(background: string): string {
+  const dark = "#000000";
+  const light = "#ffffff";
+  return contrastRatio(background, dark) >= contrastRatio(background, light)
+    ? dark
+    : light;
+}
+
+function accentWithContrast(
+  h: number,
+  s: number,
+  initialLightness: number,
+  surfaces: string[],
+): { color: string; lightness: number } {
+  let lightness = initialLightness;
+  let color = hslToHex(h, s, lightness);
+  while (
+    surfaces.some((surface) => contrastRatio(color, surface) < 4.5) &&
+    lightness < 0.88
+  ) {
+    lightness = Math.min(0.88, lightness + 0.01);
+    color = hslToHex(h, s, lightness);
+  }
+  return { color, lightness };
+}
+
+function cachePalette(key: string, value: ExtractedPalette): ExtractedPalette {
+  if (paletteCache.size >= PALETTE_CACHE_LIMIT) {
+    const oldestKey = paletteCache.keys().next().value;
+    if (oldestKey !== undefined) paletteCache.delete(oldestKey);
+  }
+  paletteCache.set(key, value);
+  return value;
+}
+
 export async function extractPalette(
   imgUrl: string,
   sampleSize = SAMPLE_SIZE,
-): Promise<{ seed: string; palette: string[] }> {
+): Promise<ExtractedPalette> {
+  // 网易云图片先请求服务端缩略图，避免为 112px 采样完整解码大封面。
+  const sampledUrl = coverImageUrl(imgUrl, sampleSize, 1);
+  const cacheKey = `${sampleSize}\n${sampledUrl}`;
+  const cached = paletteCache.get(cacheKey);
+  if (cached) {
+    paletteCache.delete(cacheKey);
+    paletteCache.set(cacheKey, cached);
+    return cached;
+  }
+
   const img = new Image();
   img.crossOrigin = "anonymous";
   await new Promise<void>((resolve, reject) => {
     img.onload = () => resolve();
     img.onerror = () => reject(new Error("封面图加载失败"));
-    img.src = imgUrl;
+    img.src = sampledUrl;
   });
 
   const canvas = document.createElement("canvas");
@@ -119,7 +194,10 @@ export async function extractPalette(
   }
 
   if (buckets.size === 0) {
-    return { seed: "#E85D3A", palette: ["#E85D3A"] };
+    return cachePalette(cacheKey, {
+      seed: "#E85D3A",
+      palette: ["#E85D3A"],
+    });
   }
 
   const sorted = [...buckets.values()].sort((a, b) => b.count - a.count);
@@ -137,7 +215,10 @@ export async function extractPalette(
     usedHueBuckets.add(hIdx);
   }
 
-  return { seed: seedHex, palette: [seedHex, ...companions] };
+  return cachePalette(cacheKey, {
+    seed: seedHex,
+    palette: [seedHex, ...companions],
+  });
 }
 
 /** 把主色扩展成 18 个角色色，写到 :root CSS 变量。 */
@@ -150,38 +231,49 @@ export function applyToCssVars(seed: string): void {
   const p = 0.3 + Math.min(s, 0.7) * 0.7;
 
   // — 背景保持近黑，只带极微色相 —
-  root.style.setProperty("--color-bg", hslToHex(h, Math.min(p * 0.08, 0.04), 0.045));
+  const background = hslToHex(h, Math.min(p * 0.08, 0.04), 0.045);
+  root.style.setProperty("--color-bg", background);
   root.style.setProperty("--color-bg-from", hslToHex(h, Math.min(p * 0.12, 0.06), 0.07));
   root.style.setProperty("--color-bg-to", hslToHex(h, Math.min(p * 0.06, 0.03), 0.03));
 
-  // — 卡片明显带色 —
-  root.style.setProperty("--color-card", hslToHex(h, Math.min(p * 0.35, 0.18), 0.14));
-  root.style.setProperty("--color-card-hover", `hsla(${h}, 30%, 70%, 0.12)`);
+  // — 表面只保留轻微色温，避免封面色把整张卡片染脏 —
+  const card = hslToHex(h, Math.min(p * 0.22, 0.10), 0.115);
+  root.style.setProperty("--color-card", card);
+  root.style.setProperty("--color-card-hover", `hsla(${h}, 18%, 72%, 0.11)`);
 
-  // — 边框明显有色 —
-  root.style.setProperty("--color-border", `hsla(${h}, 35%, 60%, 0.18)`);
-  root.style.setProperty("--color-border-strong", `hsla(${h}, 40%, 65%, 0.28)`);
-  root.style.setProperty("--color-ring", `hsla(${h}, 40%, 70%, 0.20)`);
+  // — 边框承担层级，不抢主题色 —
+  root.style.setProperty("--color-border", `hsla(${h}, 24%, 64%, 0.14)`);
+  root.style.setProperty("--color-border-strong", `hsla(${h}, 28%, 68%, 0.24)`);
+  root.style.setProperty("--color-ring", `hsla(${h}, 34%, 72%, 0.32)`);
 
-  // — 强调色鲜明 —
-  root.style.setProperty("--color-accent", hslToHex(h, Math.min(s * 1.8 + 0.15, 0.95), Math.max(0.52, Math.min(l * 1.2, 0.65))));
-  root.style.setProperty("--color-accent-secondary", hslToHex((h + 55) % 360, Math.min(s * 1.3 + 0.1, 0.70), 0.55));
-  root.style.setProperty("--color-accent-subtle", `hsla(${h}, 60%, 55%, 0.25)`);
+  // — 单一同色系强调色；第二色只做明度过渡，不再跨到相邻色相 —
+  const accentSaturation = Math.min(s * 1.25 + 0.16, 0.78);
+  const initialAccentLightness = Math.max(0.55, Math.min(l * 1.12, 0.64));
+  const { color: accent, lightness: accentLightness } = accentWithContrast(
+    h,
+    accentSaturation,
+    initialAccentLightness,
+    [background, card],
+  );
+  root.style.setProperty("--color-accent", accent);
+  root.style.setProperty("--color-on-accent", foregroundFor(accent));
+  root.style.setProperty("--color-accent-secondary", hslToHex((h + 6) % 360, Math.max(0.35, accentSaturation * 0.84), Math.min(0.70, accentLightness + 0.07)));
+  root.style.setProperty("--color-accent-subtle", `hsla(${h}, 55%, 58%, 0.20)`);
 
-  // — 文字带色温，但不影响可读性 —
-  root.style.setProperty("--color-text-primary", hslToHex(h, Math.min(p * 0.06, 0.03), 0.88));
-  root.style.setProperty("--color-text-secondary", hslToHex(h, Math.min(p * 0.05, 0.025), 0.52));
-  root.style.setProperty("--color-text-tertiary", hslToHex(h, Math.min(p * 0.04, 0.02), 0.32));
+  // — 文字保留色温，同时达到稳定的桌面端可读层级 —
+  root.style.setProperty("--color-text-primary", hslToHex(h, Math.min(p * 0.05, 0.025), 0.93));
+  root.style.setProperty("--color-text-secondary", hslToHex(h, Math.min(p * 0.04, 0.02), 0.66));
+  root.style.setProperty("--color-text-tertiary", hslToHex(h, Math.min(p * 0.03, 0.015), 0.56));
 
   // — 阴影 —
-  root.style.setProperty("--color-shadow", `hsla(${h}, 25%, 0%, 0.55)`);
+  root.style.setProperty("--color-shadow", `hsla(${h}, 20%, 0%, 0.48)`);
 
   // — 滚动条明显 — 
-  root.style.setProperty("--color-scrollbar", `hsla(${h}, 55%, 60%, 0.30)`);
-  root.style.setProperty("--color-scrollbar-hover", `hsla(${h}, 60%, 65%, 0.50)`);
+  root.style.setProperty("--color-scrollbar", `hsla(${h}, 35%, 66%, 0.24)`);
+  root.style.setProperty("--color-scrollbar-hover", `hsla(${h}, 42%, 70%, 0.42)`);
 
   // — 发光 —
-  root.style.setProperty("--color-glow", `hsla(${h}, 65%, 55%, 0.30)`);
+  root.style.setProperty("--color-glow", `hsla(${h}, 55%, 58%, 0.24)`);
 }
 
 export function resetCssVars(): void {
@@ -196,6 +288,7 @@ export function resetCssVars(): void {
     "--color-border-strong",
     "--color-ring",
     "--color-accent",
+    "--color-on-accent",
     "--color-accent-secondary",
     "--color-accent-subtle",
     "--color-text-primary",

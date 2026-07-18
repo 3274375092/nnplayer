@@ -258,7 +258,7 @@ const accountHint = computed(() => {
           class="flex-1 px-3 py-2 text-sm rounded-lg transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
           :class="
             tab === t.key
-              ? 'bg-accent text-white shadow-lg shadow-accent/25 font-medium'
+              ? 'bg-accent text-on-accent shadow-lg shadow-accent/25 font-medium'
               : 'text-text-secondary hover:text-text-primary hover:bg-[rgba(255,255,255,0.04)]'
           "
           @click="switchTab(t.key as Tab)"

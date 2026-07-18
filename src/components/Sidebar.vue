@@ -467,7 +467,7 @@ onBeforeUnmount(() => {
       />
       <div
         v-else
-        class="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white text-xs shrink-0"
+        class="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-on-accent text-xs shrink-0"
       >
         {{ userStore.displayName.charAt(0).toUpperCase() }}
       </div>
@@ -499,7 +499,7 @@ onBeforeUnmount(() => {
       />
       <div
         v-else
-        class="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white text-sm"
+        class="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-on-accent text-sm"
         :title="userStore.displayName"
       >
         {{ userStore.displayName.charAt(0).toUpperCase() }}

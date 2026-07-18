@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useRoute } from "vue-router";
 import Sidebar from "@/components/Sidebar.vue";
 import PlayerBarFloating from "@/components/PlayerBarFloating.vue";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
@@ -10,6 +11,10 @@ import { useTauriBridge } from "@/composables/useTauriBridge";
 
 const desktopLyricsStore = useDesktopLyricsStore();
 const { setup, teardown } = useTauriBridge();
+const route = useRoute();
+
+const isLoginRoute = computed(() => route.name === "Login");
+const isNowPlayingRoute = computed(() => route.name === "NowPlaying");
 
 const isDesktopLyrics = computed(() => {
   try {
@@ -50,33 +55,109 @@ onBeforeUnmount(() => {
   </router-view>
 
   <!-- 主窗：完整布局 -->
-  <div v-else class="h-full flex bg-bg">
+  <div v-else class="h-full flex bg-bg overflow-hidden">
     <Sidebar class="shrink-0 mobile-sidebar-hidden" />
 
-    <main class="flex-1 overflow-y-auto">
-      <router-view v-slot="{ Component }">
-        <transition name="fade-slide" mode="out-in">
-          <component :is="Component" />
-        </transition>
-      </router-view>
-    </main>
+    <!-- 播放栏和页面共用同一个内容壳，因此始终相对侧栏之外的区域居中。 -->
+    <div
+      class="app-content-shell relative flex-1 min-w-0 h-full overflow-hidden"
+      :class="{
+        'app-content-shell--overlay': isNowPlayingRoute,
+        'app-content-shell--no-player': isLoginRoute,
+      }"
+    >
+      <main class="app-main overflow-y-auto">
+        <div class="route-stage">
+          <router-view v-slot="{ Component }">
+            <transition name="fade-slide">
+              <component :is="Component" />
+            </transition>
+          </router-view>
+        </div>
+      </main>
 
-    <PlayerBarFloating />
+      <PlayerBarFloating v-if="!isLoginRoute" />
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* 路由切换 fade + 轻微 slide */
+.app-content-shell {
+  --player-reserved-space: 100px;
+}
+
+/* 普通页面的滚动视口止于播放栏上方，内容不会从控件背后穿过。 */
+.app-main {
+  height: calc(100% - var(--player-reserved-space));
+  scroll-padding-bottom: 1rem;
+}
+
+/* 正在播放页自行保留悬浮栏安全区；登录页不显示播放栏。 */
+.app-content-shell--overlay .app-main,
+.app-content-shell--no-player .app-main {
+  height: 100%;
+}
+
+.route-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.route-stage > * {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+/* 新旧页面交叉淡入；离场页脱离文档流，避免 out-in 造成整页空白帧。 */
 .fade-slide-enter-active,
 .fade-slide-leave-active {
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
+
+.route-stage > .fade-slide-enter-active {
+  position: relative;
+  z-index: 1;
+}
+
+.route-stage > .fade-slide-leave-active {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  pointer-events: none;
+}
+
 .fade-slide-enter-from {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(6px);
 }
+
 .fade-slide-leave-to {
   opacity: 0;
-  transform: translateY(-8px);
+  transform: translateY(-4px);
+}
+
+@media (max-width: 768px) {
+  .app-content-shell {
+    --player-reserved-space: 76px;
+  }
+
+  /* 旧的逐页移动端留白由 app-main 统一接管，避免叠加成双倍空白。 */
+  .app-main :deep(.mobile-content-padding) {
+    padding-bottom: 0 !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-slide-enter-active,
+  .fade-slide-leave-active {
+    transition: opacity 0.01ms linear;
+  }
+
+  .fade-slide-enter-from,
+  .fade-slide-leave-to {
+    transform: none;
+  }
 }
 </style>

@@ -27,6 +27,10 @@ const props = withDefaults(
   }>(),
   { panelHeight: 400, lineHeight: 36 },
 );
+const LYRIC_CHROME_HEIGHT = 40;
+const lyricViewportHeight = computed(() =>
+  Math.max(0, props.panelHeight - LYRIC_CHROME_HEIGHT),
+);
 
 const player = usePlayerStore();
 const {
@@ -76,6 +80,23 @@ function measureAll() {
   lineHeights.value = heights;
 }
 
+function updateMeasuredEntries(entries: ResizeObserverEntry[]) {
+  let next = lineHeights.value;
+  let changed = false;
+
+  for (const entry of entries) {
+    const index = Number((entry.target as HTMLElement).dataset.lyricIndex);
+    if (!Number.isInteger(index) || index < 0) continue;
+    const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+    if (Math.abs((next[index] ?? 0) - height) < 0.25) continue;
+    if (!changed) next = [...next];
+    next[index] = height;
+    changed = true;
+  }
+
+  if (changed) lineHeights.value = next;
+}
+
 function observeAllLines() {
   if (!ro) return;
   ro.disconnect();
@@ -85,7 +106,7 @@ function observeAllLines() {
 }
 
 onMounted(() => {
-  ro = new ResizeObserver(measureAll);
+  ro = new ResizeObserver(updateMeasuredEntries);
   releaseRealtimeUpdates = acquireRealtimeUpdates();
   // 全局引擎可能早已加载完歌词，此时 ref 回调先于 onMounted 执行，
   // 必须主动补绑现有节点。
@@ -135,7 +156,7 @@ const targetY = computed(() => {
   let offset = 0;
   for (let i = 0; i < idx; i++) offset += fallback(i);
   const cur = fallback(idx);
-  return props.panelHeight / 2 - cur / 2 - offset;
+  return lyricViewportHeight.value / 2 - cur / 2 - offset;
 });
 
 const { value: springY, snap: snapSpringY } = useSpringValue(targetY);
@@ -167,6 +188,13 @@ function filterFor(idx: number): string {
     : "none";
 }
 
+// 仅用于视觉层级：把距离封顶在 3，避免远端歌词在换行时反复更新 DOM。
+function visualDistanceFor(idx: number): number {
+  const cur = activeLineIndex.value;
+  if (cur < 0) return 3;
+  return Math.min(3, Math.abs(idx - cur));
+}
+
 const renderedKaraokeTokens = computed(() => {
   const tokens = karaokeTokens.value;
   if (tokens.length === 0) return [];
@@ -186,14 +214,14 @@ const hasSong = computed(() => player.currentSong !== null);
 <template>
   <div
     ref="containerRef"
-    class="card p-4 w-full"
+    class="lyric-panel p-4 w-full"
     :style="{ minHeight: `${panelHeight}px` }"
   >
-    <div class="flex items-center justify-between mb-2">
-      <h3 class="text-sm font-medium text-text-secondary">歌词</h3>
+    <div class="lyric-panel__header flex items-center justify-between mb-2">
+      <h3 class="lyric-panel__title text-sm font-medium">歌词</h3>
       <div
         v-if="hasSong"
-        class="text-xs text-text-secondary truncate ml-3"
+        class="lyric-panel__song text-xs truncate ml-3"
       >
         {{ player.currentSong?.name }}
       </div>
@@ -203,21 +231,21 @@ const hasSong = computed(() => player.currentSong !== null);
     <div
       v-if="!hasSong"
       class="flex items-center justify-center text-text-secondary text-sm"
-      :style="{ height: `${panelHeight - 40}px` }"
+      :style="{ height: `${lyricViewportHeight}px` }"
     >
       暂未播放歌曲
     </div>
     <div
       v-else-if="loading"
       class="flex items-center justify-center text-text-secondary text-sm"
-      :style="{ height: `${panelHeight - 40}px` }"
+      :style="{ height: `${lyricViewportHeight}px` }"
     >
       歌词加载中…
     </div>
     <div
       v-else-if="error"
       class="flex flex-col gap-2 items-center justify-center text-accent text-sm"
-      :style="{ height: `${panelHeight - 40}px` }"
+      :style="{ height: `${lyricViewportHeight}px` }"
     >
       <span>{{ error }}</span>
       <button
@@ -231,7 +259,7 @@ const hasSong = computed(() => player.currentSong !== null);
     <div
       v-else-if="!hasLyric"
       class="flex items-center justify-center text-text-secondary text-sm"
-      :style="{ height: `${panelHeight - 40}px` }"
+      :style="{ height: `${lyricViewportHeight}px` }"
     >
       暂无歌词
     </div>
@@ -239,29 +267,37 @@ const hasSong = computed(() => player.currentSong !== null);
     <!-- 歌词内容（视口 + 弹簧平移） -->
     <div
       v-else
-      class="relative overflow-hidden"
-      :style="{ height: `${panelHeight - 40}px` }"
+      class="lyric-viewport relative overflow-hidden"
+      :style="{ height: `${lyricViewportHeight}px` }"
     >
       <div
         class="absolute left-0 right-0 will-change-transform"
         :style="{ transform: `translate3d(0, ${translateY}px, 0)` }"
       >
-        <div
+        <button
           v-for="(line, idx) in lines"
           :key="`${line.time}-${idx}`"
           v-memo="[
             line.text,
             line.translation,
             idx === activeLineIndex,
+            visualDistanceFor(idx),
             filterFor(idx),
             idx === activeLineIndex ? progressMs : 0,
           ]"
           :ref="(el) => setLineRef(el, idx)"
+          :data-lyric-index="idx"
+          type="button"
+          :tabindex="Math.abs(idx - activeLineIndex) <= 2 ? 0 : -1"
           class="lyric-line px-2 cursor-pointer"
-          :class="{
-            'is-active': idx === activeLineIndex,
-            'has-karaoke': idx === activeLineIndex && renderedKaraokeTokens.length > 0,
-          }"
+          :class="[
+            `distance-${visualDistanceFor(idx)}`,
+            {
+              'is-active': idx === activeLineIndex,
+              'has-karaoke': idx === activeLineIndex && renderedKaraokeTokens.length > 0,
+            },
+          ]"
+          :aria-current="idx === activeLineIndex ? 'true' : undefined"
           :style="{ filter: filterFor(idx) }"
           @click="onLineClick(line.time)"
         >
@@ -280,6 +316,7 @@ const hasSong = computed(() => player.currentSong !== null);
                 >{{ token.char }}</span>
               </span>
             </span>
+            <span class="sr-only">{{ line.text }}</span>
           </template>
           <span v-else-if="line.text">{{ line.text }}</span>
           <span v-else class="opacity-50">·</span>
@@ -289,33 +326,147 @@ const hasSong = computed(() => player.currentSong !== null);
             class="lyric-translation"
             :class="{ 'is-active-translation': idx === activeLineIndex }"
           >{{ line.translation }}</span>
-        </div>
+        </button>
       </div>
 
       <!-- 中央分割线（视觉提示） -->
       <div
-        class="pointer-events-none absolute left-0 right-0 top-1/2 -translate-y-1/2 h-px bg-accent/10"
+        class="lyric-focus-marker pointer-events-none absolute left-0 top-1/2 -translate-y-1/2"
       />
     </div>
   </div>
 </template>
 
 <style scoped>
+.lyric-panel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, transparent);
+  border-radius: 1.35rem;
+  background:
+    radial-gradient(
+      circle at 14% -8%,
+      color-mix(in srgb, var(--color-accent) 10%, transparent),
+      transparent 38%
+    ),
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0.018) 52%,
+      rgba(0, 0, 0, 0.1)
+    );
+  background-color: color-mix(in srgb, var(--color-card) 88%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.065),
+    0 18px 48px color-mix(in srgb, var(--color-shadow) 44%, transparent);
+}
+
+.lyric-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    rgba(255, 255, 255, 0.03),
+    transparent 28%,
+    transparent 72%,
+    rgba(255, 255, 255, 0.018)
+  );
+}
+
+.lyric-panel__header {
+  position: relative;
+  z-index: 1;
+  min-height: 1.5rem;
+}
+
+.lyric-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: color-mix(in srgb, var(--color-text-primary) 74%, transparent);
+  letter-spacing: 0.04em;
+}
+
+.lyric-panel__title::before {
+  content: "";
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-glow);
+}
+
+.lyric-panel__song {
+  max-width: 62%;
+  color: color-mix(in srgb, var(--color-text-primary) 48%, transparent);
+}
+
+.lyric-viewport {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
+}
+
 /* 行基础样式：允许长歌词换行，真实高度由 ResizeObserver 参与居中计算。 */
 .lyric-line {
+  display: block;
+  width: 100%;
   min-height: v-bind(lineHeight + 'px');
+  border: 0;
   line-height: 1.6;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
-  color: var(--color-text-secondary);
-  transition: color 0.3s linear, filter 0.3s linear, font-size 0.2s linear;
+  border-radius: 0.75rem;
+  color: color-mix(in srgb, var(--color-text-primary) 46%, transparent);
+  font-family: inherit;
+  font-size: 0.975rem;
+  font-weight: 500;
+  text-align: left;
+  transition:
+    color 0.28s linear,
+    filter 0.3s linear,
+    background-color 0.2s ease;
+}
+
+.lyric-line.distance-2 {
+  color: color-mix(in srgb, var(--color-text-primary) 58%, transparent);
+}
+
+.lyric-line.distance-1 {
+  color: color-mix(in srgb, var(--color-text-primary) 74%, transparent);
+}
+
+.lyric-line:not(.is-active):hover {
+  color: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
+  background-color: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
 
 .lyric-line.is-active {
-  color: var(--color-text-primary);
-  font-weight: 500;
-  font-size: 1rem;
+  color: color-mix(in srgb, var(--color-text-primary) 96%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-accent) 8%, transparent),
+    transparent 78%
+  );
+  font-weight: 600;
   filter: none !important;
 }
 
@@ -341,14 +492,14 @@ const hasSong = computed(() => player.currentSong !== null);
   display: inline-block;
   color: var(--color-accent);
   clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
-  text-shadow: 0 0 8px var(--color-glow);
+  text-shadow: 0 0 10px var(--color-glow);
 }
 
 .lyric-char__pending {
   position: absolute;
   inset: 0;
   display: inline-block;
-  color: var(--color-text-secondary);
+  color: color-mix(in srgb, var(--color-text-primary) 62%, transparent);
   clip-path: inset(0 0 0 var(--char-pct, 0%));
   pointer-events: none;
 }
@@ -368,15 +519,47 @@ const hasSong = computed(() => player.currentSong !== null);
 /* 翻译行：小字号、半透明，当前行更亮。必须显式设 color 覆盖 .is-active 的 transparent */
 .lyric-translation {
   display: block;
-  font-size: 0.8rem;
-  font-style: italic;
-  color: var(--color-text-secondary);
-  opacity: 0.4;
-  margin-top: 2px;
+  font-size: 0.78rem;
+  font-style: normal;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  opacity: 0.3;
+  margin-top: 3px;
   transition: opacity 0.3s;
 }
 
+.distance-2 .lyric-translation {
+  opacity: 0.38;
+}
+
+.distance-1 .lyric-translation {
+  opacity: 0.52;
+}
+
 .lyric-translation.is-active-translation {
-  opacity: 0.65;
+  opacity: 0.68;
+}
+
+.lyric-focus-marker {
+  z-index: 2;
+  width: 2px;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--color-accent) 28%,
+    var(--color-accent) 72%,
+    transparent
+  );
+  box-shadow: 0 0 10px var(--color-glow);
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lyric-line,
+  .lyric-translation {
+    transition: none;
+  }
 }
 </style>

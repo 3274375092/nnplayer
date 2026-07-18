@@ -20,12 +20,13 @@ export interface LyricWindowPrefs {
 }
 
 const STORAGE_KEY = "nnplayer.lyricWindow.prefs";
+const PREFS_SCHEMA_VERSION = 2;
 const DEFAULTS: LyricWindowPrefs = {
   fontSize: 32,
   opacity: 0.95,
   textColor: "rgba(255,255,255,0.95)",
   locked: false,
-  showPrevNext: true,
+  showPrevNext: false,
 };
 
 function normalize(value: unknown, base: LyricWindowPrefs = DEFAULTS): LyricWindowPrefs {
@@ -56,7 +57,15 @@ function load(): LyricWindowPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
-    return normalize(JSON.parse(raw));
+    const parsed: unknown = JSON.parse(raw);
+    const next = normalize(parsed);
+    const storedVersion = parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>).schemaVersion
+      : undefined;
+    // v2 将默认桌面歌词收敛为单行。旧版没有显式开关，持久化的 true
+    // 只是当时的默认值，不能视为用户主动选择。
+    if (storedVersion !== PREFS_SCHEMA_VERSION) next.showPrevNext = false;
+    return next;
   } catch {
     return { ...DEFAULTS };
   }
@@ -64,7 +73,10 @@ function load(): LyricWindowPrefs {
 
 function save(prefs: LyricWindowPrefs) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      schemaVersion: PREFS_SCHEMA_VERSION,
+      ...prefs,
+    }));
   } catch {
     /* quota exceeded 等静默 */
   }

@@ -24,6 +24,7 @@ useWindowGeometry(); // 防抖保存窗口位置/大小
 
 const unlistens: UnlistenFn[] = [];
 const toolbarVisible = ref(false);
+const rootRef = ref<HTMLElement | null>(null);
 let disposed = false;
 
 // =============== 本地绝对媒体时钟 + 独立时间轴定位 ===============
@@ -195,8 +196,11 @@ const cssVars = computed(() => ({
 
 const currentWrapRef = ref<HTMLElement | null>(null);
 const currentTextRef = ref<HTMLElement | null>(null);
+const translationTextRef = ref<HTMLElement | null>(null);
 const currentLineScale = ref(1);
+const translationLineScale = ref(1);
 let lyricResizeObserver: ResizeObserver | null = null;
+const TEXT_EFFECT_SAFE_WIDTH_PX = 40;
 
 /**
  * 桌面歌词保持单行展示。文本超过窗口可用宽度时只缩放当前行的视觉尺寸，
@@ -210,7 +214,11 @@ function fitCurrentLine() {
     return;
   }
 
-  const availableWidth = wrapper.clientWidth;
+  // 同时扣除容器 padding、描边和 6px 阴影的两侧安全区。
+  const availableWidth = Math.max(
+    0,
+    wrapper.clientWidth - TEXT_EFFECT_SAFE_WIDTH_PX,
+  );
   const naturalWidth = text.scrollWidth;
   if (availableWidth <= 0 || naturalWidth <= 0) {
     currentLineScale.value = 1;
@@ -218,14 +226,32 @@ function fitCurrentLine() {
   }
 
   currentLineScale.value = Math.min(1, availableWidth / naturalWidth);
+
+  const translation = translationTextRef.value;
+  if (!translation) {
+    translationLineScale.value = 1;
+    return;
+  }
+  const translationWidth = translation.scrollWidth;
+  translationLineScale.value = translationWidth > 0
+    ? Math.min(1, availableWidth / translationWidth)
+    : 1;
 }
 
 const currentTextStyle = computed(() => ({
   transform: `scale(${currentLineScale.value})`,
 }));
+const translationTextStyle = computed(() => ({
+  transform: `scale(${translationLineScale.value})`,
+}));
 
 watch(
-  () => [visible.value.current?.text, prefs.value.fontSize],
+  () => [
+    visible.value.current?.text,
+    visible.value.current?.translation,
+    prefs.value.fontSize,
+    toolbarVisible.value,
+  ],
   () => void nextTick(fitCurrentLine),
   { flush: "post" },
 );
@@ -333,6 +359,22 @@ function onDoubleClick(e: MouseEvent) {
   prefs.value.locked = !prefs.value.locked;
 }
 
+function onMouseLeave() {
+  const focused = document.activeElement;
+  const toolbar = rootRef.value?.querySelector<HTMLElement>("[data-toolbar]");
+  if (!focused || !toolbar?.contains(focused)) {
+    if (focused === rootRef.value) rootRef.value?.blur();
+    toolbarVisible.value = false;
+  }
+}
+
+function onFocusOut(e: FocusEvent) {
+  const next = e.relatedTarget;
+  if (!(next instanceof Node) || !rootRef.value?.contains(next)) {
+    toolbarVisible.value = false;
+  }
+}
+
 /** 关闭桌面歌词窗口。
  * 用户显式点击关闭按钮 → 直接 destroy 绕过 close-requested 路径。
  * Tauri v2 中只要注册了 close-requested 监听器就会自动 prevent_close，
@@ -367,30 +409,35 @@ function onFontSizeChange(delta: number) {
 
 <template>
   <div
-    class="lyric-root flex flex-col items-center justify-center h-screen select-none"
+    ref="rootRef"
+    class="lyric-root relative flex flex-col items-center justify-center h-screen select-none"
+    :class="{ 'toolbar-visible': toolbarVisible }"
     :style="cssVars"
+    tabindex="0"
+    aria-label="桌面歌词，按 Tab 可调整显示设置"
     @mousedown="onMouseDown"
     @dblclick="onDoubleClick"
     @mouseenter="toolbarVisible = true"
-    @mouseleave="toolbarVisible = false"
+    @mouseleave="onMouseLeave"
+    @focusin="toolbarVisible = true"
+    @focusout="onFocusOut"
   >
     <!-- 歌词内容层（受 --lyric-opacity 影响；工具栏在同层但在外） -->
     <div class="lyric-content flex flex-col items-center justify-center">
       <!-- 上一行（小字号、半透明） -->
       <p
         v-if="visible.prev && prefs.showPrevNext"
-        class="prev-line text-white/40 text-center max-w-full truncate"
-        style="text-shadow: 0 0 1px rgba(0, 0, 0, 0.18)"
+        class="context-line prev-line truncate"
       >
         {{ visible.prev.text }}
       </p>
-      <p v-else-if="prefs.showPrevNext" class="prev-line"></p>
 
       <!-- 当前行（卡拉OK 逐字） -->
       <div ref="currentWrapRef" class="current-wrap">
         <h1
           v-if="visible.current && chars.length > 0"
           class="current-lyric text-transparent font-semibold leading-tight text-center"
+          :aria-label="visible.current.text"
         >
           <span
             ref="currentTextRef"
@@ -426,35 +473,36 @@ function onFontSizeChange(delta: number) {
         </h1>
         <h1
           v-else
-          class="current-lyric text-white/40 font-semibold leading-tight text-center"
-          style="text-shadow: 0 0 1px rgba(0, 0, 0, 0.18)"
+          class="current-lyric placeholder-lyric font-semibold leading-tight text-center"
         >
           {{ placeholderText }}
         </h1>
         <!-- 翻译行（外文歌双语显示） -->
         <p
           v-if="visible.current && visible.current.translation"
-          class="translation-line text-center max-w-full truncate"
+          class="translation-line text-center"
         >
-          {{ visible.current.translation }}
+          <span
+            ref="translationTextRef"
+            class="translation-text"
+            :style="translationTextStyle"
+          >{{ visible.current.translation }}</span>
         </p>
       </div>
 
       <!-- 下一行（中字号、半透明） -->
       <p
         v-if="visible.next && prefs.showPrevNext"
-        class="next-line text-white/70 text-center max-w-full truncate"
-        style="text-shadow: 0 0 1px rgba(0, 0, 0, 0.18)"
+        class="context-line next-line truncate"
       >
         {{ visible.next.text }}
       </p>
-      <p v-else-if="prefs.showPrevNext" class="next-line"></p>
 
       <!-- 歌曲信息 -->
       <p
         v-if="hasSong"
-        class="song-info text-white/50 text-center max-w-full truncate"
-        style="text-shadow: 0 0 1px rgba(0, 0, 0, 0.15)"
+        class="song-info truncate"
+        :class="{ 'song-info--visible': toolbarVisible }"
       >
         {{ state.songName }}<span v-if="state.artists" class="ml-2">— {{ state.artists }}</span>
       </p>
@@ -464,12 +512,16 @@ function onFontSizeChange(delta: number) {
     <div
       v-show="toolbarVisible"
       data-toolbar
-      class="toolbar absolute top-2 right-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-black/60 text-white/80 text-xs"
+      class="toolbar absolute top-2 right-2 flex items-center rounded-lg bg-black/60 text-white/80 text-xs"
+      role="toolbar"
+      aria-label="桌面歌词显示设置"
     >
       <!-- 字号 - -->
       <button
+        type="button"
         class="toolbar-btn"
         title="减小字号"
+        aria-label="减小字号"
         @click="onFontSizeChange(-2)"
         @mousedown.stop
       >
@@ -480,8 +532,10 @@ function onFontSizeChange(delta: number) {
 
       <!-- 字号 + -->
       <button
+        type="button"
         class="toolbar-btn"
         title="增大字号"
+        aria-label="增大字号"
         @click="onFontSizeChange(2)"
         @mousedown.stop
       >
@@ -500,16 +554,36 @@ function onFontSizeChange(delta: number) {
         :value="prefs.opacity"
         class="opacity-slider w-14 h-1 accent-white/80"
         title="不透明度"
+        aria-label="桌面歌词不透明度"
         @input="prefs.opacity = Number(($event.target as HTMLInputElement).value)"
       />
 
       <!-- 分隔线 -->
       <span class="w-px h-3.5 bg-white/20"></span>
 
+      <!-- 上下文行开关 -->
+      <button
+        type="button"
+        class="toolbar-btn"
+        :class="{ 'is-active': prefs.showPrevNext }"
+        :aria-pressed="prefs.showPrevNext"
+        :title="prefs.showPrevNext ? '隐藏上下行' : '显示上下行'"
+        :aria-label="prefs.showPrevNext ? '隐藏上下行' : '显示上下行'"
+        @click="prefs.showPrevNext = !prefs.showPrevNext"
+        @mousedown.stop
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round"><line x1="5" y1="7" x2="19" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="5" y1="17" x2="19" y2="17"/></svg>
+      </button>
+
+      <span class="w-px h-3.5 bg-white/20"></span>
+
       <!-- 锁定开关 -->
       <button
+        type="button"
         class="toolbar-btn"
         :title="prefs.locked ? '已锁定，双击解锁' : '已解锁，可拖动'"
+        :aria-label="prefs.locked ? '解锁桌面歌词' : '锁定桌面歌词'"
+        :aria-pressed="prefs.locked"
         @click="prefs.locked = !prefs.locked"
         @mousedown.stop
       >
@@ -523,7 +597,7 @@ function onFontSizeChange(delta: number) {
       <span class="w-px h-3.5 bg-white/20"></span>
 
       <!-- 关闭 -->
-      <button class="toolbar-btn" title="关闭桌面歌词" @click="onClose" @mousedown.stop>
+      <button type="button" class="toolbar-btn" title="关闭桌面歌词" aria-label="关闭桌面歌词" @click="onClose" @mousedown.stop>
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
@@ -558,18 +632,44 @@ body,
 .lyric-root {
   width: 100%;
   max-width: 100vw;
+  min-width: 0;
   overflow: hidden;
   box-sizing: border-box;
   background: transparent;
   border: none;
   box-shadow: none;
+  outline: none;
+}
+
+/* 工具条出现时为其让出水平安全区，避免在 800×120 窗口内盖住长歌词。 */
+.lyric-root.toolbar-visible .lyric-content {
+  padding-right: 300px;
+}
+
+.context-line {
+  position: absolute;
+  z-index: 1;
+  max-width: 42%;
+  margin: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: clamp(11px, calc(var(--lyric-font-size, 28px) * 0.42), 16px);
+  font-weight: 500;
+  line-height: 1.15;
+  pointer-events: none;
 }
 
 .prev-line {
-  font-size: calc(var(--lyric-font-size, 28px) * 0.45);
-  margin-bottom: 0.1rem;
-  min-height: calc(var(--lyric-font-size, 28px) * 0.45);
-  line-height: 1.15;
+  top: 8px;
+  left: 18px;
+  text-align: left;
+}
+
+.next-line {
+  right: 18px;
+  bottom: 8px;
+  color: rgba(255, 255, 255, 0.74);
+  text-align: right;
 }
 
 .current-wrap {
@@ -577,47 +677,89 @@ body,
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  min-height: 0;
   align-items: center;
+  justify-content: center;
   flex-direction: column;
-  overflow: hidden;
-  min-height: calc(var(--lyric-font-size, 28px) * 1.1);
+  padding: 8px 10px;
+  overflow: visible;
+  box-sizing: border-box;
+  gap: 2px;
 }
 
 .current-lyric {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  overflow: hidden;
+  margin: 0;
+  padding: 4px 0;
+  overflow: visible;
   font-size: var(--lyric-font-size, 28px);
   color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
-}
-
-.next-line {
-  font-size: calc(var(--lyric-font-size, 28px) * 0.5);
-  margin-top: 0.1rem;
-  min-height: calc(var(--lyric-font-size, 28px) * 0.5);
-  line-height: 1.15;
+  line-height: 1.06;
 }
 
 .song-info {
-  font-size: calc(var(--lyric-font-size, 28px) * 0.3);
-  margin-top: 0.15rem;
+  position: absolute;
+  z-index: 3;
+  bottom: 8px;
+  left: 18px;
+  max-width: 38%;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: clamp(10px, calc(var(--lyric-font-size, 28px) * 0.3), 12px);
+  line-height: 1.15;
+  text-align: left;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease;
+  pointer-events: none;
+}
+
+.song-info--visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* 翻译行（外文歌双语）：小字号、半透，位于当前行与歌曲信息之间 */
 .translation-line {
-  font-size: calc(var(--lyric-font-size, 28px) * 0.38);
-  color: rgba(255, 255, 255, 0.42);
-  text-shadow: 0 0 1px rgba(0, 0, 0, 0.12);
-  margin-top: 0.06rem;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  overflow: visible;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: clamp(11px, calc(var(--lyric-font-size, 28px) * 0.38), 16px);
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.translation-text {
+  display: inline-block;
+  white-space: nowrap;
+  transform-origin: center center;
+  transition: transform 0.15s ease-out;
+}
+
+.context-line,
+.translation-line,
+.song-info {
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.96),
+    0 0 5px rgba(0, 0, 0, 0.78);
+  -webkit-text-stroke: 0.3px rgba(0, 0, 0, 0.76);
+  paint-order: stroke fill;
 }
 
 /* 滑块控制的整窗歌词不透明度：只作用于歌词内容层，不影响工具栏背景 */
 .lyric-content {
+  position: relative;
   width: 100%;
   max-width: 100%;
+  height: 100%;
   min-width: 0;
-  padding-inline: 16px;
+  padding: 7px 22px;
   overflow: hidden;
   box-sizing: border-box;
   opacity: var(--lyric-opacity, 1);
@@ -637,9 +779,12 @@ body,
   display: inline-block;
   white-space: nowrap;
   color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
-  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
   transform-origin: center center;
   transition: transform 0.15s ease-out;
+}
+
+.placeholder-lyric {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 /* 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除。
@@ -653,7 +798,6 @@ body,
 .lyric-char__sung {
   display: inline-block;
   color: var(--color-accent, #E85D3A);
-  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
   clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
 }
 
@@ -661,10 +805,21 @@ body,
   position: absolute;
   inset: 0;
   display: inline-block;
-  color: rgba(255, 255, 255, 0.88);
-  text-shadow: 0 0 1px rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.94);
   pointer-events: none;
   clip-path: inset(0 0 0 var(--char-pct, 0%));
+}
+
+.plain-current-text,
+.placeholder-lyric,
+.lyric-char__sung,
+.lyric-char__pending {
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.98),
+    0 0 6px rgba(0, 0, 0, 0.84),
+    0 0 1px rgba(255, 255, 255, 0.2);
+  -webkit-text-stroke: 0.55px rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
 }
 
 .lyric-karaoke:dir(rtl) .lyric-char__sung {
@@ -676,6 +831,18 @@ body,
 }
 
 /* 工具条按钮样式 */
+.toolbar {
+  z-index: 4;
+  max-width: calc(100% - 16px);
+  gap: 4px;
+  padding: 6px 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 8px 24px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
 .toolbar-btn {
   display: flex;
   align-items: center;
@@ -692,6 +859,17 @@ body,
 
 .toolbar-btn:hover {
   background: rgba(255, 255, 255, 0.15);
+}
+
+.toolbar-btn.is-active {
+  color: #fff;
+  background: color-mix(in srgb, var(--color-accent) 58%, transparent);
+}
+
+.toolbar-btn:focus-visible,
+.opacity-slider:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 
 /* 不透明度滑块 */
