@@ -1,168 +1,195 @@
+<div align="center">
+
+<img src="./app-icon.svg" width="96" height="96" alt="nnplayer 图标" />
+
 # nnplayer
 
-> 基于 Tauri v2 + Rust + Vue 3 + TypeScript 的网易云音乐桌面客户端。
-> Rust 端通过本地 crate `ncm-api-rs` 调用网易云 API,前端用 `@tauri-apps/api` 通过 `invoke` 桥接。
-> 主题色由当前播放的封面自动抽取(柔和米黄 / 暖橘红 accent 体系)。
+一个使用 Tauri v2、Rust、Vue 3 与 TypeScript 构建的网易云音乐桌面播放器。
 
-![NowPlaying 全屏播放页](screenshots/now-playing.png)
+[下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [提交问题](https://github.com/3274375092/nnplayer/issues)
 
-## 预览
+![Version](https://img.shields.io/badge/version-0.1.24-E85D3A?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
 
-| 每日推荐 + 歌词面板 | 我的歌单(网格) | 播放队列抽屉 |
+</div>
+
+> [!IMPORTANT]
+> nnplayer 是非官方第三方客户端，与网易云音乐及其关联公司无关。项目仅供学习与个人使用，请遵守所在地法律法规及网易云音乐服务条款。
+
+![正在播放页面](./screenshots/now-playing.png)
+
+## 功能
+
+- 每日推荐、歌曲搜索、搜索建议、个人歌单与歌单详情
+- 扫码、账号密码、手机验证码三种登录方式，并提供高级 Cookie 登录入口
+- 播放队列、进度跳转、音量控制、列表循环、单曲循环与随机播放
+- 系统媒体键、托盘菜单和全局快捷键控制；关闭主窗口后继续驻留托盘
+- LRC 行级歌词、YRC 逐字卡拉 OK、翻译歌词与基于音频时钟的精确同步
+- 主界面长歌词自动换行；桌面歌词长行自动缩放，不产生横向滚动条
+- 独立透明桌面歌词窗口，支持置顶、拖动、锁定、字号和不透明度调节
+- 根据当前封面提取主题色，播放界面随歌曲动态变化
+- 请求去重与有界缓存、歌曲地址预取、长列表虚拟化和按显示尺寸加载封面
+- 登录会话隔离：切换账号或退出时清理旧请求、缓存与媒体源
+
+## 界面预览
+
+| 每日推荐 | 我的歌单 | 播放队列 |
 | --- | --- | --- |
-| ![](screenshots/daily-recommend.png) | ![](screenshots/my-playlists.png) | ![](screenshots/queue-drawer.png) |
+| ![每日推荐](./screenshots/daily-recommend.png) | ![我的歌单](./screenshots/my-playlists.png) | ![播放队列](./screenshots/queue-drawer.png) |
 
-## 特性
+## 快捷键
 
-- **三种登录方式**:网易云 App 扫码 / 账号密码 / 手机验证码(60s 倒计时),会话双份持久化(tauri-plugin-store + session.toml)
-- **音频播放**:单例 `<audio>` 元素,MediaSession 同步,系统媒体键可控制
-- **歌词**:LRC 解析 + YRC 逐字卡拉OK + 弹簧物理滚动(Verlet 积分)+ 行间距离模糊 + 桌面歌词独立窗口(透明背景、always-on-top)
-- **主题**:封面主色自动提取(0 依赖 HSL 桶分频次),改写 6 个 `--color-*` CSS 变量
-- **浮层播放器**:720px 居中浮层 64px 高,`bg-card/85 backdrop-blur-xl` 玻璃感
-- **桌面集成**:托盘菜单 + 全局快捷键(`Ctrl+Alt+P/←/→/L`)+ 窗口位置/大小自动持久化
-- **歌单/搜索/每日推荐**:鉴权接口 + 骨架屏加载 + 搜索建议 500ms 防抖
-
-## 技术栈
-
-| 层 | 选型 |
+| 快捷键 | 功能 |
 | --- | --- |
-| 桌面壳 | Tauri v2 (`default-features = false`, `wry` + `tray-icon` + `image-png`) |
-| 后端 | Rust 2021 edition,`tokio` 异步,`serde_json` 抽 NCM 响应 |
-| NCM API | 本地 crate `../ncm-api-rs`(处理 weapi/eapi 加密 + Set-Cookie 捕获) |
-| 前端 | Vue 3.5 + TypeScript 5.6 + Pinia 2 + Vue Router 4 + Vite 5 |
-| 样式 | Tailwind 3.4(CSS 变量驱动主题色,`tailwind.config.js` 不写 hex) |
-| 图标 | lucide-vue-next |
-| 构建 | `vue-tsc` 类型检查 + `vite build` 前端,`cargo build --release` Rust |
+| `Ctrl + Alt + P` | 播放 / 暂停 |
+| `Ctrl + Alt + ←` | 上一首 |
+| `Ctrl + Alt + →` | 下一首 |
+| `Ctrl + Alt + L` | 显示 / 隐藏桌面歌词 |
 
-## 开发
+## 下载与使用
 
-### 环境
+当前发布流程面向 Windows x86_64，主要在 Windows 11 上测试。运行前请确保系统已安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。
 
-- Node.js ≥ 18
-- Rust stable(2021 edition)
-- Windows 11 + WebView2(其他平台未测试,代码里 tray 用了 `tauri::tray`)
+1. 前往 [Releases](https://github.com/3274375092/nnplayer/releases/latest) 下载最新的 NSIS 安装包。
+2. 安装并启动 nnplayer。
+3. 使用网易云音乐 App 扫码，或通过账号、手机验证码登录。
 
-### 安装与运行
+部分歌曲是否能够播放由账号权限、版权区域和网易云音乐接口状态决定。
 
-```bash
-npm install                # 安装前端依赖
-npm run tauri dev          # 一条命令起: Vite dev server + Cargo 编译 + Tauri 窗口
-                           # 前端 HMR 在 1420/1421,Rust 改动自动重编译
+## 本地开发
+
+### 环境要求
+
+- Node.js 20 LTS
+- Rust stable
+- Windows 下的 Tauri 开发依赖：WebView2、Microsoft C++ Build Tools
+
+完整系统依赖请参考 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)。
+
+### 启动项目
+
+```powershell
+git clone https://github.com/3274375092/nnplayer.git
+cd nnplayer
+npm ci
+npm run tauri dev
 ```
 
-只跑前端不开窗口(便于快速改 UI):
+`ncm-api-rs` 通过 Cargo 路径依赖直接编译进应用，正常开发和运行 nnplayer 不需要额外启动 API 服务。
 
-```bash
-npm run dev                # 监听 http://localhost:1420
+只调试前端界面时可以运行：
+
+```powershell
+npm run dev
 ```
 
-只检查 Rust 类型(不重链接):
+该命令只启动 Vite；登录、播放等依赖 Tauri `invoke` 的功能需要在完整桌面环境中调试。
 
-```bash
-cd src-tauri
-cargo check
-cargo clippy               # 推荐:写完逻辑跑一次
+### 检查与测试
+
+```powershell
+# TypeScript 类型检查与前端生产构建
+npm run build
+
+# 歌词解析、对齐和时间轴回归测试
+npm run test:lyrics
+
+# Rust 检查
+cargo check --manifest-path src-tauri/Cargo.toml
+
+# Rust 格式检查
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 ```
 
-### 构建发布
+### 构建安装包
 
-```bash
-npm run build              # vue-tsc 类型检查 + vite 打到 dist/
-npm run tauri build        # 全套: 前端构建 + cargo build --release + NSIS 安装包
-                           # 产物在 src-tauri/target/release/bundle/nsis/
+```powershell
+npm run tauri build
 ```
 
-> **NSIS 跨盘问题**: NSIS bundler 把文件解压到 `%TEMP%` 再 MoveFile 到 D 盘,Win11
-> 偶尔会报 `os error 17`。**绕过办法**: 复制 `src-tauri/target/release/nnplayer.exe` 单文件分发,免安装。
+Windows 安装包默认输出到 `src-tauri/target/release/bundle/nsis/`。
 
 ## 架构
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Webview (Chromium / WebView2)                           │
-│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────┐  │
-│  │ Vue 视图层   │  │ Pinia Store │  │ Composables      │  │
-│  │ views/      │  │ user/player │  │ useNcmApi (invoke│  │
-│  │ components/ │  │ /theme/...  │  │ useAudioPlayer   │  │
-│  └─────────────┘  └─────────────┘  │ useLyric         │  │
-│                                    │ useSpringScroll  │  │
-│                                    └────────┬─────────┘  │
-└─────────────────────────────────────────────┬────────────┘
-                       invoke('xxx') / listen('yyy')
-┌─────────────────────────────────────────────┴────────────┐
-│  Rust (tauri::Builder)                                   │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ commands/* (auth, music, user, lyric)               │ │
-│  │  - 抽 ApiResponse.body → 精简 DTO (camelCase)       │ │
-│  │  - 全 #[tauri::command] 返回 AppResult<T>           │ │
-│  └────────────────────────────┬────────────────────────┘ │
-│  ┌────────────────────────────┴────────────────────────┐ │
-│  │ AppState (Arc<Mutex>): ApiClient + AuthState        │ │
-│  └────────────────────────────┬────────────────────────┘ │
-│  ┌────────────────────────────┴────────────────────────┐ │
-│  │ ncm-api-rs (本地 crate, ../ncm-api-rs)              │ │
-│  │  weapi/eapi 加密 · 设备指纹 · Set-Cookie 合并       │ │
-│  └─────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────┘
+```text
+Vue 3 视图与组件
+        │
+        ├── Pinia：用户、播放队列、主题、桌面歌词窗口状态
+        ├── Composables：音频、歌词时间轴、查询缓存、跨窗口同步
+        │
+        ▼ invoke / events
+Tauri v2 命令层（Rust）
+        │
+        ├── 登录会话与本地持久化
+        ├── DTO 转换与错误分类
+        └── 托盘、全局快捷键、窗口生命周期
+        │
+        ▼
+ncm-api-rs（本地 Rust crate）
+        │
+        ├── weapi / eapi 请求与加密
+        ├── Cookie 和设备信息处理
+        └── 网易云音乐接口调用
 ```
 
-### 关键模块对应
+播放与歌词使用同一个权威媒体时钟。主歌词面板按需逐帧更新；桌面歌词窗口接收完整时间轴快照和轻量时钟锚点，在窗口内计算当前行与逐字进度，减少跨窗口通信开销。
 
-| 想做的事 | 改这里 |
-| --- | --- |
-| 新增 Tauri command | `src-tauri/src/commands/*.rs` + `lib.rs` 全路径注册 + `composables/useNcmApi.ts::Commands` + `types/music.d.ts` |
-| 新增页面 | `src/views/*.vue`,在 `router/index.ts` 加路由 |
-| 新增 UI 组件 | `src/components/*.vue`,`<script setup>` 风格 |
-| 改主题色规则 | `utils/colorExtractor.ts` + `stores/theme.ts` |
-| 改歌词解析 | `utils/lrcParser.ts`(纯函数),展示改 `components/LyricPanel.vue` |
-| 改 NCM 响应字段 | `src-tauri/src/models.rs`(DTO) + `types/music.d.ts` |
+## 目录结构
 
-## 目录
-
-```
+```text
 nnplayer/
-├── src/                  # 前端
-│   ├── views/            # 路由级页面
-│   ├── components/       # 通用 UI 组件
-│   ├── stores/           # Pinia (user/player/theme/desktopLyrics)
-│   ├── composables/      # useNcmApi / useAudioPlayer / useLyric / useSpringScroll
-│   ├── utils/            # crypto / lrcParser / colorExtractor
-│   ├── types/music.d.ts  # Rust→前端的 DTO 契约
-│   └── router/           # hash 路由 + 登录守卫
-├── src-tauri/            # Rust 后端
-│   ├── src/commands/     # auth / music / user / lyric
-│   ├── src/models.rs     # 精简 DTO
-│   └── capabilities/     # 窗口权限
-├── ncm-api-rs/           # 网易云 API 本地 crate
-├── screenshots/          # README 用图(本目录)
-├── docs/                 # 设计文档(本地,gitignored)
-└── app-icon.svg          # 应用图标源文件
+├── src/                    # Vue 前端
+│   ├── components/         # 播放栏、歌词、歌曲列表、侧边栏等组件
+│   ├── composables/        # 音频、歌词、缓存与窗口桥接逻辑
+│   ├── services/           # 认证会话边界
+│   ├── stores/             # Pinia 状态
+│   ├── utils/              # 歌词解析、时间轴、主题色等工具
+│   └── views/              # 页面与桌面歌词窗口
+├── src-tauri/              # Tauri 后端、命令、托盘和打包配置
+├── ncm-api-rs/             # 内嵌网易云音乐 Rust API crate
+├── tests/                  # 歌词解析与对齐回归测试
+├── screenshots/            # README 截图
+└── .github/workflows/      # CI 与 Windows 发布流程
 ```
 
-## 数据持久化位置
+## ncm-api-rs
 
-- 会话: `%APPDATA%\nnplayer\auth\session.toml` (Windows)
-- 音量/侧栏折叠: `localStorage` (`nnplayer.volume` / `nnplayer.sidebarCollapsed`)
-- 窗口位置/大小/最大化: `tauri-plugin-window-state` 自动管理
+应用通过 `src-tauri/Cargo.toml` 中的本地路径依赖直接使用 `ncm-api-rs`。该 crate 也提供可选的 Axum HTTP 服务，适合单独调试 API；它不是 nnplayer 的运行前置条件。
 
-## 调试
+```powershell
+$env:NCM_HOST = "127.0.0.1"
+cargo run --manifest-path ncm-api-rs/Cargo.toml --features server --bin ncm-server
+```
 
-- Rust 日志通过 `env_logger`,前缀 `[startup]` / `[login_qr_key]` / `[login]`
-- 前端没有日志库,关键警告走 `console.warn`
-- 类型检查: `vue-tsc --noEmit`(零警告通过,`npm run build` 会自动跑)
+服务本身默认监听 `0.0.0.0:3000`。上面的本地调试示例显式绑定回环地址；未配置鉴权和访问控制时，请勿将服务直接暴露到公网。
 
-## 已知限制
+支持的环境变量如下：
 
-- **平台**: 仅在 Windows 11 + WebView2 测试,macOS / Linux 理论上可跑但托盘/快捷键/打包需适配
-- **会员内容**: `get_song_url` 走 320kbps 优先,VIP 灰歌曲能拿到 URL 但部分专辑需登录态,本项目三种登录都支持
-- **打包**: NSIS 在跨盘 `%TEMP%` 时会失败,生产建议用单 exe 模式或修 `tauri.conf.json` 改 `bundle.targets` / 自定义 NSIS 路径
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `NCM_HOST` | 监听地址 | `0.0.0.0` |
+| `NCM_PORT` | 监听端口 | `3000` |
+| `CORS_ALLOW_ORIGIN` | 允许的 CORS Origin | 允许全部 |
+| `RATE_LIMIT` | 时间窗口内的最大请求数，`0` 表示关闭 | `0` |
+| `RATE_LIMIT_WINDOW` | 限流时间窗口，单位为秒 | `60` |
+| `RUST_LOG` | Rust 日志过滤规则 | `ncm_api=info` |
+
+## 技术栈
+
+| 领域 | 技术 |
+| --- | --- |
+| 桌面运行时 | Tauri v2、Wry、WebView2 |
+| 前端 | Vue 3、TypeScript、Pinia、Vue Router、Vite |
+| 样式与图标 | Tailwind CSS、Lucide |
+| Rust | Tokio、Serde、Reqwest、Rustls |
+| NCM 接口 | 仓库内的 `ncm-api-rs` |
 
 ## 致谢
 
-- 网易云音乐 (NCM) — 唯一 API 源
-- [ncm-api-rs](./ncm-api-rs) — 本仓库同级的 Rust NCM 客户端
-- [Tauri](https://tauri.app) / [Vue](https://vuejs.org) / [Pinia](https://pinia.vuejs.org) / [Tailwind CSS](https://tailwindcss.com) / [lucide](https://lucide.dev)
+- [`imsyy/ncm-api-rs`](https://github.com/imsyy/ncm-api-rs)：仓库内 Rust NCM 客户端的上游项目
+- [Tauri](https://tauri.app/)、[Vue](https://vuejs.org/)、[Pinia](https://pinia.vuejs.org/)、[Tailwind CSS](https://tailwindcss.com/)、[Lucide](https://lucide.dev/)
 
-## License
+## 许可
 
-本仓库未声明开源协议,**默认保留所有权利**。NCM API 的使用需遵守 [网易云音乐服务条款](https://music.163.com/)。
+nnplayer 主项目采用 [MIT License](./LICENSE)。`ncm-api-rs` 在其 Cargo 清单中声明为 WTFPL，请同时遵循第三方依赖各自的许可条款。
