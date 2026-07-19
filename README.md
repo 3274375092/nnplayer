@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./app-icon.svg" width="96" height="96" alt="nnplayer 图标" />
+<img src="./src-tauri/icons/128x128.png" width="96" height="96" alt="nnplayer 图标" />
 
 # nnplayer
 
