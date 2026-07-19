@@ -569,7 +569,7 @@ function createLyricEngine(): UseLyricReturn {
       artists: player.currentSong?.artists ?? "",
       lines: lines.value,
       tokensByLine: preciseTokensByLine.value,
-      accentColor: theme.seed || "#E85D3A",
+      accentColor: theme.desktopAccent,
     };
   }
 
@@ -659,7 +659,7 @@ function createLyricEngine(): UseLyricReturn {
       () => player.currentSong?.artists ?? "",
       lines,
       preciseTokensByLine,
-      () => theme.seed,
+      () => theme.desktopAccent,
     ],
     () => sendSnapshot(),
     { flush: "post" },

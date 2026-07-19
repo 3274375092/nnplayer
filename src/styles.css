@@ -3,25 +3,37 @@
 @tailwind utilities;
 
 :root {
-  --color-bg: #0a0a0c;
-  --color-bg-from: #0f0f14;
-  --color-bg-to: #060608;
-  --color-card: #15151a;
-  --color-card-hover: hsla(12, 18%, 72%, 0.11);
-  --color-border: hsla(12, 24%, 64%, 0.14);
-  --color-border-strong: hsla(12, 28%, 68%, 0.24);
-  --color-ring: hsla(12, 34%, 72%, 0.32);
-  --color-accent: #e56f52;
-  --color-on-accent: #000000;
-  --color-accent-secondary: #f08a6a;
-  --color-accent-subtle: hsla(12, 55%, 58%, 0.20);
-  --color-text-primary: #f2f1f0;
-  --color-text-secondary: rgba(255, 255, 255, 0.62);
-  --color-text-tertiary: rgba(255, 255, 255, 0.54);
-  --color-shadow: hsla(12, 20%, 0%, 0.48);
-  --color-scrollbar: hsla(12, 35%, 66%, 0.24);
-  --color-scrollbar-hover: hsla(12, 42%, 70%, 0.42);
-  --color-glow: hsla(12, 55%, 58%, 0.24);
+  color-scheme: light;
+  /* Gruvbox Light：无歌曲时的稳定结构色。 */
+  --color-bg: #fbf1c7;
+  --color-bg-from: #f9f5d7;
+  --color-bg-to: #f2e5bc;
+  --color-ambient-primary: #d79921;
+  --color-ambient-secondary: #458588;
+  --color-card: #f9f5d7;
+  --color-card-hover: #ebdbb2;
+  --color-border: #d5c4a1;
+  --color-border-strong: #bdae93;
+  --color-ring: rgba(60, 56, 54, 0.22);
+  --color-accent: #af3a03;
+  --color-on-accent: #fbf1c7;
+  --color-accent-secondary: #d65d0e;
+  --color-accent-subtle: rgba(175, 58, 3, 0.12);
+  --color-text-primary: #282828;
+  --color-text-secondary: #504945;
+  --color-text-tertiary: #665c54;
+  --color-shadow: rgba(60, 56, 54, 0.18);
+  --color-scrollbar: #bdae93;
+  --color-scrollbar-hover: #7c6f64;
+  --color-glow: rgba(175, 58, 3, 0.22);
+
+  /* 由结构色派生的通用表面，封面换色时仍保持浅色层级。 */
+  --color-glass: color-mix(in srgb, var(--color-card) 88%, transparent);
+  --color-surface-soft: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  --color-surface-strong: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+  --color-highlight: rgba(255, 255, 255, 0.58);
+  --color-track: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
+  --color-thumb: #f9f5d7;
 }
 
 html,
@@ -61,7 +73,8 @@ body::before {
   inset: 0;
   z-index: 9999;
   pointer-events: none;
-  opacity: 0.03;
+  opacity: 0.022;
+  mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
 }
 
@@ -93,8 +106,11 @@ input[type="number"]::-webkit-outer-spin-button {
            text-sm font-medium transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] select-none;
   }
   .btn-primary {
-    @apply bg-accent hover:opacity-90 active:scale-[0.97];
+    @apply bg-accent active:scale-[0.97];
     color: var(--color-on-accent);
+  }
+  .btn-primary:hover {
+    box-shadow: 0 8px 24px var(--color-glow);
   }
   .btn-ghost {
     @apply bg-transparent text-text-primary hover:bg-hover active:scale-[0.97];
@@ -103,24 +119,24 @@ input[type="number"]::-webkit-outer-spin-button {
   .card {
     @apply bg-card rounded-card border border-border;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.035),
+      inset 0 1px 0 var(--color-highlight),
       0 18px 54px var(--color-shadow);
   }
 
   .glass {
-    background: rgba(18, 18, 20, 0.72);
+    background: var(--color-glass);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
     border: 1px solid var(--color-border);
     border-radius: 1rem;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.045),
+      inset 0 1px 0 var(--color-highlight),
       0 20px 60px var(--color-shadow);
   }
 
   .input {
     @apply w-full px-3 py-2 rounded-btn;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
     color: var(--color-text-primary);
   }
@@ -130,6 +146,21 @@ input[type="number"]::-webkit-outer-spin-button {
   }
   .input::placeholder {
     color: var(--color-text-tertiary);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

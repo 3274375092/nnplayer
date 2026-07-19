@@ -32,6 +32,9 @@ jobs:
           "VERSION=$ver" >> $env:GITHUB_OUTPUT
           Write-Host "version: $ver"
 
+      - name: Test theme token contrast
+        run: npm run test:theme
+
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

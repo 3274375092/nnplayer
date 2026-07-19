@@ -51,13 +51,13 @@ withDefaults(defineProps<Props>(), {
 </template>
 
 <style scoped>
-/* 微光闪烁背景：深色 */
+/* 微光闪烁背景：跟随当前主题的文字明度生成层级。 */
 .skeleton {
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0.08) 50%,
-    rgba(255, 255, 255, 0.04) 100%
+    color-mix(in srgb, var(--color-text-primary) 5%, transparent) 0%,
+    color-mix(in srgb, var(--color-text-primary) 10%, transparent) 50%,
+    color-mix(in srgb, var(--color-text-primary) 5%, transparent) 100%
   );
   background-size: 800px 100%;
   animation: shimmer 1.6s linear infinite;

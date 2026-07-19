@@ -131,11 +131,17 @@ onBeforeUnmount(() => {
   container-type: inline-size;
   background:
     radial-gradient(
-      ellipse 60% 48% at 26% 42%,
-      color-mix(in srgb, var(--color-bg-from) 74%, transparent),
+      ellipse 58% 48% at 18% 34%,
+      color-mix(in srgb, var(--color-ambient-primary) 11%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 54% 52% at 88% 72%,
+      color-mix(in srgb, var(--color-ambient-secondary) 9%, transparent),
       transparent 72%
     ),
     linear-gradient(145deg, var(--color-bg-from), var(--color-bg) 46%, var(--color-bg-to));
+  background-color: var(--color-bg);
 }
 
 .now-playing::after {
@@ -145,8 +151,17 @@ onBeforeUnmount(() => {
   z-index: 1;
   pointer-events: none;
   background:
-    linear-gradient(90deg, rgba(0, 0, 0, 0.08), transparent 36%, rgba(0, 0, 0, 0.16)),
-    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.035), transparent 44%);
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-surface-soft, var(--color-card)) 44%, transparent),
+      transparent 36%,
+      color-mix(in srgb, var(--color-surface-strong, var(--color-card)) 28%, transparent)
+    ),
+    radial-gradient(
+      circle at 50% 0%,
+      color-mix(in srgb, var(--color-highlight, var(--color-border)) 52%, transparent),
+      transparent 44%
+    );
 }
 
 .now-playing__ambient {
@@ -160,8 +175,8 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.48;
-  filter: blur(52px) saturate(0.68) brightness(0.3);
+  opacity: 0.24;
+  filter: blur(60px) saturate(0.72) brightness(1.18) contrast(0.78);
   transform: scale(1.14);
 }
 
@@ -169,8 +184,17 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(to bottom, rgba(7, 7, 10, 0.52), rgba(7, 7, 10, 0.68) 58%, rgba(7, 7, 10, 0.88)),
-    radial-gradient(circle at 25% 46%, transparent, rgba(7, 7, 10, 0.34) 68%);
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-bg-from) 64%, transparent),
+      color-mix(in srgb, var(--color-bg) 76%, transparent) 58%,
+      color-mix(in srgb, var(--color-bg-to) 92%, transparent)
+    ),
+    radial-gradient(
+      circle at 25% 46%,
+      transparent,
+      color-mix(in srgb, var(--color-surface-soft, var(--color-card)) 54%, transparent) 68%
+    );
 }
 
 .now-playing__header {
@@ -187,7 +211,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--color-text-secondary);
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -206,11 +230,11 @@ onBeforeUnmount(() => {
   width: 2.5rem;
   height: 2.5rem;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.11);
+  border: 1px solid var(--color-border);
   border-radius: 0.8rem;
-  color: rgba(255, 255, 255, 0.72);
-  background: rgba(255, 255, 255, 0.055);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  color: var(--color-text-secondary);
+  background: var(--color-glass, var(--color-card));
+  box-shadow: inset 0 1px 0 var(--color-highlight, var(--color-border));
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   transition:
@@ -221,9 +245,9 @@ onBeforeUnmount(() => {
 }
 
 .now-playing__close:hover {
-  border-color: rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.96);
-  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+  background: var(--color-surface-strong, var(--color-card-hover));
 }
 
 .now-playing__close:active {
@@ -261,15 +285,19 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 3%;
   border-radius: 2rem;
-  opacity: 0.3;
-  background: var(--color-accent);
+  opacity: 0.22;
+  background: linear-gradient(
+    135deg,
+    var(--color-ambient-primary),
+    var(--color-ambient-secondary)
+  );
   filter: blur(32px) saturate(0.8);
   transform: translateY(5%) scale(0.93);
   transition: opacity 500ms ease;
 }
 
 .now-playing__artwork-glow.is-playing {
-  opacity: 0.48;
+  opacity: 0.36;
 }
 
 .now-playing__artwork {
@@ -279,13 +307,13 @@ onBeforeUnmount(() => {
   height: 100%;
   place-items: center;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid var(--color-border-strong);
   border-radius: clamp(1.25rem, 2.5vw, 1.75rem);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--color-surface-soft, var(--color-card));
   box-shadow:
     0 32px 70px rgba(0, 0, 0, 0.42),
     0 8px 24px color-mix(in srgb, var(--color-shadow) 62%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    inset 0 1px 0 var(--color-highlight, var(--color-border));
 }
 
 .now-playing__artwork::after {
@@ -294,7 +322,11 @@ onBeforeUnmount(() => {
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 0 0 1px color-mix(
+    in srgb,
+    var(--color-highlight, var(--color-border)) 58%,
+    transparent
+  );
 }
 
 .now-playing__cover {
@@ -304,7 +336,7 @@ onBeforeUnmount(() => {
 }
 
 .now-playing__placeholder {
-  color: rgba(255, 255, 255, 0.18);
+  color: var(--color-text-tertiary);
 }
 
 .now-playing__details {
@@ -326,7 +358,7 @@ onBeforeUnmount(() => {
   margin: 0 0 0.45rem;
   /* Windows WebView 在紧行高 + line-clamp 下会裁掉 g/y 等字形的下伸部。 */
   padding-bottom: 0.1em;
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--color-text-primary);
   font-size: clamp(2rem, 3.4vw, 3.15rem);
   font-weight: 650;
   letter-spacing: -0.04em;
@@ -339,7 +371,7 @@ onBeforeUnmount(() => {
 .now-playing__artist {
   overflow: hidden;
   margin: 0;
-  color: rgba(255, 255, 255, 0.58);
+  color: var(--color-text-secondary);
   font-size: 0.95rem;
   font-weight: 450;
   line-height: 1.5;
@@ -349,21 +381,26 @@ onBeforeUnmount(() => {
 
 .now-playing__separator {
   margin: 0 0.5rem;
-  color: rgba(255, 255, 255, 0.32);
+  color: var(--color-text-secondary);
 }
 
 .now-playing__lyrics :deep(.lyric-panel) {
+  border-color: var(--color-border);
   background:
     radial-gradient(
       circle at 12% -12%,
       color-mix(in srgb, var(--color-accent) 9%, transparent),
       transparent 42%
     ),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(5, 5, 8, 0.13));
-  background-color: rgba(13, 13, 17, 0.82);
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--color-highlight, var(--color-border)) 42%, transparent),
+      color-mix(in srgb, var(--color-surface-soft, var(--color-card)) 88%, transparent)
+    );
+  background-color: var(--color-glass, var(--color-card));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 20px 56px rgba(0, 0, 0, 0.18);
+    inset 0 1px 0 var(--color-highlight, var(--color-border)),
+    0 20px 56px color-mix(in srgb, var(--color-shadow) 38%, transparent);
 }
 
 @media (max-height: 700px) and (min-width: 821px) {

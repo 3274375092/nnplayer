@@ -9,6 +9,7 @@ import type {
   KaraokeToken,
 } from "@/composables/useLyric";
 import type { LyricLine } from "@/utils/lrcParser";
+import { DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
 
 export interface DesktopLyricsBridgeState {
   sessionId: string;
@@ -38,7 +39,7 @@ function createEmptyState(): DesktopLyricsBridgeState {
     artists: "",
     lines: [],
     tokensByLine: [],
-    accentColor: "#E85D3A",
+    accentColor: DEFAULT_DESKTOP_ACCENT,
     positionMs: 0,
     sampledAt: 0,
     playing: false,
@@ -148,7 +149,7 @@ export function useDesktopLyricsBridge() {
             artists: "",
             lines: [],
             tokensByLine: [],
-            accentColor: "#E85D3A",
+            accentColor: DEFAULT_DESKTOP_ACCENT,
           }
         : {}),
       sessionId: payload.sessionId,
@@ -197,7 +198,7 @@ export function useDesktopLyricsBridge() {
       accentColor:
         typeof payload.accentColor === "string" && payload.accentColor
           ? payload.accentColor
-          : "#E85D3A",
+          : DEFAULT_DESKTOP_ACCENT,
       ...(snapshotHasNewestClock ? normalizedClock(payload) : {}),
     };
   }

@@ -17,6 +17,7 @@ import { useLyricWindowPrefs } from "@/composables/useLyricWindowPrefs";
 import { useWindowGeometry } from "@/composables/useWindowGeometry";
 import { findActiveLineIndex } from "@/utils/lrcParser";
 import { getKaraokeTokenProgress } from "@/utils/lyricTiming";
+import { DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
 
 const { state } = useDesktopLyricsBridge();
 const { prefs, apply: applyPrefs } = useLyricWindowPrefs();
@@ -183,7 +184,9 @@ const chars = computed<CharRender[]>(() => {
 // =============== CSS 变量 ===============
 
 /** 封面强调色：优先跟随桥接状态（每次歌词推送都带最新色），事件通道作为补充 */
-const accentColor = computed(() => state.value.accentColor || "#E85D3A");
+const accentColor = computed(() =>
+  state.value.accentColor || DEFAULT_DESKTOP_ACCENT,
+);
 
 const cssVars = computed(() => ({
   "--lyric-font-size": `${prefs.value.fontSize}px`,
@@ -797,7 +800,7 @@ body,
 
 .lyric-char__sung {
   display: inline-block;
-  color: var(--color-accent, #E85D3A);
+  color: var(--color-accent, #d65d0e);
   clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
 }
 

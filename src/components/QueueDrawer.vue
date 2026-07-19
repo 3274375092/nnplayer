@@ -98,21 +98,21 @@ defineExpose({
     <Transition name="queue-slide">
       <aside
         v-if="open"
-        class="fixed top-0 right-0 bottom-0 w-[380px] max-w-[calc(100vw-16px)] bg-[rgba(18,18,20,0.92)] backdrop-blur-2xl border-l border-border z-50 shadow-2xl flex flex-col"
+        class="fixed top-0 right-0 bottom-0 w-[380px] max-w-[calc(100vw-16px)] bg-glass backdrop-blur-2xl border-l border-border z-50 shadow-2xl flex flex-col"
         role="dialog"
         aria-label="播放队列"
       >
         <header
           class="flex items-center justify-between px-5 py-4 border-b border-border"
         >
-          <h2 class="text-base font-semibold text-[rgba(255,255,255,0.9)]">播放队列</h2>
+          <h2 class="text-base font-semibold text-text-primary">播放队列</h2>
           <button
             type="button"
-            class="w-8 h-8 rounded-full bg-card-hover hover:bg-[rgba(255,255,255,0.12)] flex items-center justify-center transition-all duration-200 active:scale-95"
+            class="w-8 h-8 rounded-full bg-surface-soft hover:bg-surface-strong flex items-center justify-center transition-all duration-200 active:scale-95"
             aria-label="关闭队列"
             @click="open = false"
           >
-            <X :size="14" :stroke-width="1.5" class="text-[rgba(255,255,255,0.5)]" />
+            <X :size="14" :stroke-width="1.5" class="text-text-secondary" />
           </button>
         </header>
 
@@ -123,23 +123,23 @@ defineExpose({
 
         <div
           v-if="totalCount === 0"
-          class="flex-1 flex flex-col items-center justify-center text-[rgba(255,255,255,0.2)] text-sm gap-3"
+          class="flex-1 flex flex-col items-center justify-center text-text-tertiary text-sm gap-3"
         >
           <Music2 :size="40" :stroke-width="1.25" />
-          <span class="text-[rgba(255,255,255,0.25)]">队列为空，去歌单里加几首歌吧</span>
+          <span>队列为空，去歌单里加几首歌吧</span>
         </div>
 
         <ul v-else class="flex-1 overflow-y-auto py-1">
           <li
             v-for="(song, i) in list"
             :key="song.id"
-            class="group flex items-center gap-3 px-5 py-2.5 hover:bg-[rgba(255,255,255,0.04)] cursor-grab active:cursor-grabbing transition-colors duration-150 text-text-primary relative"
+            class="group flex items-center gap-3 px-5 py-2.5 hover:bg-surface-soft cursor-grab active:cursor-grabbing transition-colors duration-150 text-text-primary relative"
             draggable="true"
             @dragstart="onDragStart($event, player.index + 1 + i)"
             @dragover="onDragOver"
             @drop="onDrop($event, player.index + 1 + i)"
           >
-            <span class="text-[rgba(255,255,255,0.25)] text-xs w-5 tabular-nums text-right font-medium">
+            <span class="text-text-tertiary text-xs w-5 tabular-nums text-right font-medium">
               {{ i + 1 }}
             </span>
             <div class="w-9 h-9 overflow-hidden shrink-0 ring-1 ring-ring relative">
@@ -152,22 +152,22 @@ defineExpose({
                 fetchpriority="low"
                 alt=""
               />
-              <div v-else class="w-full h-full bg-[rgba(255,255,255,0.04)] flex items-center justify-center">
-                <Music2 :size="14" :stroke-width="1.25" class="text-white/15" />
+              <div v-else class="w-full h-full bg-surface-soft flex items-center justify-center">
+                <Music2 :size="14" :stroke-width="1.25" class="text-text-tertiary" />
               </div>
             </div>
             <div class="min-w-0 flex-1">
-              <div class="text-sm truncate text-[rgba(255,255,255,0.8)]">{{ song.name }}</div>
-              <div class="text-xs text-[rgba(255,255,255,0.35)] truncate">
+              <div class="text-sm truncate text-text-primary">{{ song.name }}</div>
+              <div class="text-xs text-text-secondary truncate">
                 {{ song.artists }}
               </div>
             </div>
-            <span class="text-xs text-[rgba(255,255,255,0.3)] tabular-nums font-medium">
+            <span class="text-xs text-text-tertiary tabular-nums font-medium">
               {{ fmtDurationMs(song.duration) }}
             </span>
             <button
               type="button"
-              class="opacity-0 group-hover:opacity-100 text-[rgba(255,255,255,0.3)] hover:text-accent transition-all duration-200"
+              class="opacity-0 group-hover:opacity-100 text-text-tertiary hover:text-accent transition-all duration-200"
               :aria-label="`从队列移除 ${song.name}`"
               @click.stop="remove(player.index + 1 + i)"
             >
@@ -189,7 +189,7 @@ defineExpose({
           </button>
           <button
             type="button"
-            class="btn btn-ghost text-xs text-[rgba(255,255,255,0.35)] hover:text-accent rounded-xl ml-auto"
+            class="btn btn-ghost text-xs text-text-tertiary hover:text-accent rounded-xl ml-auto"
             @click="clear"
           >
             <Trash2 :size="14" :stroke-width="1.5" class="mr-1" />清空

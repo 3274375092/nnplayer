@@ -19,6 +19,11 @@ export default {
         accent: "var(--color-accent)",
         "accent-secondary": "var(--color-accent-secondary)",
         "accent-subtle": "var(--color-accent-subtle)",
+        glass: "var(--color-glass)",
+        "surface-soft": "var(--color-surface-soft)",
+        "surface-strong": "var(--color-surface-strong)",
+        track: "var(--color-track)",
+        thumb: "var(--color-thumb)",
       },
       borderRadius: {
         DEFAULT: "12px",

@@ -250,7 +250,7 @@ const hasSong = computed(() => player.currentSong !== null);
       <span>{{ error }}</span>
       <button
         type="button"
-        class="px-3 py-1 rounded-md border border-accent/30 hover:bg-accent/10"
+        class="px-3 py-1 rounded-md border border-border-strong hover:bg-surface-strong"
         @click="retry"
       >
         重试
@@ -352,14 +352,14 @@ const hasSong = computed(() => player.currentSong !== null);
     ),
     linear-gradient(
       145deg,
-      rgba(255, 255, 255, 0.055),
-      rgba(255, 255, 255, 0.018) 52%,
-      rgba(0, 0, 0, 0.1)
+      var(--color-highlight),
+      var(--color-surface-soft) 52%,
+      var(--color-surface-strong)
     );
-  background-color: color-mix(in srgb, var(--color-card) 88%, transparent);
+  background-color: var(--color-card);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.065),
-    0 18px 48px color-mix(in srgb, var(--color-shadow) 44%, transparent);
+    inset 0 1px 0 var(--color-highlight),
+    0 18px 48px color-mix(in srgb, var(--color-shadow) 54%, transparent);
 }
 
 .lyric-panel::before {
@@ -370,10 +370,10 @@ const hasSong = computed(() => player.currentSong !== null);
   pointer-events: none;
   background: linear-gradient(
     105deg,
-    rgba(255, 255, 255, 0.03),
+    color-mix(in srgb, var(--color-highlight) 82%, transparent),
     transparent 28%,
     transparent 72%,
-    rgba(255, 255, 255, 0.018)
+    color-mix(in srgb, var(--color-surface-soft) 72%, transparent)
   );
 }
 

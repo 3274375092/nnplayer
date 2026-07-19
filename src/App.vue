@@ -8,9 +8,9 @@ import PlayerBarFloating from "@/components/PlayerBarFloating.vue";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
 import { useLyric } from "@/composables/useLyric";
 import { useTauriBridge } from "@/composables/useTauriBridge";
+import { useCoverTheme } from "@/composables/useCoverTheme";
 
 const desktopLyricsStore = useDesktopLyricsStore();
-const { setup, teardown } = useTauriBridge();
 const route = useRoute();
 
 const isLoginRoute = computed(() => route.name === "Login");
@@ -23,6 +23,10 @@ const isDesktopLyrics = computed(() => {
     return false;
   }
 });
+
+const { setup, teardown } = useTauriBridge();
+// 桌面歌词是透明独立窗口，只接收主窗口发送的高明度 accent。
+if (!isDesktopLyrics.value) useCoverTheme();
 
 onMounted(async () => {
   if (isDesktopLyrics.value) return;
@@ -55,7 +59,7 @@ onBeforeUnmount(() => {
   </router-view>
 
   <!-- 主窗：完整布局 -->
-  <div v-else class="h-full flex bg-bg overflow-hidden">
+  <div v-else class="theme-root h-full flex bg-bg overflow-hidden">
     <Sidebar class="shrink-0 mobile-sidebar-hidden" />
 
     <!-- 播放栏和页面共用同一个内容壳，因此始终相对侧栏之外的区域居中。 -->
@@ -82,6 +86,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.theme-root {
+  color: var(--color-text-primary);
+  transition:
+    color 0.45s ease,
+    background-color 0.6s ease;
+}
+
 .app-content-shell {
   --player-reserved-space: 100px;
 }
@@ -150,6 +161,10 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .theme-root {
+    transition: none;
+  }
+
   .fade-slide-enter-active,
   .fade-slide-leave-active {
     transition: opacity 0.01ms linear;

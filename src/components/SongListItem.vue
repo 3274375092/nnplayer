@@ -33,7 +33,7 @@ defineEmits<{
     class="playlist-tile group block w-full border-0 bg-transparent p-0 pb-0.5 text-left outline-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 focus-visible:-translate-y-0.5 active:translate-y-0 active:scale-[0.985]"
     @click="$emit('click')"
   >
-    <span class="playlist-cover relative block aspect-square w-full overflow-hidden rounded-[18px] bg-white/[0.045] ring-1 ring-white/[0.07] transition-shadow duration-300 group-hover:shadow-[0_18px_38px_rgba(0,0,0,0.38)] group-focus-visible:shadow-[0_18px_38px_rgba(0,0,0,0.38)]">
+    <span class="playlist-cover relative block aspect-square w-full overflow-hidden rounded-[18px] bg-surface-soft ring-1 ring-ring transition-shadow duration-300 group-hover:shadow-[0_18px_38px_rgba(0,0,0,0.38)] group-focus-visible:shadow-[0_18px_38px_rgba(0,0,0,0.38)]">
       <img
         v-if="playlist.coverUrl"
         :src="playlistCover"
@@ -43,7 +43,7 @@ defineEmits<{
         decoding="async"
         fetchpriority="low"
       />
-      <span v-else class="flex h-full w-full items-center justify-center bg-white/[0.035] text-tertiary" aria-hidden="true">
+      <span v-else class="flex h-full w-full items-center justify-center bg-surface-soft text-tertiary" aria-hidden="true">
         <Music2 :size="44" :stroke-width="1.25" />
       </span>
       <span class="absolute inset-0 bg-gradient-to-t from-black/65 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
@@ -61,19 +61,19 @@ defineEmits<{
   <button
     v-else-if="variant === 'song' && song"
     type="button"
-    class="group block w-full bg-[rgba(255,255,255,0.03)] border border-border rounded-2xl p-3.5 cursor-pointer text-left hover:bg-card-hover hover:border-border-strong hover:-translate-y-1 hover:shadow-xl transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98]"
+    class="group block w-full bg-surface-soft border border-border rounded-2xl p-3.5 cursor-pointer text-left hover:bg-surface-strong hover:border-border-strong hover:-translate-y-1 hover:shadow-xl transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98]"
     @click="$emit('click')"
   >
-    <div class="aspect-square rounded-xl bg-[rgba(255,255,255,0.04)] mb-3 flex items-center justify-center ring-1 ring-[rgba(255,255,255,0.06)] relative">
-      <Music2 :size="48" :stroke-width="1.25" class="text-[rgba(255,255,255,0.15)] group-hover:scale-110 transition-transform duration-300" />
+    <div class="aspect-square rounded-xl bg-surface-soft mb-3 flex items-center justify-center ring-1 ring-ring relative">
+      <Music2 :size="48" :stroke-width="1.25" class="text-text-tertiary group-hover:scale-110 transition-transform duration-300" />
       <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
-        <div class="w-12 h-12 rounded-full bg-accent/90 text-on-accent flex items-center justify-center shadow-lg shadow-accent/30 backdrop-blur-sm scale-90 group-hover:scale-100 transition-transform duration-300">
+        <div class="w-12 h-12 rounded-full bg-accent text-on-accent flex items-center justify-center shadow-[0_8px_24px_var(--color-glow)] scale-90 group-hover:scale-100 transition-transform duration-300">
           <Play :size="20" :stroke-width="2.5" class="ml-0.5" />
         </div>
       </div>
     </div>
-    <div class="text-sm font-medium truncate text-[rgba(255,255,255,0.8)] group-hover:text-white/90 transition-colors">{{ song.name }}</div>
-    <div class="text-xs text-[rgba(255,255,255,0.35)] truncate mt-0.5">{{ song.artists }}</div>
+    <div class="text-sm font-medium truncate text-text-primary group-hover:text-accent transition-colors">{{ song.name }}</div>
+    <div class="text-xs text-text-secondary truncate mt-0.5">{{ song.artists }}</div>
   </button>
 </template>
 

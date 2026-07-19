@@ -8,7 +8,7 @@
 
 [下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [提交问题](https://github.com/3274375092/nnplayer/issues)
 
-![Version](https://img.shields.io/badge/version-0.2.2-E85D3A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.3-E85D3A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
 
@@ -28,7 +28,7 @@
 - LRC 行级歌词、YRC 逐字卡拉 OK、翻译歌词与基于音频时钟的精确同步
 - 主界面长歌词自动换行；桌面歌词长行自动缩放，不产生横向滚动条
 - 独立透明桌面歌词窗口，支持置顶、拖动、锁定、字号和不透明度调节
-- 根据当前封面提取主题色，播放界面随歌曲动态变化
+- 默认采用 Gruvbox Light；播放歌曲时根据封面调色板派生浅色背景、环境辅助色与主题色
 - 请求去重与有界缓存、歌曲地址预取、长列表虚拟化和按显示尺寸加载封面
 - 登录会话隔离：切换账号或退出时清理旧请求、缓存与媒体源
 

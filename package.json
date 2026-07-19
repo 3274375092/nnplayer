@@ -1,12 +1,13 @@
 {
   "name": "nnplayer",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "test:lyrics": "node --test tests/lrcParser.test.mjs",
+    "test:theme": "node --test tests/themeTokens.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

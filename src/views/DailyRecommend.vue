@@ -184,11 +184,19 @@ onMounted(() => void load());
       color-mix(in srgb, var(--color-accent) 8%, transparent),
       transparent 40%
     ),
-    linear-gradient(150deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
-  background-color: color-mix(in srgb, var(--color-card) 92%, transparent);
+    linear-gradient(
+      150deg,
+      var(--color-highlight),
+      var(--color-surface-soft)
+    );
+  background-color: color-mix(
+    in srgb,
+    var(--color-card) 92%,
+    var(--color-surface-soft)
+  );
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 16px 42px rgba(0, 0, 0, 0.14);
+    inset 0 1px 0 var(--color-highlight),
+    0 16px 42px color-mix(in srgb, var(--color-shadow) 68%, transparent);
 }
 
 .daily-state {

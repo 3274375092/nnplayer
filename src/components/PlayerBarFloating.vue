@@ -94,17 +94,17 @@ function openNowPlaying() {
           v-else
           :size="20"
           :stroke-width="1.5"
-          class="text-[rgba(255,255,255,0.42)]"
+          class="text-text-tertiary"
         />
       </button>
       <div class="mobile-song-info min-w-0 flex-1">
         <ScrollText
           :text="player.currentSong?.name ?? '尚未播放'"
-          class="text-sm font-medium text-[rgba(255,255,255,0.9)]"
+          class="text-sm font-medium text-text-primary"
         />
         <ScrollText
           :text="player.currentSong?.artists ?? '—'"
-          class="text-xs text-[rgba(255,255,255,0.56)]"
+          class="text-xs text-text-secondary"
         />
       </div>
     </div>
@@ -216,13 +216,13 @@ function openNowPlaying() {
   gap: 16px;
   overflow: hidden;
   transform: translateX(-50%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--color-border-strong);
   border-radius: 22px;
-  background: rgba(16, 16, 18, 0.92);
+  background: var(--color-glass, var(--color-card));
   box-shadow:
     0 18px 52px var(--color-shadow),
-    0 3px 14px rgba(8, 8, 10, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    0 3px 14px color-mix(in srgb, var(--color-shadow) 58%, transparent),
+    inset 0 1px 0 var(--color-highlight, var(--color-border));
   backdrop-filter: blur(24px) saturate(125%);
   -webkit-backdrop-filter: blur(24px) saturate(125%);
 }
@@ -232,21 +232,21 @@ function openNowPlaying() {
   place-items: center;
   overflow: hidden;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.055);
-  box-shadow: 0 6px 18px rgba(7, 7, 9, 0.34);
+  background: var(--color-surface-soft, var(--color-card-hover));
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--color-shadow) 48%, transparent);
   transition:
     transform 0.2s cubic-bezier(0.32, 0.72, 0, 1),
     box-shadow 0.2s ease;
 }
 
 .player-cover-edge {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--color-border);
   border-radius: inherit;
 }
 
 .player-cover-button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 22px rgba(7, 7, 9, 0.42);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--color-shadow) 62%, transparent);
 }
 
 .player-cover-button:active {
@@ -277,13 +277,13 @@ function openNowPlaying() {
   width: 36px;
   height: 36px;
   border-radius: 12px;
-  color: rgba(255, 255, 255, 0.58);
+  color: var(--color-text-secondary);
   background: transparent;
 }
 
 .player-icon-button:hover:not(:disabled) {
-  color: rgba(255, 255, 255, 0.94);
-  background: rgba(255, 255, 255, 0.075);
+  color: var(--color-text-primary);
+  background: var(--color-surface-soft, var(--color-card-hover));
   transform: translateY(-1px);
 }
 
@@ -298,14 +298,14 @@ function openNowPlaying() {
   border-radius: 50%;
   box-shadow:
     0 5px 16px var(--color-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    inset 0 1px 0 var(--color-highlight, var(--color-border));
 }
 
 .player-play-button:hover:not(:disabled) {
   transform: scale(1.045);
   box-shadow:
     0 7px 22px var(--color-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+    inset 0 1px 0 var(--color-highlight, var(--color-border-strong));
 }
 
 .player-play-button:active:not(:disabled) {
@@ -327,7 +327,7 @@ function openNowPlaying() {
 }
 
 .player-time {
-  color: rgba(255, 255, 255, 0.48);
+  color: var(--color-text-tertiary);
 }
 
 .player-volume {
@@ -341,7 +341,7 @@ function openNowPlaying() {
 }
 
 .player-volume-icon {
-  color: rgba(255, 255, 255, 0.56);
+  color: var(--color-text-secondary);
 }
 
 .player-volume-range {
@@ -353,7 +353,7 @@ function openNowPlaying() {
 .player-volume-range::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-track, var(--color-border-strong));
 }
 
 .player-volume-range::-webkit-slider-thumb {
@@ -361,25 +361,25 @@ function openNowPlaying() {
   height: 13px;
   margin-top: -4.5px;
   appearance: none;
-  border: 2px solid rgba(0, 0, 0, 0.18);
+  border: 2px solid var(--color-border-strong);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.32);
+  background: var(--color-thumb, var(--color-text-primary));
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--color-shadow) 58%, transparent);
 }
 
 .player-volume-range::-moz-range-track {
   height: 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-track, var(--color-border-strong));
 }
 
 .player-volume-range::-moz-range-thumb {
   width: 13px;
   height: 13px;
-  border: 2px solid rgba(0, 0, 0, 0.18);
+  border: 2px solid var(--color-border-strong);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.32);
+  background: var(--color-thumb, var(--color-text-primary));
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--color-shadow) 58%, transparent);
 }
 
 /* 极窄窗口只保留封面，左右各占同样宽度，中间控制区仍严格居中。 */

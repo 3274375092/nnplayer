@@ -62,7 +62,7 @@ function onKey(e: KeyboardEvent) {
     @mouseleave="hovering = false"
   >
     <div
-      class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-ring rounded-full overflow-hidden"
+      class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-track rounded-full overflow-hidden"
     />
     <div
       class="absolute top-1/2 -translate-y-1/2 h-1 rounded-full transition-[width] duration-75 ease-linear"
@@ -81,7 +81,7 @@ function onKey(e: KeyboardEvent) {
       aria-label="播放进度"
     />
     <div
-      class="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-white rounded-full shadow-lg pointer-events-none transition-all duration-150 ease-[cubic-bezier(0.32,0.72,0,1)]"
+      class="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-thumb rounded-full shadow-lg ring-1 ring-border-strong pointer-events-none transition-all duration-150 ease-[cubic-bezier(0.32,0.72,0,1)]"
       :class="dragging ? 'opacity-100 scale-110' : 'opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100'"
       :style="{
         left: `calc(${ratio}% - 5px)`,
@@ -89,7 +89,7 @@ function onKey(e: KeyboardEvent) {
     />
     <div
       v-if="dragging || hovering"
-      class="absolute -top-9 px-2.5 py-1 bg-[rgba(30,30,35,0.95)] text-xs text-text-primary rounded-lg shadow-lg pointer-events-none whitespace-nowrap border border-border backdrop-blur-xl"
+      class="absolute -top-9 px-2.5 py-1 bg-glass text-xs text-text-primary rounded-lg shadow-lg pointer-events-none whitespace-nowrap border border-border-strong backdrop-blur-xl"
       :style="{ left: `calc(${ratio}% - 24px)` }"
     >
       {{ fmtDuration(localValue) }}

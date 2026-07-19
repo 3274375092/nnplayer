@@ -236,8 +236,8 @@ const accountHint = computed(() => {
   <div class="h-full flex items-center justify-center px-6 relative overflow-hidden">
     <!-- 背景装饰 -->
     <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
-      <div class="absolute top-1/4 -left-20 w-96 h-96 rounded-full opacity-[0.07] blur-3xl" style="background: radial-gradient(circle, var(--color-accent) 0%, transparent 70%);" />
-      <div class="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full opacity-[0.05] blur-3xl" style="background: radial-gradient(circle, var(--color-accent-secondary) 0%, transparent 70%);" />
+      <div class="absolute top-1/4 -left-20 w-96 h-96 rounded-full opacity-[0.07] blur-3xl" style="background: radial-gradient(circle, var(--color-ambient-primary) 0%, transparent 70%);" />
+      <div class="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full opacity-[0.05] blur-3xl" style="background: radial-gradient(circle, var(--color-ambient-secondary) 0%, transparent 70%);" />
     </div>
 
     <div class="card w-full max-w-md p-8 animate-fade-in-up relative z-10">
@@ -247,7 +247,7 @@ const accountHint = computed(() => {
       </p>
 
       <!-- Tab 切换 -->
-      <div class="flex gap-1 mb-6 rounded-xl bg-[rgba(255,255,255,0.03)] p-1">
+      <div class="flex gap-1 mb-6 rounded-xl bg-surface-soft p-1">
         <button
           v-for="t in [
             { key: 'qr', label: '二维码' },
@@ -258,8 +258,8 @@ const accountHint = computed(() => {
           class="flex-1 px-3 py-2 text-sm rounded-lg transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
           :class="
             tab === t.key
-              ? 'bg-accent text-on-accent shadow-lg shadow-accent/25 font-medium'
-              : 'text-text-secondary hover:text-text-primary hover:bg-[rgba(255,255,255,0.04)]'
+              ? 'bg-accent text-on-accent shadow-[0_8px_24px_var(--color-glow)] font-medium'
+              : 'text-text-secondary hover:text-text-primary hover:bg-surface-strong'
           "
           @click="switchTab(t.key as Tab)"
         >

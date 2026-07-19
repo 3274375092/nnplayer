@@ -1,7 +1,15 @@
 import { coverImageUrl } from "@/utils/coverImage";
+import {
+  DEFAULT_THEME_SEED,
+  DYNAMIC_THEME_CSS_VARIABLES,
+  deriveCoverTheme,
+  hslToHex,
+  rgbToHsl,
+  type DerivedCoverTheme,
+} from "@/utils/themeTokens";
 
 const SAMPLE_SIZE = 112;
-const HUE_BUCKETS = 12;
+const HUE_BUCKETS = 18;
 const SAT_BUCKETS = 4;
 const LIGHT_BUCKETS = 5;
 const PALETTE_CACHE_LIMIT = 24;
@@ -11,126 +19,16 @@ interface ExtractedPalette {
   palette: string[];
 }
 
+interface PaletteBucket {
+  count: number;
+  hueX: number;
+  hueY: number;
+  saturation: number;
+  lightness: number;
+  hueBucket: number;
+}
+
 const paletteCache = new Map<string, ExtractedPalette>();
-
-interface HSL {
-  h: number;
-  s: number;
-  l: number;
-}
-
-function rgbToHsl(r: number, g: number, b: number): HSL {
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const l = (max + min) / 2;
-  let h = 0;
-  let s = 0;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case rn:
-        h = ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60;
-        break;
-      case gn:
-        h = ((bn - rn) / d + 2) * 60;
-        break;
-      case bn:
-        h = ((rn - gn) / d + 4) * 60;
-        break;
-    }
-  }
-  return { h, s, l };
-}
-
-function hslToHex(h: number, s: number, l: number): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const hp = h / 60;
-  const x = c * (1 - Math.abs((hp % 2) - 1));
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  if (hp >= 0 && hp < 1) {
-    r = c;
-    g = x;
-  } else if (hp < 2) {
-    r = x;
-    g = c;
-  } else if (hp < 3) {
-    g = c;
-    b = x;
-  } else if (hp < 4) {
-    g = x;
-    b = c;
-  } else if (hp < 5) {
-    r = x;
-    b = c;
-  } else {
-    r = c;
-    b = x;
-  }
-  const m = l - c / 2;
-  const toHex = (v: number) =>
-    Math.round((v + m) * 255).toString(16).padStart(2, "0");
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-function parseHex(hex: string): HSL {
-  return rgbToHsl(
-    parseInt(hex.slice(1, 3), 16),
-    parseInt(hex.slice(3, 5), 16),
-    parseInt(hex.slice(5, 7), 16),
-  );
-}
-
-function relativeLuminance(hex: string): number {
-  const channels = [
-    parseInt(hex.slice(1, 3), 16),
-    parseInt(hex.slice(3, 5), 16),
-    parseInt(hex.slice(5, 7), 16),
-  ].map((value) => {
-    const channel = value / 255;
-    return channel <= 0.04045
-      ? channel / 12.92
-      : ((channel + 0.055) / 1.055) ** 2.4;
-  });
-  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
-}
-
-function contrastRatio(a: string, b: string): number {
-  const lighter = Math.max(relativeLuminance(a), relativeLuminance(b));
-  const darker = Math.min(relativeLuminance(a), relativeLuminance(b));
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-function foregroundFor(background: string): string {
-  const dark = "#000000";
-  const light = "#ffffff";
-  return contrastRatio(background, dark) >= contrastRatio(background, light)
-    ? dark
-    : light;
-}
-
-function accentWithContrast(
-  h: number,
-  s: number,
-  initialLightness: number,
-  surfaces: string[],
-): { color: string; lightness: number } {
-  let lightness = initialLightness;
-  let color = hslToHex(h, s, lightness);
-  while (
-    surfaces.some((surface) => contrastRatio(color, surface) < 4.5) &&
-    lightness < 0.88
-  ) {
-    lightness = Math.min(0.88, lightness + 0.01);
-    color = hslToHex(h, s, lightness);
-  }
-  return { color, lightness };
-}
 
 function cachePalette(key: string, value: ExtractedPalette): ExtractedPalette {
   if (paletteCache.size >= PALETTE_CACHE_LIMIT) {
@@ -172,7 +70,7 @@ export async function extractPalette(
 
   const data = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
 
-  const buckets = new Map<string, { count: number; hsl: HSL }>();
+  const buckets = new Map<string, PaletteBucket>();
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3];
     if (a < 200) continue;
@@ -185,30 +83,63 @@ export async function extractPalette(
     const sIdx = Math.min(SAT_BUCKETS - 1, Math.floor(s * SAT_BUCKETS));
     const lIdx = Math.min(LIGHT_BUCKETS - 1, Math.floor(l * LIGHT_BUCKETS));
     const key = `${hIdx}|${sIdx}|${lIdx}`;
+    const hueRadians = (h * Math.PI) / 180;
     const cur = buckets.get(key);
     if (cur) {
       cur.count += 1;
+      cur.hueX += Math.cos(hueRadians);
+      cur.hueY += Math.sin(hueRadians);
+      cur.saturation += s;
+      cur.lightness += l;
     } else {
-      buckets.set(key, { count: 1, hsl: { h, s, l } });
+      buckets.set(key, {
+        count: 1,
+        hueX: Math.cos(hueRadians),
+        hueY: Math.sin(hueRadians),
+        saturation: s,
+        lightness: l,
+        hueBucket: hIdx,
+      });
     }
   }
 
   if (buckets.size === 0) {
     return cachePalette(cacheKey, {
-      seed: "#E85D3A",
-      palette: ["#E85D3A"],
+      seed: DEFAULT_THEME_SEED,
+      palette: [DEFAULT_THEME_SEED],
     });
   }
 
-  const sorted = [...buckets.values()].sort((a, b) => b.count - a.count);
-  const seed = sorted[0].hsl;
+  const sorted = [...buckets.values()]
+    .map((bucket) => {
+      const hue =
+        ((Math.atan2(bucket.hueY, bucket.hueX) * 180) / Math.PI + 360) % 360;
+      return {
+        count: bucket.count,
+        hueBucket: bucket.hueBucket,
+        hsl: {
+          h: hue,
+          s: bucket.saturation / bucket.count,
+          l: bucket.lightness / bucket.count,
+        },
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+  const seedEntry = sorted[0];
+  const seed = seedEntry.hsl;
   const seedHex = hslToHex(seed.h, seed.s, seed.l);
 
   const companions: string[] = [];
   const usedHueBuckets = new Set<number>();
-  usedHueBuckets.add(Math.floor(seed.h / (360 / HUE_BUCKETS)));
+  // 极少量 JPEG 边缘杂色不能左右整套环境色；辅助色至少要有可见面积。
+  const minimumCompanionCount = Math.max(
+    8,
+    Math.ceil(seedEntry.count * 0.04),
+  );
+  usedHueBuckets.add(seedEntry.hueBucket);
   for (const entry of sorted.slice(1)) {
-    const hIdx = Math.floor(entry.hsl.h / (360 / HUE_BUCKETS));
+    if (entry.count < minimumCompanionCount) continue;
+    const hIdx = entry.hueBucket;
     if (usedHueBuckets.has(hIdx)) continue;
     if (companions.length >= 3) break;
     companions.push(hslToHex(entry.hsl.h, entry.hsl.s, entry.hsl.l));
@@ -221,84 +152,23 @@ export async function extractPalette(
   });
 }
 
-/** 把主色扩展成 18 个角色色，写到 :root CSS 变量。 */
-export function applyToCssVars(seed: string): void {
-  const { h, s, l } = parseHex(seed);
-
+/** 将封面原色派生为可读的浅色主题，并原子写入 :root。 */
+export function applyToCssVars(
+  palette: readonly string[] | string,
+): DerivedCoverTheme {
+  const derived = deriveCoverTheme(palette);
   const root = document.documentElement;
-
-  // 强度系数：封面越鲜艳变化越明显，灰色封面也有基础色相偏移
-  const p = 0.3 + Math.min(s, 0.7) * 0.7;
-
-  // — 背景保持近黑，只带极微色相 —
-  const background = hslToHex(h, Math.min(p * 0.08, 0.04), 0.045);
-  root.style.setProperty("--color-bg", background);
-  root.style.setProperty("--color-bg-from", hslToHex(h, Math.min(p * 0.12, 0.06), 0.07));
-  root.style.setProperty("--color-bg-to", hslToHex(h, Math.min(p * 0.06, 0.03), 0.03));
-
-  // — 表面只保留轻微色温，避免封面色把整张卡片染脏 —
-  const card = hslToHex(h, Math.min(p * 0.22, 0.10), 0.115);
-  root.style.setProperty("--color-card", card);
-  root.style.setProperty("--color-card-hover", `hsla(${h}, 18%, 72%, 0.11)`);
-
-  // — 边框承担层级，不抢主题色 —
-  root.style.setProperty("--color-border", `hsla(${h}, 24%, 64%, 0.14)`);
-  root.style.setProperty("--color-border-strong", `hsla(${h}, 28%, 68%, 0.24)`);
-  root.style.setProperty("--color-ring", `hsla(${h}, 34%, 72%, 0.32)`);
-
-  // — 单一同色系强调色；第二色只做明度过渡，不再跨到相邻色相 —
-  const accentSaturation = Math.min(s * 1.25 + 0.16, 0.78);
-  const initialAccentLightness = Math.max(0.55, Math.min(l * 1.12, 0.64));
-  const { color: accent, lightness: accentLightness } = accentWithContrast(
-    h,
-    accentSaturation,
-    initialAccentLightness,
-    [background, card],
-  );
-  root.style.setProperty("--color-accent", accent);
-  root.style.setProperty("--color-on-accent", foregroundFor(accent));
-  root.style.setProperty("--color-accent-secondary", hslToHex((h + 6) % 360, Math.max(0.35, accentSaturation * 0.84), Math.min(0.70, accentLightness + 0.07)));
-  root.style.setProperty("--color-accent-subtle", `hsla(${h}, 55%, 58%, 0.20)`);
-
-  // — 文字保留色温，同时达到稳定的桌面端可读层级 —
-  root.style.setProperty("--color-text-primary", hslToHex(h, Math.min(p * 0.05, 0.025), 0.93));
-  root.style.setProperty("--color-text-secondary", hslToHex(h, Math.min(p * 0.04, 0.02), 0.66));
-  root.style.setProperty("--color-text-tertiary", hslToHex(h, Math.min(p * 0.03, 0.015), 0.56));
-
-  // — 阴影 —
-  root.style.setProperty("--color-shadow", `hsla(${h}, 20%, 0%, 0.48)`);
-
-  // — 滚动条明显 — 
-  root.style.setProperty("--color-scrollbar", `hsla(${h}, 35%, 66%, 0.24)`);
-  root.style.setProperty("--color-scrollbar-hover", `hsla(${h}, 42%, 70%, 0.42)`);
-
-  // — 发光 —
-  root.style.setProperty("--color-glow", `hsla(${h}, 55%, 58%, 0.24)`);
+  for (const [name, value] of Object.entries(derived.tokens)) {
+    root.style.setProperty(name, value);
+  }
+  root.dataset.themeSource = "cover";
+  return derived;
 }
 
 export function resetCssVars(): void {
   const root = document.documentElement;
-  for (const name of [
-    "--color-bg",
-    "--color-bg-from",
-    "--color-bg-to",
-    "--color-card",
-    "--color-card-hover",
-    "--color-border",
-    "--color-border-strong",
-    "--color-ring",
-    "--color-accent",
-    "--color-on-accent",
-    "--color-accent-secondary",
-    "--color-accent-subtle",
-    "--color-text-primary",
-    "--color-text-secondary",
-    "--color-text-tertiary",
-    "--color-shadow",
-    "--color-scrollbar",
-    "--color-scrollbar-hover",
-    "--color-glow",
-  ]) {
+  for (const name of DYNAMIC_THEME_CSS_VARIABLES) {
     root.style.removeProperty(name);
   }
+  delete root.dataset.themeSource;
 }

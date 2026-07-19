@@ -206,7 +206,7 @@ onBeforeUnmount(() => {
   <aside
     :class="[
       'h-full flex flex-col transition-[width,padding] duration-220 ease-out overflow-hidden',
-      'bg-[rgba(18,18,20,0.85)] backdrop-blur-2xl border-r border-border',
+      'bg-glass backdrop-blur-2xl border-r border-border',
       collapsed ? 'w-16 px-2' : 'w-60 px-4',
     ]"
   >
@@ -226,7 +226,7 @@ onBeforeUnmount(() => {
           :stroke-width="1.75"
           class="text-accent shrink-0"
         />
-        <span class="text-base font-semibold text-[rgba(255,255,255,0.9)]">nnplayer</span>
+        <span class="text-base font-semibold text-text-primary">nnplayer</span>
       </div>
       <Music2
         v-else
@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
       <button
         v-if="!collapsed"
         type="button"
-        class="text-[rgba(255,255,255,0.3)] hover:text-[rgba(255,255,255,0.7)] transition-colors p-1"
+        class="text-text-tertiary hover:text-text-primary transition-colors p-1"
         :aria-label="'折叠侧栏'"
         title="折叠侧栏"
         @click="toggleCollapsed"
@@ -274,7 +274,7 @@ onBeforeUnmount(() => {
           class="px-3 py-2 cursor-pointer flex items-center gap-2 text-sm transition-colors"
           :class="
             highlightIndex === idx
-              ? 'bg-accent-subtle text-accent'
+              ? 'bg-accent-subtle text-text-primary'
               : 'text-text-secondary hover:bg-card-hover'
           "
           @mouseenter="highlightIndex = idx"
@@ -283,7 +283,7 @@ onBeforeUnmount(() => {
           <Search
             :size="14"
             :stroke-width="1.75"
-            class="text-[rgba(255,255,255,0.3)] shrink-0"
+            class="text-text-tertiary shrink-0"
           />
           <div class="min-w-0 flex-1">
             <div class="truncate">
@@ -291,7 +291,7 @@ onBeforeUnmount(() => {
             </div>
             <div
               v-if="s.song"
-              class="text-[11px] text-[rgba(255,255,255,0.35)] truncate"
+              class="text-[11px] text-text-tertiary truncate"
             >
               {{ s.song.artists }} · {{ s.song.album }}
             </div>
@@ -302,7 +302,7 @@ onBeforeUnmount(() => {
     <div v-else class="mb-3 flex justify-center shrink-0">
       <button
         type="button"
-        class="w-10 h-10 rounded-xl bg-card-hover text-text-tertiary hover:text-accent hover:bg-accent-subtle flex items-center justify-center transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+        class="w-10 h-10 rounded-xl bg-card-hover text-text-tertiary hover:text-text-primary hover:bg-accent-subtle flex items-center justify-center transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
         :aria-label="'打开搜索'"
         title="打开搜索"
         @click="searchExpand = true"
@@ -341,7 +341,7 @@ onBeforeUnmount(() => {
                 class="px-3 py-2 cursor-pointer rounded-btn flex items-center gap-2 text-sm"
                 :class="
                   highlightIndex === idx
-                    ? 'bg-[rgba(232,93,58,0.12)] text-accent'
+                    ? 'bg-accent-subtle text-text-primary'
                     : 'hover:bg-card-hover'
                 "
                 @mouseenter="highlightIndex = idx"
@@ -350,7 +350,7 @@ onBeforeUnmount(() => {
                 <Search
                   :size="14"
                   :stroke-width="1.75"
-                  class="text-[rgba(255,255,255,0.3)] shrink-0"
+                  class="text-text-tertiary shrink-0"
                 />
                 <div class="min-w-0 flex-1">
                   <div class="truncate">
@@ -358,7 +358,7 @@ onBeforeUnmount(() => {
                   </div>
                   <div
                     v-if="s.song"
-                    class="text-[11px] text-[rgba(255,255,255,0.35)] truncate"
+                    class="text-[11px] text-text-tertiary truncate"
                   >
                     {{ s.song.artists }} · {{ s.song.album }}
                   </div>
@@ -395,7 +395,7 @@ onBeforeUnmount(() => {
           collapsed ? 'justify-center px-2' : 'px-4 gap-3',
           'text-text-secondary hover:text-text-primary hover:bg-card-hover',
         ]"
-        active-class="!text-accent !bg-gradient-to-r !from-accent/[0.12] !to-transparent font-medium"
+        active-class="!text-text-primary !bg-gradient-to-r !from-accent-subtle !to-transparent font-medium"
         :title="collapsed ? item.label : undefined"
       >
         <component
@@ -444,7 +444,7 @@ onBeforeUnmount(() => {
       <button
         v-if="collapsed"
         type="button"
-        class="flex items-center justify-center h-10 rounded-xl text-sm text-text-tertiary hover:text-accent hover:bg-accent-subtle transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+        class="flex items-center justify-center h-10 rounded-xl text-sm text-text-tertiary hover:text-text-primary hover:bg-accent-subtle transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
         title="展开侧栏"
         aria-label="展开侧栏"
         @click="toggleCollapsed"
@@ -472,12 +472,12 @@ onBeforeUnmount(() => {
         {{ userStore.displayName.charAt(0).toUpperCase() }}
       </div>
       <div class="min-w-0 flex-1">
-        <div class="mb-0.5 truncate text-[rgba(255,255,255,0.45)]">
+        <div class="mb-0.5 truncate text-text-secondary">
           {{ userStore.displayName }}
         </div>
         <button
           v-if="userStore.loggedIn"
-          class="text-[rgba(255,255,255,0.35)] hover:text-accent transition-colors"
+          class="text-text-tertiary hover:text-accent transition-colors"
           @click="logout"
         >
           退出登录
