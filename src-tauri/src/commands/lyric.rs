@@ -6,6 +6,7 @@
 use ncm_api::Query;
 use tauri::State;
 
+use crate::commands::auth::ensure_business_success;
 use crate::error::{AppError, AppResult};
 use crate::models::LyricResult;
 use crate::state::AppState;
@@ -29,6 +30,8 @@ pub async fn get_lyric(state: State<'_, AppState>, song_id: u64) -> AppResult<Ly
         )
         .await
         .map_err(crate::error::map_ncm_err)?;
+
+    ensure_business_success(&resp, &[200], "获取歌词")?;
 
     let lrc = resp
         .body
