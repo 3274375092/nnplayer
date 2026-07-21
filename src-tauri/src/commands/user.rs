@@ -3,6 +3,7 @@
 use ncm_api::Query;
 use tauri::State;
 
+use crate::commands::auth::ensure_business_success;
 use crate::error::{AppError, AppResult};
 use crate::models::{parse_ncm_song, Playlist, PlaylistDetail, Song};
 use crate::state::AppState;
@@ -104,6 +105,8 @@ pub async fn get_playlist_detail(
         )
         .await
         .map_err(crate::error::map_ncm_err)?;
+
+    ensure_business_success(&resp, &[200], "读取歌单详情")?;
     drop(api);
 
     let playlist = Playlist {

@@ -321,7 +321,7 @@ async fn finalize_login(
     })
 }
 
-fn ensure_business_success(resp: &ApiResponse, accepted: &[i64], action: &str) -> AppResult<()> {
+pub(crate) fn ensure_business_success(resp: &ApiResponse, accepted: &[i64], action: &str) -> AppResult<()> {
     let code = AppState::response_code(resp);
     if accepted.contains(&code) {
         return Ok(());
@@ -565,16 +565,7 @@ fn now_unix() -> i64 {
 }
 
 fn build_anonymous_client() -> AppResult<ncm_api::ApiClient> {
-    use reqwest::Client;
-    let http = Client::builder()
-        .user_agent(concat!(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ",
-            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        ))
-        .cookie_store(true)
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
+    let http = crate::state::build_http_client()
         .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(ncm_api::ApiClient::new(None, http))
 }

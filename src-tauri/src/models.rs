@@ -128,3 +128,156 @@ pub fn parse_ncm_song(val: &serde_json::Value, duration_field: &str) -> Option<S
         pic_url,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_ncm_song_basic() {
+        let val = json!({
+            "id": 12345,
+            "name": "晴天",
+            "ar": [{"name": "周杰伦"}],
+            "al": {"name": "叶惠美", "picUrl": "https://example.com/cover.jpg"},
+            "dt": 269000
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.id, 12345);
+        assert_eq!(song.name, "晴天");
+        assert_eq!(song.artists, "周杰伦");
+        assert_eq!(song.album, "叶惠美");
+        assert_eq!(song.duration, 269000);
+        assert_eq!(song.pic_url.as_deref(), Some("https://example.com/cover.jpg"));
+    }
+
+    #[test]
+    fn parse_ncm_song_uses_duration_field_from_search() {
+        let val = json!({
+            "id": 1,
+            "name": "Song",
+            "ar": [{"name": "Artist"}],
+            "al": {"name": "Album"},
+            "duration": 180000
+        });
+        let song = parse_ncm_song(&val, "duration").expect("should parse");
+        assert_eq!(song.duration, 180000);
+    }
+
+    #[test]
+    fn parse_ncm_song_falls_back_to_dt_when_named_field_missing() {
+        let val = json!({
+            "id": 999,
+            "name": "Missing",
+            "ar": [],
+            "al": {},
+            "dt": 200000
+        });
+        // duration_field "nonexist" won't match; fallback to dt.
+        let song = parse_ncm_song(&val, "nonexist").expect("should parse");
+        assert_eq!(song.duration, 200000);
+    }
+
+    #[test]
+    fn parse_ncm_song_falls_back_to_duration_when_dt_missing() {
+        let val = json!({
+            "id": 999,
+            "name": "Missing",
+            "ar": [],
+            "al": {},
+            "duration": 200000
+        });
+        let song = parse_ncm_song(&val, "nonexist").expect("should parse");
+        assert_eq!(song.duration, 200000);
+    }
+
+    #[test]
+    fn parse_ncm_song_returns_zero_duration_when_all_fields_missing() {
+        let val = json!({
+            "id": 1,
+            "name": "S",
+            "ar": [{"name": "A"}],
+            "al": {"name": "B"}
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.duration, 0);
+    }
+
+    #[test]
+    fn parse_ncm_song_returns_none_on_missing_id() {
+        let val = json!({ "name": "NoId", "ar": [], "al": {} });
+        assert!(parse_ncm_song(&val, "dt").is_none());
+    }
+
+    #[test]
+    fn parse_ncm_song_returns_none_on_missing_name() {
+        let val = json!({ "id": 1, "ar": [], "al": {} });
+        assert!(parse_ncm_song(&val, "dt").is_none());
+    }
+
+    #[test]
+    fn parse_ncm_song_handles_multiple_artists() {
+        let val = json!({
+            "id": 1,
+            "name": "Duet",
+            "ar": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
+            "al": {"name": "AL"},
+            "dt": 1000
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.artists, "A / B / C");
+    }
+
+    #[test]
+    fn parse_ncm_song_handles_null_artist_array() {
+        let val = json!({
+            "id": 1,
+            "name": "Solo",
+            "ar": null,
+            "al": {"name": "AL"},
+            "dt": 1000
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.artists, "");
+    }
+
+    #[test]
+    fn parse_ncm_song_handles_artists_with_missing_names() {
+        let val = json!({
+            "id": 1,
+            "name": "Song",
+            "ar": [{"id": 1}, {"name": "B"}],
+            "al": {"name": "AL"},
+            "dt": 1000
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.artists, "B");
+    }
+
+    #[test]
+    fn parse_ncm_song_missing_album_name_yields_empty_string() {
+        let val = json!({
+            "id": 1,
+            "name": "Song",
+            "ar": [{"name": "A"}],
+            "al": {},
+            "dt": 1000
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.album, "");
+    }
+
+    #[test]
+    fn parse_ncm_song_missing_pic_url_yields_none() {
+        let val = json!({
+            "id": 1,
+            "name": "Song",
+            "ar": [{"name": "A"}],
+            "al": {"name": "AL"},
+            "dt": 1000
+        });
+        let song = parse_ncm_song(&val, "dt").expect("should parse");
+        assert_eq!(song.pic_url, None);
+    }
+}

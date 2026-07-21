@@ -24,6 +24,22 @@ use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::error::AppError;
 
+const USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ",
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/53736"
+);
+
+/// Build a shared reqwest Client with the standard UA, cookie store, and timeouts.
+pub(crate) fn build_http_client() -> anyhow::Result<Client> {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .cookie_store(true)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(Into::into)
+}
+
 /// 用户基本信息（持久化的部分）。
 #[derive(Default, Clone, Debug)]
 pub struct AuthState {
@@ -70,16 +86,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(cookie: Option<String>, auth: AuthState) -> anyhow::Result<Self> {
-        let http = Client::builder()
-            .user_agent(concat!(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ",
-                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/53736"
-            ))
-            .cookie_store(true)
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(15))
-            .build()?;
-
+        let http = build_http_client()?;
         let api = ApiClient::new(cookie, http);
 
         Ok(Self {
@@ -138,5 +145,139 @@ impl AppState {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error")
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ncm_api::ApiResponse;
+    use serde_json::json;
+
+    // The main binary installs the ring provider at startup; replicate that for tests.
+    fn init_rustls() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    fn api_response(code: serde_json::Value) -> ApiResponse {
+        ApiResponse {
+            status: 200,
+            body: code,
+            cookie: vec![],
+        }
+    }
+
+    #[test]
+    fn response_code_returns_integer_code() {
+        let resp = api_response(json!({ "code": 200 }));
+        assert_eq!(AppState::response_code(&resp), 200);
+    }
+
+    #[test]
+    fn response_code_parses_string_code() {
+        let resp = api_response(json!({ "code": "200" }));
+        assert_eq!(AppState::response_code(&resp), 200);
+    }
+
+    #[test]
+    fn response_code_falls_back_to_status_on_missing_code() {
+        let resp = api_response(json!({ "msg": "ok" }));
+        assert_eq!(AppState::response_code(&resp), 200);
+    }
+
+    #[test]
+    fn response_code_falls_back_to_status_on_null_code() {
+        let resp = api_response(json!({ "code": null }));
+        assert_eq!(AppState::response_code(&resp), 200);
+    }
+
+    #[test]
+    fn response_message_returns_msg_field() {
+        let resp = api_response(json!({ "code": 400, "msg": "密码错误" }));
+        assert_eq!(AppState::response_message(&resp), "密码错误");
+    }
+
+    #[test]
+    fn response_message_returns_message_field_as_fallback() {
+        let resp = api_response(json!({ "code": 400, "message": "bad request" }));
+        assert_eq!(AppState::response_message(&resp), "bad request");
+    }
+
+    #[test]
+    fn response_message_returns_default_when_both_missing() {
+        let resp = api_response(json!({ "code": 500 }));
+        assert_eq!(AppState::response_message(&resp), "Unknown error");
+    }
+
+    #[test]
+    fn auth_state_is_logged_in_requires_positive_user_id_and_non_empty_cookie() {
+        let auth = AuthState {
+            user_id: Some(123),
+            cookie: Some("MUSIC_U=abc".to_string()),
+            ..Default::default()
+        };
+        assert!(auth.is_logged_in());
+
+        let no_id = AuthState {
+            user_id: None,
+            cookie: Some("MUSIC_U=abc".to_string()),
+            ..Default::default()
+        };
+        assert!(!no_id.is_logged_in());
+
+        let empty_cookie = AuthState {
+            user_id: Some(123),
+            cookie: Some("   ".to_string()),
+            ..Default::default()
+        };
+        assert!(!empty_cookie.is_logged_in());
+    }
+
+    #[test]
+    fn auth_state_require_login_returns_error_when_not_logged_in() {
+        let auth = AuthState::default();
+        assert!(auth.require_login().is_err());
+        assert!(matches!(auth.require_login().unwrap_err(), AppError::Unauthorized));
+    }
+
+    #[test]
+    fn build_http_client_succeeds() {
+        init_rustls();
+        let result = build_http_client();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_restore_complete_returns_immediately_when_already_set() {
+        init_rustls();
+        let state = AppState::new(None, Default::default()).expect("create state");
+        state.mark_restore_complete();
+        state.wait_restore_complete().await;
+    }
+
+    #[tokio::test]
+    async fn check_login_blocks_until_restore_complete() {
+        init_rustls();
+        let state = AppState::new(None, Default::default()).expect("create state");
+        let state_clone = state.clone();
+        let handle = tokio::spawn(async move {
+            state_clone.check_login().await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        state.mark_restore_complete();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("timed out")
+            .expect("join failed");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn double_mark_restore_complete_is_idempotent() {
+        init_rustls();
+        let state = AppState::new(None, Default::default()).expect("create state");
+        state.mark_restore_complete();
+        state.mark_restore_complete();
+        state.wait_restore_complete().await;
     }
 }

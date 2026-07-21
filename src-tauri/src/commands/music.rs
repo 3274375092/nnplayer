@@ -4,6 +4,7 @@
 use ncm_api::Query;
 use tauri::State;
 
+use crate::commands::auth::ensure_business_success;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     parse_ncm_song, DailyRecommend, SearchResult, SearchSuggestion, Song, SongUrl,
@@ -37,6 +38,8 @@ pub async fn search_songs(
         )
         .await
         .map_err(crate::error::map_ncm_err)?;
+
+    ensure_business_success(&resp, &[200], "搜索")?;
     drop(api);
 
     let songs: Vec<Song> = resp
@@ -70,6 +73,8 @@ pub async fn get_daily_recommend(state: State<'_, AppState>) -> AppResult<DailyR
         .recommend_songs(&Query::new().cookie(&cookie))
         .await
         .map_err(crate::error::map_ncm_err)?;
+
+    ensure_business_success(&resp, &[200], "每日推荐")?;
     drop(api);
 
     let songs: Vec<Song> = resp
@@ -101,6 +106,8 @@ pub async fn get_song_url(state: State<'_, AppState>, song_id: u64) -> AppResult
         )
         .await
         .map_err(crate::error::map_ncm_err)?;
+
+    ensure_business_success(&resp, &[200], "获取播放地址")?;
     drop(api);
 
     let url = resp
@@ -144,6 +151,12 @@ pub async fn search_suggest(
         )
         .await
         .map_err(crate::error::map_ncm_err)?;
+
+    // 搜索建议接口有时用 code=200 返回结果，空关键词或无结果也应当继续。
+    // 这里只拦截明确的业务错误码如 400/502。
+    if let Err(e) = ensure_business_success(&resp, &[200], "搜索建议") {
+        log::warn!("[search_suggest] 接口返回非预期状态，忽略: {e}");
+    }
     drop(api);
 
     let mut out: Vec<SearchSuggestion> = Vec::new();
