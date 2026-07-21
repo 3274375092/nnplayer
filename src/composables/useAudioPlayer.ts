@@ -30,6 +30,19 @@ export interface AudioState {
   muted: boolean;
 }
 
+export interface MediaClockSample {
+  /** 当前媒体代际；切换或销毁活动 audio 时变化。 */
+  mediaGeneration: number;
+  /** 与该媒体代际绑定的歌曲，而不是队列当前选中项。 */
+  songId: number | null;
+  positionMs: number;
+  playbackRate: number;
+  playing: boolean;
+  loading: boolean;
+  seekRevision: number;
+  sampledAt: number;
+}
+
 const SONG_URL_CACHE_TTL_MS = 3 * 60 * 1000;
 const SONG_URL_CACHE_LIMIT = 8;
 
@@ -250,14 +263,31 @@ export function useAudioPlayer() {
       : state.currentTime;
   }
 
-  /** 读取底层媒体播放速率，供跨窗口时钟同步使用。 */
-  function getMediaPlaybackRate(): number {
-    const playbackRate = audio?.playbackRate;
-    return typeof playbackRate === "number" &&
-      Number.isFinite(playbackRate) &&
-      playbackRate > 0
-      ? playbackRate
-      : 1;
+  /** 一次性读取同一媒体代际的歌曲身份、位置与离散播放状态。 */
+  function getMediaClockSample(): MediaClockSample {
+    const element = audio;
+    const currentTime = element?.currentTime;
+    const playbackRate = element?.playbackRate;
+    return {
+      mediaGeneration: activeMediaGeneration,
+      songId: state.currentSongId,
+      positionMs:
+        typeof currentTime === "number" &&
+          Number.isFinite(currentTime) &&
+          currentTime >= 0
+          ? currentTime * 1000
+          : Math.max(0, state.currentTime * 1000),
+      playbackRate:
+        typeof playbackRate === "number" &&
+          Number.isFinite(playbackRate) &&
+          playbackRate > 0
+          ? playbackRate
+          : 1,
+      playing: state.playing && !state.loading,
+      loading: state.loading,
+      seekRevision: state.seekRevision,
+      sampledAt: Date.now(),
+    };
   }
 
   function hasSource(): boolean {
@@ -671,8 +701,7 @@ export function useAudioPlayer() {
     seek,
     setVolume,
     toggleMute,
-    getMediaCurrentTime,
-    getMediaPlaybackRate,
+    getMediaClockSample,
     prefetchSongUrl,
     hasSource,
     eventTarget,

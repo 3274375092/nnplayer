@@ -157,30 +157,6 @@ export function parseLrcWithTranslation(
   return lines;
 }
 
-/**
- * 根据当前播放时间（秒），二分定位到当前应该高亮的行索引。
- * 规则：返回最后一条 time <= currentMs 的索引；若无则返回 -1。
- */
-export function findActiveLineIndex(lines: LyricLine[], currentMs: number): number {
-  if (lines.length === 0) return -1;
-  if (currentMs < lines[0].time) return -1;
-
-  // 二分：找第一个 time > currentMs 的位置，然后 -1
-  let lo = 0;
-  let hi = lines.length - 1;
-  let ans = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (lines[mid].time <= currentMs) {
-      ans = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return ans;
-}
-
 // =============== 阶段 3：卡拉OK 字符级时间窗 ===============
 // YRC 逐字歌词支持。
 

@@ -24,7 +24,8 @@ const isDesktopLyrics = computed(() => {
   }
 });
 
-const { setup, teardown } = useTauriBridge();
+// 桌面歌词 WebView 不能实例化主窗口 player/audio/MediaSession runtime。
+const tauriBridge = isDesktopLyrics.value ? null : useTauriBridge();
 // 桌面歌词是透明独立窗口，只接收主窗口发送的高明度 accent。
 if (!isDesktopLyrics.value) useCoverTheme();
 
@@ -32,7 +33,7 @@ onMounted(async () => {
   if (isDesktopLyrics.value) return;
 
   // 歌词时钟属于主窗口全局播放能力，不能依赖当前路由是否渲染 LyricPanel。
-  useLyric();
+  const lyric = useLyric();
 
   // Vite 浏览器预览没有 Tauri runtime。歌词/播放器本身仍可正常挂载，
   // 仅跳过原生窗口生命周期与跨窗口事件桥接。
@@ -42,11 +43,11 @@ onMounted(async () => {
     void desktopLyricsStore.closeWindow();
   });
 
-  await setup();
+  await tauriBridge?.setup(lyric.activateDesktopLyricsPublisher);
 });
 
 onBeforeUnmount(() => {
-  teardown();
+  tauriBridge?.teardown();
 });
 </script>
 

@@ -301,8 +301,7 @@ export const usePlayerStore = defineStore("player", () => {
     hasPrev,
     // 转发 audio 控制器
     audioState: controller.state,
-    getMediaCurrentTime: controller.getMediaCurrentTime,
-    getMediaPlaybackRate: controller.getMediaPlaybackRate,
+    getMediaClockSample: controller.getMediaClockSample,
     togglePlay,
     seek: controller.seek,
     setVolume: controller.setVolume,

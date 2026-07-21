@@ -1,7 +1,6 @@
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import { usePlayerStore } from "@/stores/player";
 import { useDesktopLyricsStore, GEOM_KEY } from "@/stores/desktopLyrics";
-import { triggerDesktopLyricsPush } from "@/composables/useLyric";
 
 export function useTauriBridge() {
   const playerStore = usePlayerStore();
@@ -9,7 +8,7 @@ export function useTauriBridge() {
   const unlistens: UnlistenFn[] = [];
   let tornDown = false;
 
-  async function setup() {
+  async function setup(activateDesktopLyricsPublisher: () => void) {
     playerStore.bindAutoNext();
 
     const register = async <T>(event: string, handler: EventCallback<T>) => {
@@ -25,7 +24,7 @@ export function useTauriBridge() {
     // 快照请求必须最先注册；窗口状态同步可能包含 IPC，不能让子窗在此期间
     // 发出的唯一请求落空。
     await register("desktop-lyrics:request-snapshot", () => {
-      triggerDesktopLyricsPush();
+      activateDesktopLyricsPublisher();
     });
 
     await Promise.all([
@@ -65,7 +64,7 @@ export function useTauriBridge() {
 
     // 主窗口重载而桌面歌词窗口仍存活时，子窗不会重新 mounted 请求快照；
     // setup 完成后主动广播新 session 的首包。
-    if (!tornDown) triggerDesktopLyricsPush();
+    if (!tornDown) activateDesktopLyricsPublisher();
   }
 
   function teardown() {

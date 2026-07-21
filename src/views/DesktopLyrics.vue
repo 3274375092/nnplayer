@@ -15,11 +15,10 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useDesktopLyricsBridge } from "@/composables/useDesktopLyricsBridge";
 import { useLyricWindowPrefs } from "@/composables/useLyricWindowPrefs";
 import { useWindowGeometry } from "@/composables/useWindowGeometry";
-import { findActiveLineIndex } from "@/utils/lrcParser";
-import { getKaraokeTokenProgress } from "@/utils/lyricTiming";
+import { createKaraokeFrameProjector } from "@/lyrics/lyricFrame";
 import { DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
 
-const { state } = useDesktopLyricsBridge();
+const { state, frame: lyricFrame } = useDesktopLyricsBridge();
 const { prefs, apply: applyPrefs } = useLyricWindowPrefs();
 useWindowGeometry(); // 防抖保存窗口位置/大小
 
@@ -32,111 +31,7 @@ let disposed = false;
 // 主窗只低频发送绝对时钟锚点；完整 lines/tokensByLine 在快照中只传一次。
 // 子窗每帧由绝对位置自行二分切行，因此换行不依赖 IPC 到达时机。
 
-const localPositionMs = ref(0);
-let anchorPositionMs = 0;
-let anchorTs = 0;
-let anchorPlaying = false;
-let anchorPlaybackRate = 1;
-let lastSongId: number | null = null;
-let lastSessionId = "";
-let lastSeekRevision = -1;
-let initialized = false;
-let rafId = 0;
-
-const HARD_SYNC_THRESHOLD_MS = 300;
-const SOFT_CORRECTION_RATIO = 0.35;
-const MAX_TRANSPORT_COMPENSATION_MS = 5000;
-
-function packetPositionNow() {
-  const s = state.value;
-  if (!s.playing) return s.positionMs;
-  const transportAge = Number.isFinite(s.sampledAt)
-    ? Math.max(
-        0,
-        Math.min(MAX_TRANSPORT_COMPENSATION_MS, Date.now() - s.sampledAt),
-      )
-    : 0;
-  return s.positionMs + transportAge * s.playbackRate;
-}
-
-function shouldRunLocalRaf() {
-  return anchorPlaying && document.visibilityState === "visible";
-}
-
-function stopLocalRaf() {
-  if (rafId) cancelAnimationFrame(rafId);
-  rafId = 0;
-}
-
-function rafTick() {
-  rafId = 0;
-  if (!shouldRunLocalRaf()) return;
-  localPositionMs.value =
-    anchorPositionMs +
-    (performance.now() - anchorTs) * anchorPlaybackRate;
-  rafId = requestAnimationFrame(rafTick);
-}
-
-function updateLocalRaf() {
-  if (!shouldRunLocalRaf()) {
-    stopLocalRaf();
-    return;
-  }
-  if (!rafId) rafId = requestAnimationFrame(rafTick);
-}
-
-function syncAnchor(forceSnap: boolean) {
-  const s = state.value;
-  const now = performance.now();
-  const elapsed = Math.max(0, now - anchorTs);
-  const currentPosition = anchorPlaying
-    ? anchorPositionMs + elapsed * anchorPlaybackRate
-    : anchorPositionMs;
-  const authoritativePosition = packetPositionNow();
-  const positionDelta = authoritativePosition - currentPosition;
-  const sessionChanged = initialized && s.sessionId !== lastSessionId;
-  const songChanged = initialized && s.songId !== lastSongId;
-  const seeked = initialized && s.seekRevision !== lastSeekRevision;
-  const playStateChanged = initialized && s.playing !== anchorPlaying;
-  const rateChanged = initialized && s.playbackRate !== anchorPlaybackRate;
-  const hardSync =
-    forceSnap ||
-    !initialized ||
-    sessionChanged ||
-    songChanged ||
-    seeked ||
-    playStateChanged ||
-    rateChanged ||
-    Math.abs(positionDelta) >= HARD_SYNC_THRESHOLD_MS;
-
-  anchorPositionMs = hardSync
-    ? authoritativePosition
-    : currentPosition + positionDelta * SOFT_CORRECTION_RATIO;
-  localPositionMs.value = anchorPositionMs;
-  anchorTs = now;
-  anchorPlaying = s.playing;
-  anchorPlaybackRate = s.playbackRate;
-  lastSessionId = s.sessionId;
-  lastSongId = s.songId;
-  lastSeekRevision = s.seekRevision;
-  initialized = true;
-  updateLocalRaf();
-}
-
-watch(
-  () => [state.value.sessionId, state.value.sequence],
-  () => syncAnchor(false),
-);
-
-const activeLineIndex = computed(() =>
-  findActiveLineIndex(state.value.lines, Math.floor(localPositionMs.value)),
-);
-
-const localProgressMs = computed(() => {
-  const idx = activeLineIndex.value;
-  const line = idx >= 0 ? state.value.lines[idx] : undefined;
-  return line ? Math.max(0, localPositionMs.value - line.time) : 0;
-});
+const activeLineIndex = computed(() => lyricFrame.value.activeLineIndex);
 
 const visible = computed(() => {
   const ls = state.value.lines;
@@ -152,6 +47,7 @@ const hasSong = computed(() => !!state.value.songName);
 const hasLyric = computed(() => state.value.lines.length > 0);
 
 const placeholderText = computed(() => {
+  if (state.value.status === "syncing") return "同步中…";
   if (!hasSong.value) return "等待播放…";
   if (!hasLyric.value) return "暂无歌词";
   return "♪";
@@ -165,20 +61,10 @@ const placeholderText = computed(() => {
 //   - 进行中 → (localProgressMs - startMs) / (endMs - startMs)
 // 无 YRC token 时只显示行级歌词，不伪造看似精确的逐字动画。
 
-interface CharRender {
-  char: string;
-  pct: number;
-}
-
-/** 逐字渲染数据：每个字的字内已唱百分比（0~1） */
-const chars = computed<CharRender[]>(() => {
-  const tokens = state.value.tokensByLine[activeLineIndex.value] ?? [];
-  if (!tokens || tokens.length === 0) return [];
-  const now = localProgressMs.value;
-  return tokens.map((token) => ({
-    char: token.char,
-    pct: getKaraokeTokenProgress(token, now),
-  }));
+const karaokeFrameProjector = createKaraokeFrameProjector();
+const projectedKaraokeFrame = computed(() => {
+  const frame = lyricFrame.value;
+  return karaokeFrameProjector.project(frame.tokens, frame.lineProgressMs);
 });
 
 // =============== CSS 变量 ===============
@@ -261,11 +147,6 @@ watch(
 
 // =============== 生命周期 ===============
 
-function onVisibilityChange() {
-  // 恢复可见时用最近权威包（含 sampledAt）补齐后台经过的时间。
-  syncAnchor(document.visibilityState === "visible");
-}
-
 onMounted(async () => {
   disposed = false;
   lyricResizeObserver = new ResizeObserver(() => fitCurrentLine());
@@ -287,10 +168,6 @@ onMounted(async () => {
 
   // Escape 键关闭
   window.addEventListener("keydown", onKeyDown);
-  document.addEventListener("visibilitychange", onVisibilityChange);
-
-  // 首帧用 EMPTY 锚点；只有收到 playing=true 后才启动 rAF。
-  syncAnchor(true);
 });
 
 onBeforeUnmount(() => {
@@ -300,8 +177,6 @@ onBeforeUnmount(() => {
   unlistens.forEach((u) => u());
   unlistens.length = 0;
   window.removeEventListener("keydown", onKeyDown);
-  document.removeEventListener("visibilitychange", onVisibilityChange);
-  stopLocalRaf();
   _cleanupDragListeners();
 });
 
@@ -438,7 +313,7 @@ function onFontSizeChange(delta: number) {
       <!-- 当前行（卡拉OK 逐字） -->
       <div ref="currentWrapRef" class="current-wrap">
         <h1
-          v-if="visible.current && chars.length > 0"
+          v-if="visible.current && projectedKaraokeFrame.tokens.length > 0"
           class="current-lyric text-transparent font-semibold leading-tight text-center"
           :aria-label="visible.current.text"
         >
@@ -451,10 +326,10 @@ function onFontSizeChange(delta: number) {
           >
             <!-- 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除 -->
             <span
-              v-for="(c, i) in chars"
+              v-for="(c, i) in projectedKaraokeFrame.tokens"
               :key="i"
               class="lyric-char"
-              :style="{ '--char-pct': `${(c.pct * 100).toFixed(2)}%` }"
+              :style="{ '--char-pct': `${(c.progress * 100).toFixed(2)}%` }"
             >
               <span class="lyric-char__sung">{{ c.char }}</span>
               <span class="lyric-char__pending">{{ c.char }}</span>

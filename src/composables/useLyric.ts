@@ -24,11 +24,9 @@ import {
   type ComputedRef,
   type Ref,
 } from "vue";
-import { emitTo } from "@tauri-apps/api/event";
-import { isTauri } from "@tauri-apps/api/core";
 import { getLyric } from "@/composables/useNcmApi";
+import { useDesktopLyricsPublisher } from "@/composables/useDesktopLyricsPublisher";
 import {
-  findActiveLineIndex,
   getYrcLineStartMs,
   getYrcLineText,
   parseLrc,
@@ -36,6 +34,10 @@ import {
   parseYrc,
   type LyricLine,
 } from "@/utils/lrcParser";
+import {
+  projectLyricFrame,
+  type KaraokeToken,
+} from "@/lyrics/lyricFrame";
 import { usePlayerStore } from "@/stores/player";
 import { useThemeStore } from "@/stores/theme";
 import {
@@ -45,65 +47,7 @@ import {
 
 // =============== 桌面歌词 payload ===============
 
-export interface KaraokeToken {
-  char: string;
-  startMs: number;
-  endMs: number;
-}
-
-const ENGINE_SESSION_STARTED_AT = Date.now();
-const ENGINE_SESSION_ID = `${ENGINE_SESSION_STARTED_AT}-${Math.random().toString(36).slice(2)}`;
-
-interface DesktopLyricsPacket {
-  /** 主窗口歌词引擎会话；HMR/重载后变化 */
-  sessionId: string;
-  /** 会话启动时间，用于拒绝迟到的旧会话事件 */
-  sessionStartedAt: number;
-  /** 当前歌曲 id；用于丢弃切歌前的迟到事件 */
-  songId: number | null;
-  /** 全局单调递增的事件序号 */
-  sequence: number;
-}
-
-/** 稳态同步只携带媒体锚点，不重复序列化整首歌词。 */
-export interface DesktopLyricsClockPayload extends DesktopLyricsPacket {
-  /** 权威媒体绝对位置（毫秒） */
-  positionMs: number;
-  /** 采样时的 Unix 毫秒；子窗用它补偿 IPC 传输耗时 */
-  sampledAt: number;
-  /** 当前媒体播放速率 */
-  playbackRate: number;
-  /** 每次 seek 递增；同一行内的小幅 seek 也必须强制重锚 */
-  seekRevision: number;
-  /** 是否正在播放（子窗据此决定本地时钟是否前进） */
-  playing: boolean;
-}
-
-/** 歌曲、歌词或主题变化时发送的完整时间轴快照。 */
-export interface DesktopLyricsSnapshotPayload extends DesktopLyricsClockPayload {
-  /** 歌曲名 */
-  songName: string;
-  /** 艺术家 */
-  artists: string;
-  /** 完整歌词行（多行渲染用） */
-  lines: LyricLine[];
-  /** 与 lines 下标一一对应的精确 YRC token 时间窗 */
-  tokensByLine: KaraokeToken[][];
-  /** 封面提取的强调色（hex），供桌面歌词卡拉OK 逐字染色 */
-  accentColor: string;
-}
-
-// =============== 主窗 ↔ 桌面歌词窗：拉取快照 ===============
-//
-// 桌面歌词窗口打开瞬间会 emit 'desktop-lyrics:request-snapshot'。
-// 主窗 App.vue 监听到该事件后调用 triggerDesktopLyricsPush() 推一份最新状态。
-// 引擎是全局单例，因此触发器始终指向同一个权威快照函数。
-
-let _pushDesktopLyrics: (() => void) | null = null;
-
-export function triggerDesktopLyricsPush() {
-  _pushDesktopLyrics?.();
-}
+export type { KaraokeToken } from "@/lyrics/lyricFrame";
 
 export interface UseLyricReturn {
   /** 解析后的歌词行 */
@@ -126,6 +70,8 @@ export interface UseLyricReturn {
   retry: () => void;
   /** 主歌词面板挂载时申请逐帧更新；返回幂等释放函数 */
   acquireRealtimeUpdates: () => () => void;
+  /** 主窗口收到桌面歌词快照请求时激活 publisher。 */
+  activateDesktopLyricsPublisher: () => void;
   /** 跳转到指定时间（秒） */
   seekTo: (seconds: number) => void;
 }
@@ -359,12 +305,12 @@ function createLyricEngine(): UseLyricReturn {
     const delay = AUTO_RETRY_DELAYS_MS[retryAttempt++];
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
-      if (player.currentSong?.id === songId) void loadFor(songId);
+      if (player.currentSong?.id === songId) void loadFor(songId, true);
     }, delay);
   }
 
-  async function loadFor(songId: number) {
-    if (songId === currentSongId.value) return;
+  async function loadFor(songId: number, force = false) {
+    if (!force && songId === currentSongId.value) return;
     const seq = ++lyricSeq;
     currentSongId.value = songId;
     const cached = readCachedTimeline(songId);
@@ -393,9 +339,9 @@ function createLyricEngine(): UseLyricReturn {
     } catch (e) {
       if (seq !== lyricSeq) return;
       error.value = e instanceof Error ? e.message : "歌词加载失败";
-      // 失败既不缓存也不把 songId 标记成已完成，后续显式重试不会被短路。
+      // Timeline 身份必须继续匹配当前媒体，这样桌面窗口能收到“已同步但
+      // 暂无歌词”的空快照；显式 force 参数负责绕过同歌短路并继续重试。
       if (player.currentSong?.id === songId) {
-        currentSongId.value = null;
         scheduleAutomaticRetry(songId);
       }
     } finally {
@@ -428,23 +374,24 @@ function createLyricEngine(): UseLyricReturn {
     const songId = player.currentSong?.id ?? null;
     if (songId === null) return;
     resetRetryState(songId);
-    currentSongId.value = null;
     error.value = "";
-    void loadFor(songId);
+    void loadFor(songId, true);
   }
 
   function positionFor(positionMs: number): {
     index: number;
     lineProgressMs: number;
   } {
-    if (lines.value.length === 0) {
-      return { index: -1, lineProgressMs: 0 };
-    }
-    const index = findActiveLineIndex(lines.value, Math.floor(positionMs));
-    if (index < 0) return { index: -1, lineProgressMs: 0 };
+    const frame = projectLyricFrame(
+      {
+        lines: lines.value,
+        tokensByLine: preciseTokensByLine.value,
+      },
+      positionMs,
+    );
     return {
-      index,
-      lineProgressMs: Math.max(0, positionMs - lines.value[index].time),
+      index: frame.activeLineIndex,
+      lineProgressMs: frame.lineProgressMs,
     };
   }
 
@@ -470,12 +417,9 @@ function createLyricEngine(): UseLyricReturn {
   }
 
   function syncClockFromMedia() {
-    const seconds = player.getMediaCurrentTime();
-    clockMs.value = Number.isFinite(seconds)
-      ? Math.max(0, seconds * 1000)
-      : 0;
-    const rate = player.getMediaPlaybackRate();
-    mediaPlaybackRate.value = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    const sample = player.getMediaClockSample();
+    clockMs.value = sample.positionMs;
+    mediaPlaybackRate.value = sample.playbackRate;
   }
 
   function stopClockRaf() {
@@ -532,109 +476,11 @@ function createLyricEngine(): UseLyricReturn {
     { flush: "sync" },
   );
 
-  /**
-   * 桌面歌词协议分为两条通道：
-   * - snapshot：歌曲/歌词/主题变化时发送一次完整时间轴；
-   * - clock：播放期间每秒低频重锚，离散状态则立即发送。
-   * 子窗持有 lines + tokensByLine 后自行切行，不再每 250ms 传整首歌词。
-   */
-  const DESKTOP_LYRICS_LABEL = "desktop-lyrics";
-  const CLOCK_REANCHOR_INTERVAL_MS = 1000;
-  let payloadSequence = 0;
-  let reanchorTimer: ReturnType<typeof setInterval> | undefined;
-  let desktopLyricsSubscribed = false;
-  let desktopSubscriptionEpoch = 0;
-
-  function buildClockPayload(): DesktopLyricsClockPayload {
-    const seconds = player.getMediaCurrentTime();
-    const positionMs = Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : 0;
-    const rate = player.getMediaPlaybackRate();
-    return {
-      sessionId: ENGINE_SESSION_ID,
-      sessionStartedAt: ENGINE_SESSION_STARTED_AT,
-      songId: player.currentSong?.id ?? null,
-      sequence: ++payloadSequence,
-      positionMs,
-      sampledAt: Date.now(),
-      playbackRate: Number.isFinite(rate) && rate > 0 ? rate : 1,
-      seekRevision: player.audioState.seekRevision,
-      playing: player.audioState.playing && !player.audioState.loading,
-    };
-  }
-
-  function buildSnapshotPayload(): DesktopLyricsSnapshotPayload {
-    return {
-      ...buildClockPayload(),
-      songName: player.currentSong?.name ?? "",
-      artists: player.currentSong?.artists ?? "",
-      lines: lines.value,
-      tokensByLine: preciseTokensByLine.value,
-      accentColor: theme.desktopAccent,
-    };
-  }
-
-  function onDesktopEmitFailed(epoch: number) {
-    // 旧窗口的迟到失败不能撤销刚由新窗口建立的订阅。
-    if (epoch !== desktopSubscriptionEpoch) return;
-    desktopLyricsSubscribed = false;
-    desktopSubscriptionEpoch += 1;
-    realtimeConsumerCount = 0;
-    stopReanchorTimer();
-  }
-
-  function sendClock() {
-    if (!isTauri() || !desktopLyricsSubscribed) return;
-    const epoch = desktopSubscriptionEpoch;
-    void emitTo(
-      DESKTOP_LYRICS_LABEL,
-      "desktop-lyrics:clock",
-      buildClockPayload(),
-    ).catch(() => onDesktopEmitFailed(epoch));
-  }
-
-  function sendSnapshot() {
-    if (!isTauri() || !desktopLyricsSubscribed) return;
-    const epoch = desktopSubscriptionEpoch;
-    void emitTo(
-      DESKTOP_LYRICS_LABEL,
-      "desktop-lyrics:snapshot",
-      buildSnapshotPayload(),
-    ).catch(() => onDesktopEmitFailed(epoch));
-  }
-
-  function activateDesktopLyricsSubscription() {
-    if (!isTauri()) return;
-    desktopLyricsSubscribed = true;
-    desktopSubscriptionEpoch += 1;
-    sendSnapshot();
-    updateReanchorTimer();
-  }
-
-  function stopReanchorTimer() {
-    if (reanchorTimer) clearInterval(reanchorTimer);
-    reanchorTimer = undefined;
-  }
-
-  function updateReanchorTimer() {
-    stopReanchorTimer();
-    if (
-      !isTauri() ||
-      !desktopLyricsSubscribed ||
-      !player.audioState.playing ||
-      player.audioState.loading
-    ) {
-      return;
-    }
-    reanchorTimer = setInterval(sendClock, CLOCK_REANCHOR_INTERVAL_MS);
-  }
-
-  /**
-   * 暂停、缓冲、seek 和切歌必须立即重锚；同一行内 seek 由 seekRevision
-   * 强制硬同步。这里也负责按播放可见性启停主窗口 rAF。
-   */
+  // 主窗口 projection 的 rAF 生命周期只由主窗口消费者和媒体状态控制。
   watch(
     [
       () => player.currentSong?.id ?? null,
+      () => player.audioState.currentSongId,
       () => player.audioState.playing,
       () => player.audioState.loading,
       () => player.audioState.seekRevision,
@@ -642,28 +488,23 @@ function createLyricEngine(): UseLyricReturn {
     () => {
       syncClockFromMedia();
       updateClockRaf();
-      updateReanchorTimer();
-      sendClock();
     },
     { flush: "sync" },
   );
 
-  // 播放中的 ratechange 会在下一帧采样到；后台则由 media timeupdate 采样。
-  watch(mediaPlaybackRate, () => sendClock());
-
-  // 完整数组只在这些低频静态数据变化时发送。
-  watch(
-    [
-      () => player.currentSong?.id ?? null,
-      () => player.currentSong?.name ?? "",
-      () => player.currentSong?.artists ?? "",
-      lines,
-      preciseTokensByLine,
-      () => theme.desktopAccent,
-    ],
-    () => sendSnapshot(),
-    { flush: "post" },
-  );
+  const desktopLyricsPublisher = useDesktopLyricsPublisher({
+    currentSong: () => player.currentSong ?? null,
+    timelineSongId: () => currentSongId.value,
+    lines: () => lines.value,
+    tokensByLine: () => preciseTokensByLine.value,
+    desktopAccent: () => theme.desktopAccent,
+    clockSample: player.getMediaClockSample,
+    mediaSongId: () => player.audioState.currentSongId,
+    playing: () => player.audioState.playing,
+    loading: () => player.audioState.loading,
+    seekRevision: () => player.audioState.seekRevision,
+    playbackRate: () => mediaPlaybackRate.value,
+  });
 
   const onVisibilityChange = () => {
     syncClockFromMedia();
@@ -673,23 +514,14 @@ function createLyricEngine(): UseLyricReturn {
     document.addEventListener("visibilitychange", onVisibilityChange);
   }
 
-  // 全局单例始终可立即响应桌面窗口的快照请求。
-  _pushDesktopLyrics = activateDesktopLyricsSubscription;
   syncClockFromMedia();
   updateClockRaf();
-  updateReanchorTimer();
 
   onScopeDispose(() => {
     cancelRetryTimer();
-    stopReanchorTimer();
     stopClockRaf();
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", onVisibilityChange);
-    }
-    desktopLyricsSubscribed = false;
-    desktopSubscriptionEpoch += 1;
-    if (_pushDesktopLyrics === activateDesktopLyricsSubscription) {
-      _pushDesktopLyrics = null;
     }
   });
 
@@ -708,6 +540,7 @@ function createLyricEngine(): UseLyricReturn {
     hasLyric,
     retry,
     acquireRealtimeUpdates,
+    activateDesktopLyricsPublisher: desktopLyricsPublisher.activate,
     seekTo,
   };
 }

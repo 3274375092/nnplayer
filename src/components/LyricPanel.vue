@@ -16,7 +16,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useLyric } from "@/composables/useLyric";
 import { useSpringValue } from "@/composables/useSpringScroll";
 import { usePlayerStore } from "@/stores/player";
-import { getKaraokeTokenProgress } from "@/utils/lyricTiming";
+import { createKaraokeFrameProjector } from "@/lyrics/lyricFrame";
 
 const props = withDefaults(
   defineProps<{
@@ -195,14 +195,10 @@ function visualDistanceFor(idx: number): number {
   return Math.min(3, Math.abs(idx - cur));
 }
 
-const renderedKaraokeTokens = computed(() => {
-  const tokens = karaokeTokens.value;
-  if (tokens.length === 0) return [];
-  const now = progressMs.value;
-  return tokens.map((token) => {
-    return { ...token, pct: getKaraokeTokenProgress(token, now) };
-  });
-});
+const karaokeFrameProjector = createKaraokeFrameProjector();
+const renderedKaraokeFrame = computed(() =>
+  karaokeFrameProjector.project(karaokeTokens.value, progressMs.value)
+);
 
 function onLineClick(timeMs: number) {
   seekTo(timeMs / 1000);
@@ -294,7 +290,7 @@ const hasSong = computed(() => player.currentSong !== null);
             `distance-${visualDistanceFor(idx)}`,
             {
               'is-active': idx === activeLineIndex,
-              'has-karaoke': idx === activeLineIndex && renderedKaraokeTokens.length > 0,
+              'has-karaoke': idx === activeLineIndex && renderedKaraokeFrame.tokens.length > 0,
             },
           ]"
           :aria-current="idx === activeLineIndex ? 'true' : undefined"
@@ -302,13 +298,13 @@ const hasSong = computed(() => player.currentSong !== null);
           @click="onLineClick(line.time)"
         >
           <!-- 当前行：每个 YRC 字符独立计算字内擦色，可自然换行。 -->
-          <template v-if="idx === activeLineIndex && renderedKaraokeTokens.length > 0">
+          <template v-if="idx === activeLineIndex && renderedKaraokeFrame.tokens.length > 0">
             <span class="lyric-karaoke" dir="auto" aria-hidden="true">
               <span
-                v-for="(token, i) in renderedKaraokeTokens"
+                v-for="(token, i) in renderedKaraokeFrame.tokens"
                 :key="i"
                 class="lyric-char"
-                :style="{ '--char-pct': `${(token.pct * 100).toFixed(2)}%` }"
+                :style="{ '--char-pct': `${(token.progress * 100).toFixed(2)}%` }"
               >
                 <span class="lyric-char__sung">{{ token.char }}</span>
                 <span
