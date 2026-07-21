@@ -79,7 +79,7 @@ export function useDesktopLyricsPublisher(
   const sessionGeneration = nextLyricSessionGeneration();
   const sessionId = globalThis.crypto?.randomUUID?.() ??
     `${sessionGeneration}-${Math.random().toString(36).slice(2)}`;
-  let payloadSequence = 0;
+  let sequence = 0;
   let timelineRevision = 0;
   let reanchorTimer: ReturnType<typeof setInterval> | undefined;
   let subscribed = false;
@@ -91,7 +91,7 @@ export function useDesktopLyricsPublisher(
       sessionId,
       sessionGeneration,
       songId: sample.songId,
-      sequence: ++payloadSequence,
+      sequence: ++sequence,
       timelineRevision,
       mediaGeneration: sample.mediaGeneration,
       positionMs: sample.positionMs,
@@ -139,13 +139,13 @@ export function useDesktopLyricsPublisher(
 
   function sendSnapshot() {
     if (!isTauri() || !subscribed) return;
-    const payload = buildTimelineSnapshot();
-    if (!payload) return;
+    const snapshot = buildTimelineSnapshot();
+    if (!snapshot) return;
     const epoch = subscriptionEpoch;
     void emitTo(
       DESKTOP_LYRICS_LABEL,
       "desktop-lyrics:snapshot",
-      payload,
+      snapshot,
     ).catch(() => onTransportFailed(epoch));
   }
 
@@ -192,8 +192,6 @@ export function useDesktopLyricsPublisher(
       () => source.currentSong()?.id ?? null,
       source.mediaSongId,
       source.timelineSongId,
-      () => source.currentSong()?.name ?? "",
-      () => source.currentSong()?.artists ?? "",
       source.lines,
       source.tokensByLine,
     ],

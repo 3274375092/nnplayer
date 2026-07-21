@@ -1,5 +1,28 @@
 ﻿export type DesktopLyricsSyncStatus = "idle" | "syncing" | "ready";
 
+export interface MediaClockSample {
+  mediaGeneration: number;
+  songId: number | null;
+  positionMs: number;
+  playbackRate: number;
+  playing: boolean;
+  loading: boolean;
+  seekRevision: number;
+  sampledAt: number;
+}
+
+export interface AuthoritativeMediaClock {
+  currentTime: number;
+  playbackRate: number;
+}
+
+export interface MediaClockState {
+  currentSongId: number | null;
+  playing: boolean;
+  loading: boolean;
+  seekRevision: number;
+}
+
 export interface DesktopLyricsClockAnchor {
   sessionId: string;
   sessionGeneration: number;
@@ -46,12 +69,6 @@ export interface DesktopLyricsReceiverState {
   playing: boolean;
 }
 
-export interface SnapshotRequestRuntime<TimerHandle> {
-  request: (songId: number | null) => void;
-  schedule: (delayMs: number, task: () => void) => TimerHandle;
-  cancel: (handle: TimerHandle) => void;
-}
-
 export interface ClockAnchorReceipt {
   wallTimeMs: number;
   monotonicTimeMs: number;
@@ -64,6 +81,52 @@ export interface DesktopLyricsTimelineSource {
   artists: string;
   lines: DesktopLyricsTimelineSnapshot["lines"];
   tokensByLine: DesktopLyricsTimelineSnapshot["tokensByLine"];
+}
+
+/**
+ * Sample a Clock Anchor only from the active media element. Queue/loading state
+ * can identify a requested song before its audio exists, but it is not an
+ * authoritative Playback Position and therefore produces an idle sample.
+ */
+export function sampleAuthoritativeMediaClock(
+  media: AuthoritativeMediaClock | null,
+  mediaGeneration: number,
+  state: MediaClockState,
+  sampledAt: number,
+): MediaClockSample {
+  const currentTime = media?.currentTime;
+  const hasAuthoritativeMedia = media !== null &&
+    Number.isSafeInteger(state.currentSongId) &&
+    (state.currentSongId as number) > 0 &&
+    typeof currentTime === "number" &&
+    Number.isFinite(currentTime) &&
+    currentTime >= 0;
+  if (!hasAuthoritativeMedia) {
+    return {
+      mediaGeneration,
+      songId: null,
+      positionMs: 0,
+      playbackRate: 1,
+      playing: false,
+      loading: state.loading,
+      seekRevision: state.seekRevision,
+      sampledAt,
+    };
+  }
+
+  const playbackRate = media.playbackRate;
+  return {
+    mediaGeneration,
+    songId: state.currentSongId,
+    positionMs: currentTime * 1000,
+    playbackRate: Number.isFinite(playbackRate) && playbackRate > 0
+      ? playbackRate
+      : 1,
+    playing: state.playing && !state.loading,
+    loading: state.loading,
+    seekRevision: state.seekRevision,
+    sampledAt,
+  };
 }
 
 const EMPTY_LINES: DesktopLyricsReceiverState["lines"] = Object.freeze([]);
@@ -156,48 +219,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function validateClockAnchorPacket(
-  packet: unknown,
-): packet is DesktopLyricsClockAnchor | DesktopLyricsTimelineSnapshot {
-  if (!isRecord(packet)) return false;
-  return typeof packet.sessionId === "string" &&
-    packet.sessionId.length > 0 &&
-    Number.isSafeInteger(packet.sessionGeneration) &&
-    (packet.sessionGeneration as number) > 0 &&
-    Number.isSafeInteger(packet.sequence) &&
-    (packet.sequence as number) >= 0 &&
-    Number.isSafeInteger(packet.timelineRevision) &&
-    (packet.timelineRevision as number) >= 0 &&
-    Number.isSafeInteger(packet.mediaGeneration) &&
-    (packet.mediaGeneration as number) >= 0 &&
-    (packet.songId === null || Number.isSafeInteger(packet.songId)) &&
-    Number.isFinite(packet.positionMs) &&
-    (packet.positionMs as number) >= 0 &&
-    Number.isFinite(packet.sampledAt) &&
-    (packet.sampledAt as number) > 0 &&
-    Number.isFinite(packet.playbackRate) &&
-    (packet.playbackRate as number) > 0 &&
-    Number.isSafeInteger(packet.seekRevision) &&
-    (packet.seekRevision as number) >= 0 &&
-    typeof packet.playing === "boolean";
+function isClockAnchor(
+  value: unknown,
+): value is DesktopLyricsClockAnchor | DesktopLyricsTimelineSnapshot {
+  if (!isRecord(value)) return false;
+  return typeof value.sessionId === "string" &&
+    value.sessionId.length > 0 &&
+    Number.isSafeInteger(value.sessionGeneration) &&
+    (value.sessionGeneration as number) > 0 &&
+    Number.isSafeInteger(value.sequence) &&
+    (value.sequence as number) >= 0 &&
+    Number.isSafeInteger(value.timelineRevision) &&
+    (value.timelineRevision as number) >= 0 &&
+    Number.isSafeInteger(value.mediaGeneration) &&
+    (value.mediaGeneration as number) >= 0 &&
+    (value.songId === null || Number.isSafeInteger(value.songId)) &&
+    Number.isFinite(value.positionMs) &&
+    (value.positionMs as number) >= 0 &&
+    Number.isFinite(value.sampledAt) &&
+    (value.sampledAt as number) > 0 &&
+    Number.isFinite(value.playbackRate) &&
+    (value.playbackRate as number) > 0 &&
+    Number.isSafeInteger(value.seekRevision) &&
+    (value.seekRevision as number) >= 0 &&
+    typeof value.playing === "boolean";
 }
 
-function isTimelineSnapshotPacket(
-  packet: unknown,
-): packet is DesktopLyricsTimelineSnapshot {
+function isTimelineSnapshot(
+  value: unknown,
+): value is DesktopLyricsTimelineSnapshot {
   if (
-    !isRecord(packet) ||
-    typeof packet.songName !== "string" ||
-    typeof packet.artists !== "string" ||
-    !Array.isArray(packet.lines) ||
-    !Array.isArray(packet.tokensByLine) ||
-    !validateClockAnchorPacket(packet)
+    !isRecord(value) ||
+    typeof value.songName !== "string" ||
+    typeof value.artists !== "string" ||
+    !Array.isArray(value.lines) ||
+    !Array.isArray(value.tokensByLine) ||
+    !isClockAnchor(value)
   ) {
     return false;
   }
 
   let previousLineTime = -Infinity;
-  for (const line of packet.lines) {
+  for (const line of value.lines) {
     if (
       !isRecord(line) ||
       !Number.isFinite(line.time) ||
@@ -212,7 +275,7 @@ function isTimelineSnapshotPacket(
     previousLineTime = line.time as number;
   }
 
-  for (const tokens of packet.tokensByLine) {
+  for (const tokens of value.tokensByLine) {
     if (!Array.isArray(tokens)) return false;
     for (const token of tokens) {
       if (
@@ -233,12 +296,12 @@ function isTimelineSnapshotPacket(
 export function createDesktopLyricsReceiver() {
   let current = emptyState();
 
-  function acceptsSession(packet: DesktopLyricsClockAnchor): boolean {
+  function acceptsSession(observation: DesktopLyricsClockAnchor): boolean {
     if (!current.sessionId) return true;
-    if (packet.sessionGeneration < current.sessionGeneration) return false;
+    if (observation.sessionGeneration < current.sessionGeneration) return false;
     if (
-      packet.sessionGeneration === current.sessionGeneration &&
-      packet.sessionId !== current.sessionId
+      observation.sessionGeneration === current.sessionGeneration &&
+      observation.sessionId !== current.sessionId
     ) {
       return false;
     }
@@ -246,7 +309,7 @@ export function createDesktopLyricsReceiver() {
   }
 
   function receiveClock(anchor: unknown): void {
-    if (!validateClockAnchorPacket(anchor) || !acceptsSession(anchor)) return;
+    if (!isClockAnchor(anchor) || !acceptsSession(anchor)) return;
     if (
       anchor.sessionId === current.sessionId &&
       anchor.sessionGeneration === current.sessionGeneration &&
@@ -285,7 +348,7 @@ export function createDesktopLyricsReceiver() {
   }
 
   function receiveSnapshot(snapshot: unknown): void {
-    if (!isTimelineSnapshotPacket(snapshot) || !acceptsSession(snapshot)) return;
+    if (!isTimelineSnapshot(snapshot) || !acceptsSession(snapshot)) return;
     const sameSession = snapshot.sessionId === current.sessionId &&
       snapshot.sessionGeneration === current.sessionGeneration;
     if (
@@ -347,50 +410,6 @@ export function createDesktopLyricsReceiver() {
     receiveClock,
     receiveSnapshot,
   };
-}
-
-export function createSnapshotRequestController<TimerHandle>(
-  runtime: SnapshotRequestRuntime<TimerHandle>,
-  retryDelaysMs: readonly number[] = [500, 1500],
-) {
-  const handles = new Set<TimerHandle>();
-  let pendingSongId: number | null | undefined;
-  let disposed = false;
-
-  function clear(): void {
-    handles.forEach((handle) => runtime.cancel(handle));
-    handles.clear();
-    pendingSongId = undefined;
-  }
-
-  function ensure(songId: number | null): void {
-    if (disposed) return;
-    if (pendingSongId === songId && handles.size > 0) return;
-    clear();
-    pendingSongId = songId;
-    runtime.request(songId);
-    for (const delayMs of retryDelaysMs) {
-      const handle = runtime.schedule(delayMs, () => {
-        handles.delete(handle);
-        if (disposed || pendingSongId !== songId) return;
-        runtime.request(songId);
-        if (handles.size === 0) pendingSongId = undefined;
-      });
-      handles.add(handle);
-    }
-    if (handles.size === 0) pendingSongId = undefined;
-  }
-
-  function resolve(songId?: number | null): void {
-    if (songId === undefined || pendingSongId === songId) clear();
-  }
-
-  function dispose(): void {
-    disposed = true;
-    clear();
-  }
-
-  return { ensure, resolve, dispose };
 }
 
 export function createAnchoredPlaybackClock(maxTransportAgeMs = 5000) {

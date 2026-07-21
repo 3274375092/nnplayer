@@ -7,9 +7,12 @@ import type {
 import {
   createDesktopLyricsReceiver,
   createAnchoredPlaybackClock,
-  createSnapshotRequestController,
   type DesktopLyricsReceiverState,
 } from "@/lyrics/desktopLyricsSync";
+import {
+  createDesktopLyricsSnapshotRecovery,
+  registerDesktopLyricsListenersAtomically,
+} from "@/lyrics/desktopLyricsTransport";
 import { projectLyricFrame } from "@/lyrics/lyricFrame";
 import { DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
 
@@ -39,7 +42,8 @@ export function useDesktopLyricsBridge() {
     void emitTo("main", "desktop-lyrics:request-snapshot").catch(() => {});
   }
 
-  const snapshotRequests = createSnapshotRequestController({
+  const snapshotRecovery = createDesktopLyricsSnapshotRecovery({
+    now: () => Date.now(),
     request: () => requestSnapshotOnce(),
     schedule: (delayMs, task) => setTimeout(task, delayMs),
     cancel: (handle) => clearTimeout(handle),
@@ -86,7 +90,7 @@ export function useDesktopLyricsBridge() {
     };
     const { needsRefresh } = anchoredClock.accept(receiver.state, receipt);
     localPositionMs.value = anchoredClock.positionAt(receipt.monotonicTimeMs);
-    if (needsRefresh) snapshotRequests.ensure(receiver.state.songId);
+    if (needsRefresh) snapshotRecovery.ensure(receiver.state.songId);
     updateFrameLoop();
   }
 
@@ -105,10 +109,13 @@ export function useDesktopLyricsBridge() {
     const previousRevision = receiver.state.revision;
     receiver.receiveClock(payload);
     if (receiver.state.revision === previousRevision) return;
+    snapshotRecovery.noteAlive(receiver.state.songId);
     publishReceiverState();
     applyClockAnchor();
     if (receiver.state.status === "syncing") {
-      snapshotRequests.ensure(receiver.state.songId);
+      snapshotRecovery.ensure(receiver.state.songId);
+    } else {
+      snapshotRecovery.resolve();
     }
   }
 
@@ -117,7 +124,8 @@ export function useDesktopLyricsBridge() {
     const previousRevision = receiver.state.revision;
     receiver.receiveSnapshot(payload);
     if (receiver.state.revision === previousRevision) return;
-    snapshotRequests.resolve();
+    snapshotRecovery.noteAlive(receiver.state.songId);
+    snapshotRecovery.resolve();
     publishReceiverState();
     applyClockAnchor();
   }
@@ -133,26 +141,29 @@ export function useDesktopLyricsBridge() {
   function onVisibilityChange() {
     if (document.visibilityState === "visible") {
       localPositionMs.value = anchoredClock.positionAt(performance.now());
-      snapshotRequests.ensure(receiver.state.songId);
+      snapshotRecovery.ensure(receiver.state.songId);
     }
     updateFrameLoop();
   }
 
   onMounted(async () => {
     disposed = false;
-    const stops = await Promise.all([
-      listen<DesktopLyricsTimelineSnapshot>(
-        "desktop-lyrics:snapshot",
-        (event) => onSnapshot(event.payload),
-      ),
-      listen<DesktopLyricsClockAnchor>(
-        "desktop-lyrics:clock",
-        (event) => onClock(event.payload),
-      ),
-      listen<DesktopLyricsAppearancePayload>(
-        "desktop-lyrics:appearance",
-        (event) => onAppearance(event.payload),
-      ),
+    const stops = await registerDesktopLyricsListenersAtomically([
+      () =>
+        listen<DesktopLyricsTimelineSnapshot>(
+          "desktop-lyrics:snapshot",
+          (event) => onSnapshot(event.payload),
+        ),
+      () =>
+        listen<DesktopLyricsClockAnchor>(
+          "desktop-lyrics:clock",
+          (event) => onClock(event.payload),
+        ),
+      () =>
+        listen<DesktopLyricsAppearancePayload>(
+          "desktop-lyrics:appearance",
+          (event) => onAppearance(event.payload),
+        ),
     ]);
     if (disposed) {
       stops.forEach((stop) => stop());
@@ -160,12 +171,12 @@ export function useDesktopLyricsBridge() {
     }
     unlistens.push(...stops);
     document.addEventListener("visibilitychange", onVisibilityChange);
-    snapshotRequests.ensure(receiver.state.songId);
+    snapshotRecovery.start(receiver.state.songId);
   });
 
   onBeforeUnmount(() => {
     disposed = true;
-    snapshotRequests.dispose();
+    snapshotRecovery.dispose();
     stopFrameLoop();
     document.removeEventListener("visibilitychange", onVisibilityChange);
     unlistens.forEach((stop) => stop());

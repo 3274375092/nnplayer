@@ -9,6 +9,7 @@
 import { onScopeDispose, reactive, readonly, watch } from "vue";
 import type { Song } from "@/types/music";
 import { getAuthEpoch, subscribeAuthEpoch } from "@/services/authEpoch";
+import { sampleAuthoritativeMediaClock } from "@/lyrics/desktopLyricsSync";
 import { getSongUrl } from "./useNcmApi";
 
 export interface AudioState {
@@ -265,29 +266,12 @@ export function useAudioPlayer() {
 
   /** 一次性读取同一媒体代际的歌曲身份、位置与离散播放状态。 */
   function getMediaClockSample(): MediaClockSample {
-    const element = audio;
-    const currentTime = element?.currentTime;
-    const playbackRate = element?.playbackRate;
-    return {
-      mediaGeneration: activeMediaGeneration,
-      songId: state.currentSongId,
-      positionMs:
-        typeof currentTime === "number" &&
-          Number.isFinite(currentTime) &&
-          currentTime >= 0
-          ? currentTime * 1000
-          : Math.max(0, state.currentTime * 1000),
-      playbackRate:
-        typeof playbackRate === "number" &&
-          Number.isFinite(playbackRate) &&
-          playbackRate > 0
-          ? playbackRate
-          : 1,
-      playing: state.playing && !state.loading,
-      loading: state.loading,
-      seekRevision: state.seekRevision,
-      sampledAt: Date.now(),
-    };
+    return sampleAuthoritativeMediaClock(
+      audio,
+      activeMediaGeneration,
+      state,
+      Date.now(),
+    );
   }
 
   function hasSource(): boolean {

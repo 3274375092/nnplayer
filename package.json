@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test:lyrics": "node --test tests/lrcParser.test.mjs tests/lyricFrame.test.mjs tests/desktopLyricsSync.test.mjs",
+    "test:lyrics": "node --test tests/lrcParser.test.mjs tests/lyricFrame.test.mjs tests/desktopLyricsSync.test.mjs tests/desktopLyricsTransport.test.mjs",
     "test:theme": "node --test tests/themeTokens.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

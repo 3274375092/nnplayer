@@ -36,6 +36,48 @@ test("Lyric Session generation advances without persisted storage", () => {
   );
 });
 
+test("media Clock Anchor stays idle until an active audio element exists", () => {
+  const state = {
+    currentSongId: 202,
+    playing: true,
+    loading: true,
+    seekRevision: 3,
+  };
+
+  assert.deepEqual(
+    sync.sampleAuthoritativeMediaClock(null, 7, state, 10_000),
+    {
+      mediaGeneration: 7,
+      songId: null,
+      positionMs: 0,
+      playbackRate: 1,
+      playing: false,
+      loading: true,
+      seekRevision: 3,
+      sampledAt: 10_000,
+    },
+  );
+
+  assert.deepEqual(
+    sync.sampleAuthoritativeMediaClock(
+      { currentTime: 1.25, playbackRate: 1.5 },
+      7,
+      { ...state, loading: false },
+      10_001,
+    ),
+    {
+      mediaGeneration: 7,
+      songId: 202,
+      positionMs: 1250,
+      playbackRate: 1.5,
+      playing: true,
+      loading: false,
+      seekRevision: 3,
+      sampledAt: 10_001,
+    },
+  );
+});
+
 function clock(overrides = {}) {
   return {
     sessionId: "session-a",
@@ -182,7 +224,7 @@ test("a matching Timeline Snapshot fills lyrics without rewinding a newer Clock 
   assert.equal(receiver.state.positionMs, 400);
 });
 
-test("a confirmed newer Lyric Session permanently rejects packets from the old session", () => {
+test("a confirmed newer Lyric Session permanently rejects observations from the old session", () => {
   const receiver = sync.createDesktopLyricsReceiver();
   receiver.receiveSnapshot(snapshot({ sequence: 100 }));
   receiver.receiveSnapshot(snapshot({
@@ -211,27 +253,6 @@ test("a stale Clock Anchor cannot rewind Playback Position", () => {
 
   assert.equal(receiver.state.sequence, 6);
   assert.equal(receiver.state.positionMs, 1600);
-});
-
-test("Timeline Snapshot requests can start a new retry cycle after every attempt is lost", () => {
-  const requests = [];
-  const scheduled = [];
-  const controller = sync.createSnapshotRequestController({
-    request(songId) {
-      requests.push(songId);
-    },
-    schedule(_delayMs, task) {
-      scheduled.push(task);
-      return task;
-    },
-    cancel() {},
-  });
-
-  controller.ensure(202);
-  while (scheduled.length > 0) scheduled.shift()();
-  controller.ensure(202);
-
-  assert.deepEqual(requests, [202, 202, 202, 202]);
 });
 
 test("an anchored playback clock compensates transport once and advances monotonically", () => {
@@ -267,7 +288,7 @@ test("a stale Timeline Snapshot cannot replace a newer revision of the same song
   assert.deepEqual(receiver.state.lines, [{ time: 0, text: "new" }]);
 });
 
-test("an invalid Lyric Session packet cannot take ownership", () => {
+test("an invalid Lyric Session observation cannot take ownership", () => {
   const receiver = sync.createDesktopLyricsReceiver();
   receiver.receiveSnapshot(snapshot());
 
@@ -339,32 +360,6 @@ test("a stale clock anchor triggers refresh and resets monotonic base", () => {
   assert.equal(result2.needsRefresh, true);
   const pos2 = anchoredClock.positionAt(2500);
   assert.ok(pos2 >= 29500 && pos2 <= 31000);
-});
-
-test("Snapshot request resolves for matching song and ignores mismatched songs", () => {
-  const pending = [];
-  const runtime = {
-    request: (id) => pending.push({ type: "request", id }),
-    schedule: (ms, fn) => { const h = setTimeout(fn, ms); return h; },
-    cancel: (h) => clearTimeout(h),
-  };
-  const ctrl = sync.createSnapshotRequestController(runtime, [500]);
-  ctrl.ensure(101);
-  assert.equal(pending.length, 1);
-  ctrl.resolve(101);
-  ctrl.ensure(202);
-  ctrl.resolve(303);
-  assert.ok(pending.length >= 1, "mismatched resolve does not clear");
-  ctrl.dispose();
-});
-
-test("Snapshot request controller disposes and blocks further ensures", () => {
-  let calls = 0;
-  const rt = { request: () => { calls++; }, schedule: () => 1, cancel: () => {} };
-  const ctrl = sync.createSnapshotRequestController(rt);
-  ctrl.dispose();
-  ctrl.ensure(101);
-  assert.equal(calls, 0, "disposed controller never calls request");
 });
 
 test("an empty-lyric snapshot stays ready, not reset to syncing", () => {
