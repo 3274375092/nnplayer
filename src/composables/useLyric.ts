@@ -45,7 +45,7 @@ import {
   areLyricTextsEquivalent,
 } from "@/utils/lyricTiming";
 
-// =============== 桌面歌词 payload ===============
+// =============== 桌面歌词 Timeline Snapshot / Clock Anchor ===============
 
 export type { KaraokeToken } from "@/lyrics/lyricFrame";
 

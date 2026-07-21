@@ -9,7 +9,10 @@
 import { onScopeDispose, reactive, readonly, watch } from "vue";
 import type { Song } from "@/types/music";
 import { getAuthEpoch, subscribeAuthEpoch } from "@/services/authEpoch";
-import { sampleAuthoritativeMediaClock } from "@/lyrics/desktopLyricsSync";
+import {
+  sampleAuthoritativeMediaClock,
+  type MediaClockSample,
+} from "@/lyrics/desktopLyricsSync";
 import { getSongUrl } from "./useNcmApi";
 
 export interface AudioState {
@@ -29,19 +32,6 @@ export interface AudioState {
   volume: number;
   /** 静音 */
   muted: boolean;
-}
-
-export interface MediaClockSample {
-  /** 当前媒体代际；切换或销毁活动 audio 时变化。 */
-  mediaGeneration: number;
-  /** 与该媒体代际绑定的歌曲，而不是队列当前选中项。 */
-  songId: number | null;
-  positionMs: number;
-  playbackRate: number;
-  playing: boolean;
-  loading: boolean;
-  seekRevision: number;
-  sampledAt: number;
 }
 
 const SONG_URL_CACHE_TTL_MS = 3 * 60 * 1000;

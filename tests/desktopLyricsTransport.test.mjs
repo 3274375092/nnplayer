@@ -84,3 +84,21 @@ test("Timeline Snapshot recovery starts new retry cycles until transport returns
   timer.advanceTo(20_000);
   assert.equal(timer.requests.length, 7);
 });
+
+test("listener registration rolls back every completed listener on failure", async () => {
+  const released = [];
+
+  await assert.rejects(
+    () =>
+      transport.registerDesktopLyricsListenersAtomically([
+        async () => () => released.push("snapshot"),
+        async () => {
+          throw new Error("Clock Anchor listener failed");
+        },
+        async () => () => released.push("appearance"),
+      ]),
+    /Clock Anchor listener failed/,
+  );
+
+  assert.deepEqual(released.sort(), ["appearance", "snapshot"]);
+});

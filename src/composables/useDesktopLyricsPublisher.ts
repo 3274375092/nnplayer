@@ -1,10 +1,10 @@
 import { onScopeDispose, watch } from "vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
-import type { MediaClockSample } from "@/composables/useAudioPlayer";
 import type {
   DesktopLyricsClockAnchor,
   DesktopLyricsTimelineSnapshot,
+  MediaClockSample,
 } from "@/lyrics/desktopLyricsSync";
 import {
   buildDesktopLyricsTimelineSnapshot,
