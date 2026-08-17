@@ -48,3 +48,4 @@ docs/*
 !docs/adr/
 !docs/adr/**
 !docs/lyric-sync-troubleshooting.md
+!docs/cow-refactor.md
