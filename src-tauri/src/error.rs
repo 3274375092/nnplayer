@@ -69,6 +69,22 @@ impl Serialize for AppError {
 /// 项目内部使用的统一 Result 类型别名。
 pub type AppResult<T> = Result<T, AppError>;
 
+/// 将 ncm_api::NcmError 保真映射到应用的统一错误边界。
+/// 供各 commands 子模块共用，避免跨模块引用 auth 内部函数。
+pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
+    match e {
+        ncm_api::NcmError::AuthRequired(_) => AppError::Unauthorized,
+        ncm_api::NcmError::Http(error) => AppError::Network(error.to_string()),
+        ncm_api::NcmError::Timeout(message) => AppError::Network(message),
+        ncm_api::NcmError::Json(error) => AppError::Json(error),
+        ncm_api::NcmError::InvalidParam(message) => AppError::InvalidParam(message),
+        ncm_api::NcmError::Crypto(message) => {
+            AppError::Internal(format!("NCM 加密错误: {message}"))
+        }
+        error => AppError::Ncm(error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,7 +183,7 @@ mod tests {
             AppError::Ncm("test".into()),
             AppError::Network("test".into()),
             AppError::Json(serde_json::from_str::<serde_json::Value>("x").unwrap_err()),
-            AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, "test")),
+            AppError::Io(std::io::Error::other("test")),
             AppError::Store("test".into()),
             AppError::Unauthorized,
             AppError::InvalidParam("test".into()),
@@ -204,10 +220,7 @@ mod tests {
             "Json"
         );
         assert_eq!(
-            serialize_err(&AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                ""
-            )))["kind"],
+            serialize_err(&AppError::Io(std::io::Error::other("")))["kind"],
             "Io"
         );
         assert_eq!(serialize_err(&AppError::Store("".into()))["kind"], "Store");
@@ -227,7 +240,6 @@ mod tests {
 
     /// ── map_ncm_err mapping (6 explicit + 1 catch-all) ──
     /// This tests the bridge: NcmError → AppError → JSON
-
     /// AuthRequired → Unauthorized
     #[test]
     fn map_auth_required_is_unauthorized() {
@@ -253,21 +265,5 @@ mod tests {
         let v = serialize_err(&e);
         assert_eq!(v["kind"], "Ncm");
         assert!(v["message"].as_str().unwrap().contains("限制"));
-    }
-}
-
-/// 将 ncm_api::NcmError 保真映射到应用的统一错误边界。
-/// 供各 commands 子模块共用，避免跨模块引用 auth 内部函数。
-pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
-    match e {
-        ncm_api::NcmError::AuthRequired(_) => AppError::Unauthorized,
-        ncm_api::NcmError::Http(error) => AppError::Network(error.to_string()),
-        ncm_api::NcmError::Timeout(message) => AppError::Network(message),
-        ncm_api::NcmError::Json(error) => AppError::Json(error),
-        ncm_api::NcmError::InvalidParam(message) => AppError::InvalidParam(message),
-        ncm_api::NcmError::Crypto(message) => {
-            AppError::Internal(format!("NCM 加密错误: {message}"))
-        }
-        error => AppError::Ncm(error.to_string()),
     }
 }
