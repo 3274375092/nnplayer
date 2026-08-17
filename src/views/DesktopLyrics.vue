@@ -345,13 +345,18 @@ function onFontSizeChange(delta: number) {
             dir="auto"
             aria-hidden="true"
           >
-            <!-- 逐字：每字符单 span，background-clip:text 渐变擦色（替代双层 clip-path） -->
+            <!-- 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除
+                 （曾改为单 span background-clip:text + 容器 drop-shadow，
+                  与 Chromium 渲染冲突导致文字看不清，回退双层方案） -->
             <span
               v-for="(c, i) in projectedKaraokeFrame.tokens"
               :key="i"
               class="lyric-char"
               :style="{ '--char-pct': `${(c.progress * 100).toFixed(2)}%` }"
-            >{{ c.char }}</span>
+            >
+              <span class="lyric-char__sung">{{ c.char }}</span>
+              <span class="lyric-char__pending">{{ c.char }}</span>
+            </span>
           </span>
         </h1>
         <h1
@@ -662,17 +667,13 @@ body,
   transition: opacity 0.15s linear;
 }
 
-/* 卡拉OK 容器：inline-block + relative，子层 absolute 才能对齐。
-   阴影从"每字符 3 层"改为容器级 drop-shadow：透明置顶窗里逐字阴影光栅是
-   子窗最大开销，容器级只需对整行结果做一次模糊，可读性基本一致。 */
+/* 卡拉OK 容器：inline-block + relative，子层 absolute 才能对齐 */
 .lyric-karaoke {
   display: inline-block;
   position: relative;
   white-space: nowrap;
   transform-origin: center center;
   transition: transform 0.15s ease-out;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.98))
-    drop-shadow(0 0 6px rgba(0, 0, 0, 0.84));
 }
 
 .plain-current-text {
@@ -687,28 +688,33 @@ body,
   color: rgba(255, 255, 255, 0.78);
 }
 
-/* 逐字擦色：每字符单 span，background-clip:text 渐变硬停（替代双层 clip-path）。
-   描边保留在字符级（矢量描边无模糊，光栅便宜）；
-   模糊阴影已上移到容器 drop-shadow。
+/* 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除。
    不加 transition：rAF 每帧更新 pct，CSS 补间反而会引入延迟让逐字失同步。 */
 .lyric-char {
   display: inline-block;
+  position: relative;
   white-space: pre;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  background-image: linear-gradient(
-    90deg,
-    var(--color-accent) var(--char-pct, 0%),
-    rgba(255, 255, 255, 0.94) var(--char-pct, 0%)
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-stroke: 0.55px rgba(0, 0, 0, 0.9);
-  paint-order: stroke fill;
+}
+
+.lyric-char__sung {
+  display: inline-block;
+  color: var(--color-accent, #d65d0e);
+  clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
+}
+
+.lyric-char__pending {
+  position: absolute;
+  inset: 0;
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.94);
+  pointer-events: none;
+  clip-path: inset(0 0 0 var(--char-pct, 0%));
 }
 
 .plain-current-text,
-.placeholder-lyric {
+.placeholder-lyric,
+.lyric-char__sung,
+.lyric-char__pending {
   text-shadow:
     0 1px 2px rgba(0, 0, 0, 0.98),
     0 0 6px rgba(0, 0, 0, 0.84),
@@ -717,12 +723,12 @@ body,
   paint-order: stroke fill;
 }
 
-.lyric-karaoke:dir(rtl) .lyric-char {
-  background-image: linear-gradient(
-    270deg,
-    var(--color-accent) var(--char-pct, 0%),
-    rgba(255, 255, 255, 0.94) var(--char-pct, 0%)
-  );
+.lyric-karaoke:dir(rtl) .lyric-char__sung {
+  clip-path: inset(0 0 0 calc(100% - var(--char-pct, 0%)));
+}
+
+.lyric-karaoke:dir(rtl) .lyric-char__pending {
+  clip-path: inset(0 var(--char-pct, 0%) 0 0);
 }
 
 /* 工具条按钮样式 */
