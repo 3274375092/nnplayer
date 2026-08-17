@@ -206,7 +206,7 @@ onBeforeUnmount(() => {
   <aside
     :class="[
       'h-full flex flex-col transition-[width,padding] duration-220 ease-out overflow-hidden',
-      'bg-glass backdrop-blur-2xl border-r border-border',
+      'bg-card border-r border-border',
       collapsed ? 'w-16 px-2' : 'w-60 px-4',
     ]"
   >

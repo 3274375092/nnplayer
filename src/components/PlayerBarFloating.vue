@@ -218,13 +218,11 @@ function openNowPlaying() {
   transform: translateX(-50%);
   border: 1px solid var(--color-border-strong);
   border-radius: 22px;
-  background: var(--color-glass, var(--color-card));
+  background: var(--color-card);
   box-shadow:
     0 18px 52px var(--color-shadow),
     0 3px 14px color-mix(in srgb, var(--color-shadow) 58%, transparent),
     inset 0 1px 0 var(--color-highlight, var(--color-border));
-  backdrop-filter: blur(24px) saturate(125%);
-  -webkit-backdrop-filter: blur(24px) saturate(125%);
 }
 
 .player-cover-button {
