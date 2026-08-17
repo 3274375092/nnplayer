@@ -9,8 +9,6 @@ export function useTauriBridge() {
   let tornDown = false;
 
   async function setup(activateDesktopLyricsPublisher: () => void) {
-    playerStore.bindAutoNext();
-
     const register = async <T>(event: string, handler: EventCallback<T>) => {
       if (tornDown) return;
       const un = await listen<T>(event, handler);

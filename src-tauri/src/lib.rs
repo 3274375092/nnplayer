@@ -116,6 +116,19 @@ async fn restore_session(
                 clear_invalid_session(app, state).await;
                 return;
             };
+
+            // 交叉校验：响应 uid 必须匹配存储的 user_id，否则会话来源可疑。
+            if uid != record.user_id {
+                log::warn!(
+                    "[startup] 会话 uid 不匹配: 存储={}, 响应={} —— 清除可疑会话",
+                    record.user_id,
+                    uid
+                );
+                drop(api);
+                clear_invalid_session(app, state).await;
+                return;
+            }
+
             let nick = resp
                 .body
                 .pointer("/data/profile/nickname")

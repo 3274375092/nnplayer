@@ -30,6 +30,11 @@ ncm-api-rs/target/
 # Tauri build 生成的辅助文件(开发用,不入库)
 src-tauri/gen/
 
+# 工具本地状态（codegraph / jcode / qoder 索引与会话）
+.codegraph/
+.jcode/
+.qoder/
+
 # Rust 应用应提交 Cargo.lock 以保证可重现构建
 # (上面原本忽略了 src-tauri/Cargo.lock,这里不忽略 — 让它入库)
 !src-tauri/Cargo.lock

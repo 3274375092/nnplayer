@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>第 1 课：跟着一首歌走到发声</title>
+    <link rel="stylesheet" href="../assets/course.css" />
+    <script src="../assets/quiz.js" defer></script>
+  </head>
+  <body>
+    <article class="course-shell">
+      <header class="course-header">
+        <p class="eyebrow">nnplayer course · lesson 0001</p>
+        <h1>跟着一首歌，走到发声</h1>
+        <p class="dek">
+          不逐个目录背诵。只追踪一次真实的“双击歌曲”，用一条链建立整个项目最重要的前后端心智模型。
+        </p>
+        <div class="meta" aria-label="课程信息">
+          <span class="pill">约 10 分钟</span>
+          <span class="pill">目标：能复述播放主链</span>
+          <span class="pill">先修：基础 TypeScript / Rust 阅读</span>
+        </div>
+      </header>
+
+      <main class="course-main">
+        <p class="lead">
+          学完这一课，你应能回答两个问题：歌曲 ID 在哪里跨过前后端边界？真正下载音频字节并发声的又是谁？
+        </p>
+
+        <aside class="callout">
+          <strong>先记住结论：</strong>
+          Rust 不把音频字节流转发给前端。它只用登录 Cookie 换回一个真实播放 URL；随后由 WebView 中的
+          <code>HTMLAudioElement</code> 直接加载并播放这个 URL。
+        </aside>
+
+        <h2 id="map">一张图看完主链</h2>
+
+        <div class="flow" aria-label="从双击歌曲到音频播放的调用链">
+          <div class="flow-node">
+            <strong>SongList</strong>
+            <span>接收双击，传入歌曲列表与索引</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Player Store</strong>
+            <span>拥有队列、当前索引和播放模式</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Playback Engine</strong>
+            <span>解析 URL，管理媒体句柄与事件</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Tauri invoke</strong>
+            <span>以命令名和 JSON 参数跨进 Rust</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Rust Command</strong>
+            <span>验登录、取 Cookie、转换响应 DTO</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>ncm-api-rs</strong>
+            <span>设备信息、加密与网易云请求</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Audio Element</strong>
+            <span>拿到 URL 后真正加载和发声</span>
+          </div>
+        </div>
+
+        <p class="small">
+          图中前半段在 <code>src/</code>，中间的原生边界在 <code>src-tauri/</code>，协议细节在
+          <code>ncm-api-rs/</code>。这三个目录正好对应三种不同责任。
+        </p>
+
+        <h2 id="walkthrough">逐步走一遍</h2>
+
+        <ol class="step-list">
+          <li>
+            <h3>界面只表达“用户想播哪一首”</h3>
+            <p>
+              <code>SongList.vue</code> 的双击处理没有网络逻辑。它把当前列表和绝对索引交给
+              Player Store：
+            </p>
+            <pre><code>function playAt(idx: number) {
+  void player.playList(props.songs, idx);
+}</code></pre>
+            <a class="source-ref" href="../src/components/SongList.vue">src/components/SongList.vue · 175–176</a>
+          </li>
+
+          <li>
+            <h3>Store 只装配引擎并镜像状态</h3>
+            <p>
+              <code>player.ts</code> 是 Playback Engine 的薄 Vue adapter：构造时注入 HTMLAudio runtime 和
+              Tauri URL 解析，把引擎状态镜像成 Pinia 响应式；动作全部直接转发，不再自己编排。
+            </p>
+            <pre><code>const engine = createPlaybackEngine({
+  runtime: createHtmlAudioRuntime(),
+  resolveSongUrl: (songId) =&gt; getSongUrl(songId).then((r) =&gt; r.url),
+  ...
+});
+
+return { playList: engine.playList, next: engine.next, /* … */ };</code></pre>
+            <a class="source-ref" href="../src/stores/player.ts">src/stores/player.ts · 39–44, 120–146</a>
+          </li>
+
+          <li>
+            <h3>Playback Engine 承担队列与音频副作用</h3>
+            <p>
+              <code>playbackEngine.ts</code> 是无框架的深模块：拥有队列/播放模式，解析并缓存播放 URL、
+              同请求去重、切歌代际（Media Generation）隔离，并把
+              <code>play / pause / waiting / ended / error</code> 等媒体事件内化为状态转换；
+              MediaSession 由装配层的 <code>mediaSessionAdapter</code> 接入。
+            </p>
+            <pre><code>const resolvedUrl = await resolveSongUrl(songId);
+const handle = createActiveMedia(resolvedUrl);
+await handle.play();</code></pre>
+            <a class="source-ref" href="../src/playback/playbackEngine.ts">src/playback/playbackEngine.ts · 150–160, 389–425</a>
+          </li>
+
+          <li>
+            <h3>一个很薄的门面跨过 Tauri 边界</h3>
+            <p>
+              前端不散落着裸 <code>invoke</code>。<code>useNcmApi.ts</code> 把命令名、参数类型和错误归一化集中在一起：
+            </p>
+            <pre><code>export function getSongUrl(songId: number) {
+  return call&lt;SongUrl&gt;(Commands.GetSongUrl, { songId });
+}</code></pre>
+            <p>
+              Tauri 会把前端的 <code>songId</code> 映射到 Rust 参数 <code>song_id</code>。命令名
+              <code>get_song_url</code> 必须同时存在于前端常量和 Rust 的 <code>generate_handler!</code> 注册表中。
+            </p>
+            <a class="source-ref" href="../src/composables/useNcmApi.ts">src/composables/useNcmApi.ts · 99–120, 217–219</a>
+          </li>
+
+          <li>
+            <h3>Rust 命令负责可信边界</h3>
+            <p>
+              <code>get_song_url</code> 先验证登录态，再从共享 <code>AppState</code> 取 Cookie 和 API 客户端，
+              请求 320 kbps（<code>exhigh</code>）地址，最后只挑出前端需要的 <code>id / url / bitrate</code>。
+            </p>
+            <pre><code>state.check_login().await?;
+let cookie = state.cookie().await;
+let resp = api.song_url_v1(/* id + exhigh + cookie */).await?;
+Ok(SongUrl { id: song_id, url, bitrate: br })</code></pre>
+            <a class="source-ref" href="../src-tauri/src/commands/music.rs">src-tauri/src/commands/music.rs · 88–122</a>
+          </li>
+
+          <li>
+            <h3>API crate 隐藏协议复杂度</h3>
+            <p>
+              <code>ncm-api-rs</code> 的 <code>song_url_v1</code> 只描述端点与参数；公共 <code>request</code>
+              再统一处理 Cookie、设备指纹、请求头和加密。应用通常不应直接碰这些细节。
+            </p>
+            <pre><code>pub async fn song_url_v1(&amp;self, query: &amp;Query) -&gt; Result&lt;ApiResponse&gt; {
+    // 构造 ids、level、encodeType，再进入公共 request
+}</code></pre>
+            <a class="source-ref" href="../ncm-api-rs/src/api/song_url_v1.rs">ncm-api-rs/src/api/song_url_v1.rs · 11 起</a>
+          </li>
+
+          <li>
+            <h3>返回 URL，音频元素开始工作</h3>
+            <p>
+              数据沿原路返回到 <code>resolveSongUrl</code>，被短时缓存；引擎经 Media Runtime 创建新的
+              媒体句柄（生产环境即一个新 <code>Audio</code> 元素），绑定事件，再调用 <code>play()</code>。从此，时间、缓冲、结束和错误都由媒体事件驱动状态。
+            </p>
+          </li>
+        </ol>
+
+        <aside class="callout blue">
+          <strong>重要排除项：</strong>
+          <code>ncm-api-rs</code> 虽然也能以 Axum HTTP 服务独立运行，但 nnplayer 正常运行时把它作为 Cargo 路径依赖直接编译进 Tauri。
+          不需要另起一个本地 API 服务器。
+        </aside>
+
+        <h2 id="ownership">谁拥有哪种状态？</h2>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>所有者</th>
+              <th>为什么放这里</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>队列、索引、播放模式</td>
+              <td><code>playback/playbackEngine.ts</code></td>
+              <td>播放行为的单一真源；<code>stores/player.ts</code> 镜像给 UI 共享</td>
+            </tr>
+            <tr>
+              <td>音频时间、缓冲、音量、媒体句柄</td>
+              <td><code>playback/playbackEngine.ts</code> + <code>htmlAudioRuntime.ts</code></td>
+              <td>与浏览器媒体 API 生命周期紧密相连，经 Media Runtime seam 隔离</td>
+            </tr>
+            <tr>
+              <td>Cookie、用户身份、API 客户端</td>
+              <td><code>src-tauri/src/state.rs</code></td>
+              <td>敏感且需要跨原生命令并发共享</td>
+            </tr>
+            <tr>
+              <td>协议参数、加密、设备信息</td>
+              <td><code>ncm-api-rs</code></td>
+              <td>与具体网易云接口协议绑定</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <section
+          class="quiz"
+          data-quiz
+          data-correct="audio"
+          data-correct-feedback="正确。Rust 返回 URL；WebView 里的音频元素加载字节并发声。"
+          data-wrong-feedback="再看一次边界：Rust 的 SongUrl DTO 里只有 id、url 和 bitrate。"
+        >
+          <p class="eyebrow">立即反馈</p>
+          <h3>谁真正下载并播放音频字节？</h3>
+          <div class="quiz-options">
+            <button type="button" data-answer="audio" aria-pressed="false">前端音频元素</button>
+            <button type="button" data-answer="command" aria-pressed="false">后端命令函数</button>
+            <button type="button" data-answer="client" aria-pressed="false">接口客户端层</button>
+            <button type="button" data-answer="router" aria-pressed="false">路由守卫函数</button>
+          </div>
+          <p class="quiz-feedback" data-feedback aria-live="polite">选择一个答案。</p>
+        </section>
+
+        <h2 id="retrieval">合上源码，做一次检索练习</h2>
+
+        <p>
+          不往上看，用纸或口头写出从 <code>SongList</code> 到发声的至少六个节点。然后再展开答案。
+        </p>
+
+        <details>
+          <summary>查看参考链路</summary>
+          <p>
+            <code>SongList.playAt</code> → <code>player.playList</code>（转发）→ <code>playbackEngine.playList</code> →
+            <code>loadAndPlay</code> → <code>useNcmApi.getSongUrl</code> → Tauri
+            <code>get_song_url</code> → <code>ApiClient.song_url_v1</code> → 返回 URL →
+            <code>handle.play()</code>。
+          </p>
+        </details>
+
+        <h2 id="transfer">迁移：不用读新架构，也能追搜索</h2>
+
+        <p>
+          搜索和播放共享同一条“前端门面 → Tauri 命令 → API 客户端”骨架。先预测搜索链，再展开核对。
+        </p>
+
+        <details>
+          <summary>查看搜索链答案</summary>
+          <p>
+            <code>views/Search.vue::doSearch</code> → <code>useQueryCache.execute</code> →
+            <code>useNcmApi.searchSongs</code> → Tauri <code>search_songs</code> →
+            <code>ApiClient.cloudsearch</code> → Rust 映射为 <code>SearchResult</code> → 页面渲染
+            <code>SongList</code>。
+          </p>
+        </details>
+
+        <aside class="callout green">
+          <strong>你已经获得的调试捷径：</strong>
+          队列就错了，先查组件与 Playback Engine；一直卡在取地址，查 <code>useNcmApi</code> 与 Rust 命令；URL 已返回却不出声，查
+          <code>playbackEngine</code> 的媒体句柄与 <code>htmlAudioRuntime</code> 的事件。先按责任分层，再按调用链下钻。
+        </aside>
+
+        <h2 id="next">接下来</h2>
+
+        <p>
+          先打开<a href="../reference/project-map.html">项目地图速查表</a>，尝试不用源码回答：“登录态为什么既存在前端 Store，也存在 Rust AppState？”
+          把你的答案或困惑告诉我，我会据此生成第 2 课，而不是按固定目录继续灌输。
+        </p>
+
+        <p class="small">
+          本课首要源码：<a href="../src/stores/player.ts">player.ts</a>、<a href="../src/playback/playbackEngine.ts">playbackEngine.ts</a>、<a href="../src-tauri/src/commands/music.rs">music.rs</a>。
+          所有结论均来自当前工作区源码；外部机制可参阅 <a href="https://v2.tauri.app/develop/calling-rust/">Tauri 官方 invoke 文档</a>。
+        </p>
+      </main>
+
+      <footer class="course-footer">
+        <span>nnplayer learning workspace</span>
+        <a href="../reference/project-map.html">打开项目地图 →</a>
+      </footer>
+    </article>
+  </body>
+</html>

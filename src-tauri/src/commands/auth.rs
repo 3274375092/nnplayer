@@ -100,7 +100,13 @@ pub async fn login_qr_key() -> AppResult<QrKeyResult> {
         .to_string();
 
     let qr_url = format!("https://music.163.com/login?codekey={unikey}");
-    let qr_image = render_qr_png(&qr_url).ok();
+    let qr_image = match render_qr_png(&qr_url) {
+        Ok(img) => Some(img),
+        Err(e) => {
+            log::warn!("[login_qr_key] QR 渲染失败: {e}");
+            None
+        }
+    };
 
     Ok(QrKeyResult {
         unikey,
@@ -419,7 +425,9 @@ pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> AppResult<()>
     let cookie = state.auth.lock().await.cookie.clone();
     if let Some(c) = cookie {
         let api = state.api.read().await;
-        let _ = api.logout(&Query::new().cookie(&c)).await;
+        if let Err(e) = api.logout(&Query::new().cookie(&c)).await {
+            log::warn!("[logout] 调用 NCM 登出接口失败: {e}");
+        }
     }
 
     // 清空 plugin-store
@@ -646,6 +654,11 @@ fn render_qr_png(content: &str) -> anyhow::Result<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    /// 两个文件夹具测试共用真实配置目录里的 session.toml，
+    /// 必须串行执行，否则互相覆盖导致偶发失败。
+    static SESSION_FILE_LOCK: Mutex<()> = Mutex::new(());
 
     fn response(body: serde_json::Value, cookie: Vec<&str>) -> ApiResponse {
         ApiResponse {
@@ -679,5 +692,202 @@ mod tests {
         assert!(merged.contains("MUSIC_U=new"));
         assert!(merged.contains("__csrf=token"));
         assert!(!merged.contains("Path"));
+    }
+
+    // ============================================================
+    // TOML corruption / graceful-degradation tests
+    // ============================================================
+
+    /// Empty file: `toml::from_str("")` should fail (no tables) → `.ok()` → None.
+    #[test]
+    fn toml_empty_string_returns_none() {
+        let result: Option<SessionRecord> = toml::from_str("").ok();
+        assert!(result.is_none(), "empty TOML should parse to None");
+    }
+
+    /// Missing required field `cookie`: deserialization fails → `.ok()` → None.
+    #[test]
+    fn toml_missing_cookie_returns_none() {
+        let partial = r#"
+user_id = 123456
+nickname = "testuser"
+login_method = "email"
+updated_at = 1710000000
+"#;
+        let result: Option<SessionRecord> = toml::from_str(partial).ok();
+        assert!(result.is_none(), "TOML missing 'cookie' should parse to None");
+    }
+
+    /// Missing required field `nickname`: deserialization fails → `.ok()` → None.
+    #[test]
+    fn toml_missing_nickname_returns_none() {
+        let partial = r#"
+user_id = 123456
+login_method = "email"
+cookie = "MUSIC_U=abc123"
+updated_at = 1710000000
+"#;
+        let result: Option<SessionRecord> = toml::from_str(partial).ok();
+        assert!(result.is_none(), "TOML missing 'nickname' should parse to None");
+    }
+
+    /// Missing required field `login_method`: deserialization fails → `.ok()` → None.
+    #[test]
+    fn toml_missing_login_method_returns_none() {
+        let partial = r#"
+user_id = 123456
+nickname = "testuser"
+cookie = "MUSIC_U=abc123"
+updated_at = 1710000000
+"#;
+        let result: Option<SessionRecord> = toml::from_str(partial).ok();
+        assert!(result.is_none(), "TOML missing 'login_method' should parse to None");
+    }
+
+    /// Malformed syntax (random junk text, not TOML): parse fails → `.ok()` → None.
+    #[test]
+    fn toml_malformed_syntax_returns_none() {
+        let junk = "this is not TOML at all!!\n{key}=value???\n[invalid section";
+        let result: Option<SessionRecord> = toml::from_str(junk).ok();
+        assert!(result.is_none(), "malformed TOML should parse to None");
+    }
+
+    /// `cookie` field with wrong type (integer instead of string): fails → None.
+    #[test]
+    fn toml_wrong_type_cookie_returns_none() {
+        let wrong_type = r#"
+user_id = 123456
+nickname = "testuser"
+login_method = "email"
+cookie = 12345
+updated_at = 1710000000
+"#;
+        let result: Option<SessionRecord> = toml::from_str(wrong_type).ok();
+        assert!(result.is_none(), "TOML with wrong-type cookie should parse to None");
+    }
+
+    /// `user_id` with wrong type (string instead of integer): fails → None.
+    #[test]
+    fn toml_wrong_type_user_id_returns_none() {
+        let wrong_type = r#"
+user_id = "not-a-number"
+nickname = "testuser"
+login_method = "email"
+cookie = "MUSIC_U=abc123"
+updated_at = 1710000000
+"#;
+        let result: Option<SessionRecord> = toml::from_str(wrong_type).ok();
+        assert!(result.is_none(), "TOML with wrong-type user_id should parse to None");
+    }
+
+    /// Valid TOML with all required fields correctly typed parses successfully.
+    #[test]
+    fn toml_valid_record_parses_successfully() {
+        let valid = r#"
+user_id = 123456
+nickname = "testuser"
+login_method = "email"
+cookie = "MUSIC_U=abc123; __csrf=token"
+updated_at = 1710000000
+avatar_url = "https://example.com/avatar.jpg"
+"#;
+        let result: Option<SessionRecord> = toml::from_str(valid).ok();
+        assert!(result.is_some(), "valid TOML should parse successfully");
+        let record = result.unwrap();
+        assert_eq!(record.user_id, 123456);
+        assert_eq!(record.nickname, "testuser");
+        assert_eq!(record.login_method, "email");
+        assert_eq!(record.cookie, "MUSIC_U=abc123; __csrf=token");
+        assert_eq!(record.avatar_url, Some("https://example.com/avatar.jpg".to_string()));
+    }
+
+    /// Valid TOML without optional `avatar_url` parses correctly (Option field absent).
+    #[test]
+    fn toml_valid_record_without_optional_fields_parses() {
+        let valid = r#"
+user_id = 999
+nickname = "noavatar"
+login_method = "qr"
+cookie = "MUSIC_U=xyz"
+updated_at = 1710000000
+"#;
+        let result: Option<SessionRecord> = toml::from_str(valid).ok();
+        assert!(result.is_some(), "valid TOML without optional fields should parse");
+        let record = result.unwrap();
+        assert_eq!(record.user_id, 999);
+        assert_eq!(record.avatar_url, None);
+    }
+
+    /// Test the full `load_session_meta()` end-to-end with corrupt file fixtures.
+    /// Creates actual files at the expected config path, testing every corrupt scenario.
+    #[test]
+    fn load_session_meta_with_corrupt_files_returns_none() {
+        let _guard = SESSION_FILE_LOCK.lock().unwrap();
+        let path = dirs_auth_session().expect("should resolve config dir");
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).ok();
+
+        // Save existing file if any
+        let saved = std::fs::read_to_string(&path).ok();
+
+        let corrupt_cases: &[(&str, &[u8])] = &[
+            ("empty file", b""),
+            ("partial missing cookie",
+             br#"user_id = 1
+nickname = "x"
+login_method = "qr"
+updated_at = 1
+"#),
+            ("malformed syntax", b"this is garbage {{{ not toml"),
+            ("binary garbage (non-UTF8)", b"\x00\x01\x02\xFF\xFE\xFD"),
+        ];
+
+        for (label, content) in corrupt_cases {
+            std::fs::write(&path, content).expect("write corrupt fixture");
+            let result = load_session_meta();
+            assert!(
+                result.is_none(),
+                "load_session_meta() should return None for corrupt case: {label}"
+            );
+        }
+
+        // Restore original file or clean up
+        match saved {
+            Some(original) => std::fs::write(&path, original).ok(),
+            None => std::fs::remove_file(&path).ok(),
+        };
+    }
+
+    /// `persist_session_meta()` overwrites a corrupt file with valid TOML,
+    /// then `load_session_meta()` can read it back successfully.
+    #[test]
+    fn persist_overwrites_corrupt_file_and_load_recovers() {
+        let _guard = SESSION_FILE_LOCK.lock().unwrap();
+        let path = dirs_auth_session().expect("should resolve config dir");
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).ok();
+        let saved = std::fs::read_to_string(&path).ok();
+
+        // Step 1: Write corrupt file
+        std::fs::write(&path, b"corrupt garbage {{{ not toml").unwrap();
+
+        // Step 2: load_session_meta() returns None
+        assert!(load_session_meta().is_none(), "corrupt file should yield None");
+
+        // Step 3: persist_session_meta() overwrites corrupt file
+        persist_session_meta(42, "recovery", None, "qr", "MUSIC_U=recovered")
+            .expect("persist should overwrite corrupt file");
+
+        // Step 4: load_session_meta() now returns valid record
+        let recovered = load_session_meta().expect("should recover after persist overwrites");
+        assert_eq!(recovered.user_id, 42);
+        assert_eq!(recovered.nickname, "recovery");
+        assert_eq!(recovered.cookie, "MUSIC_U=recovered");
+
+        // Restore
+        match saved {
+            Some(original) => std::fs::write(&path, original).ok(),
+            None => std::fs::remove_file(&path).ok(),
+        };
     }
 }

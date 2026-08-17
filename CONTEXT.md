@@ -27,3 +27,15 @@ _Avoid_: Full packet, lyric payload
 **Lyric Session**:
 The lifetime of one authoritative lyric producer; observations from different Lyric Sessions are not comparable.
 _Avoid_: Window session, sync session
+
+**Playback Engine**:
+The framework-free state machine that owns the queue, play mode, Media Generations, and song URL cache, and is the sole producer of Playback Position.
+_Avoid_: Player store, audio controller
+
+**Media Runtime**:
+The seam through which the Playback Engine creates and drives media instances; one handle per Media Generation.
+_Avoid_: Audio element wrapper, HTML5 audio layer
+
+**Media Generation**:
+The isolation unit of one media load; events observed from a stale Media Generation are discarded.
+_Avoid_: Audio generation, audio instance

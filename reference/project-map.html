@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nnplayer 项目地图</title>
+    <link rel="stylesheet" href="../assets/course.css" />
+  </head>
+  <body>
+    <article class="course-shell">
+      <header class="course-header">
+        <p class="eyebrow">nnplayer reference · living map</p>
+        <h1>项目地图</h1>
+        <p class="dek">按责任和调用链查找代码，而不是按文件名漫游。适合打印或在改代码前快速复习。</p>
+        <div class="meta">
+          <span class="pill">当前版本：0.2.2</span>
+          <span class="pill">Vue 3 + Tauri 2 + Rust</span>
+          <span class="pill">更新依据：当前工作区源码</span>
+        </div>
+      </header>
+
+      <main class="course-main">
+        <aside class="callout">
+          <strong>一句话架构：</strong>
+          Vue 负责呈现和交互，Pinia/Composables 负责前端状态与副作用，Tauri 命令守住登录与原生边界，
+          <code>ncm-api-rs</code> 负责网易云协议；真正的音频播放仍发生在 WebView。
+        </aside>
+
+        <h2>系统边界</h2>
+
+        <div class="flow" aria-label="nnplayer 系统层次">
+          <div class="flow-node"><strong>Views / Components</strong><span>页面与用户动作</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>Stores / Composables</strong><span>共享状态、查询、音频、歌词</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>useNcmApi</strong><span>命令名、参数类型、错误归一</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>Tauri Commands</strong><span>授权、DTO、原生能力</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>AppState</strong><span>ApiClient、Cookie、AuthState</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>ncm-api-rs</strong><span>接口参数、加密、远端请求</span></div>
+        </div>
+
+        <p class="small">
+          例外分支：Tauri 返回播放 URL 后，<code>playbackEngine</code> 经 <code>htmlAudioRuntime</code>
+          直接让 WebView 的 <code>HTMLAudioElement</code> 加载媒体；音频字节不会穿过 Rust DTO。
+        </p>
+
+        <h2>目录职责</h2>
+
+        <div class="module-grid">
+          <section class="module-card">
+            <h3><a href="../src/views/">src/views/</a></h3>
+            <p>路由页面。组织页面级数据获取和组件组合，不应承载底层协议。</p>
+            <p class="small">入口：DailyRecommend、Search、MyPlaylists、PlaylistDetail、Login、NowPlaying、DesktopLyrics。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src/components/">src/components/</a></h3>
+            <p>可复用界面块。播放器栏、歌曲列表、歌词面板、侧栏、队列抽屉等。</p>
+            <p class="small">症状只涉及渲染或手势时，从这里开始。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src/stores/">src/stores/</a></h3>
+            <p>跨组件业务状态：用户、播放器（薄 adapter）、主题、桌面歌词窗口。</p>
+            <p class="small">问“谁拥有这个状态？”时先看 Store；播放状态的真正主人是 Playback Engine。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src/playback/">src/playback/</a></h3>
+            <p>无框架播放引擎：队列/播放模式、Media Generation 代际隔离、URL 缓存、自动切歌，及 HTMLAudio runtime 与 MediaSession adapter。</p>
+            <p class="small">播放行为问题都从这里开始；引擎可用 fake runtime 直接单测。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src/composables/">src/composables/</a></h3>
+            <p>有响应式状态或生命周期的可复用逻辑：歌词、查询缓存、窗口桥接与几何信息。</p>
+            <p class="small">副作用和浏览器/Tauri API 通常在这里。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src/utils/">src/utils/</a></h3>
+            <p>尽量纯的转换与计算：LRC 解析、时间轴、格式化、密码 MD5、封面 URL、主题色。</p>
+            <p class="small">纯输入输出逻辑最适合直接单元测试。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src-tauri/src/commands/">src-tauri/src/commands/</a></h3>
+            <p>前端可调用的原生命令，按 auth、music、user、lyric、window_geom 分组。</p>
+            <p class="small">负责验证、调用 API、把动态 JSON 映射为稳定 DTO。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../src-tauri/src/state.rs">src-tauri/src/state.rs</a></h3>
+            <p>Rust 全局共享状态：带 Cookie 的 <code>ApiClient</code>、轻量登录态与启动恢复同步。</p>
+            <p class="small">锁顺序规则也在这里：先取 auth/cookie，再锁 api，避免 ABBA 死锁。</p>
+          </section>
+          <section class="module-card">
+            <h3><a href="../ncm-api-rs/">ncm-api-rs/</a></h3>
+            <p>内置 Cargo 路径依赖，封装网易云端点、Cookie、设备指纹和 weapi/eapi 等加密。</p>
+            <p class="small">它可选地支持独立 HTTP server，但不是 nnplayer 的运行前置服务。</p>
+          </section>
+        </div>
+
+        <h2>五条必须会讲的主流程</h2>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>流程</th>
+              <th>调用骨架</th>
+              <th>关键不变量</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="nowrap">启动</td>
+              <td><code>main.rs</code> → <code>lib.rs::run</code> → Tauri setup / restore；WebView 中 <code>main.ts</code> → Pinia → refresh → Router → App</td>
+              <td>Rust 恢复校验完成前，持久化会话不能被暴露成已登录。</td>
+            </tr>
+            <tr>
+              <td class="nowrap">登录恢复</td>
+              <td><code>user.refresh</code> → <code>get_auth_state</code> → 等待 <code>restore_session</code> → Router guard 决定跳转</td>
+              <td>前端保存显示状态；Rust 保存可信 Cookie 与授权状态。</td>
+            </tr>
+            <tr>
+              <td class="nowrap">搜索</td>
+              <td><code>Search.doSearch</code> → Query Cache → <code>searchSongs</code> → Rust <code>search_songs</code> → <code>cloudsearch</code></td>
+              <td>缓存按 auth epoch 隔离，换账号后旧响应不能污染新会话。</td>
+            </tr>
+            <tr>
+              <td class="nowrap">播放</td>
+              <td><code>SongList</code> → Player Store（薄 adapter）→ Playback Engine → <code>get_song_url</code> → <code>song_url_v1</code> → <code>Audio.play</code></td>
+              <td>引擎统一管队列与媒体副作用；Store 只装配和镜像状态；Rust 只返回 URL DTO。</td>
+            </tr>
+            <tr>
+              <td class="nowrap">歌词</td>
+              <td>当前歌曲变化 → <code>useLyric</code> 拉取/解析 LRC 或 YRC → 读取权威音频时钟 → 面板渲染 / 跨窗口快照</td>
+              <td>歌词时间来自播放器媒体时钟，不另造独立计时器。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2>推荐阅读顺序</h2>
+
+        <ol class="reading-path">
+          <li><a href="../README.md">README.md</a>：只读功能、架构、目录与开发命令。</li>
+          <li><a href="../src/main.ts">src/main.ts</a> → <a href="../src/App.vue">src/App.vue</a> → <a href="../src/router/index.ts">router/index.ts</a>：建立前端骨架。</li>
+          <li><a href="../src/components/SongList.vue">SongList.vue</a> → <a href="../src/stores/player.ts">player.ts</a> → <a href="../src/playback/playbackEngine.ts">playbackEngine.ts</a>：读完一条真实功能链。</li>
+          <li><a href="../src/composables/useNcmApi.ts">useNcmApi.ts</a> 与 <a href="../src-tauri/src/lib.rs">src-tauri/src/lib.rs</a>：对齐前端命令名和 Rust 注册表。</li>
+          <li><a href="../src-tauri/src/state.rs">state.rs</a> 与 <a href="../src-tauri/src/commands/music.rs">commands/music.rs</a>：理解可信状态和 DTO 边界。</li>
+          <li><a href="../ncm-api-rs/src/api/song_url_v1.rs">song_url_v1.rs</a> → <a href="../ncm-api-rs/src/request.rs">request.rs</a>：只沿调用链进入 API crate。</li>
+          <li><a href="../src/composables/useLyric.ts">useLyric.ts</a> 与 <a href="../docs/lyric-sync-troubleshooting.md">歌词排障文档</a>：最后进入较复杂的歌词子系统。</li>
+          <li><a href="../tests/">tests/</a>：用现有播放引擎、歌词解析与主题 token 测试理解项目的可验证边界。</li>
+        </ol>
+
+        <aside class="callout blue">
+          <strong>暂时不要从这些地方开始：</strong>
+          <code>node_modules/</code>、<code>dist/</code>、生成产物、整份 <code>styles.css</code>，以及
+          <code>ncm-api-rs/src/api/</code> 下数百个未被应用调用的端点。它们会放大阅读量，却不会先给你主干。
+        </aside>
+
+        <h2>按症状定位</h2>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>现象</th><th>第一站</th><th>第二站</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>页面进错、被送回登录</td><td><code>router/index.ts</code></td><td><code>stores/user.ts</code> / Rust auth command</td></tr>
+            <tr><td>列表选中或下一首错误</td><td><code>stores/player.ts</code></td><td>触发它的 View / Component</td></tr>
+            <tr><td>一直加载、无播放地址</td><td><code>playbackEngine.ts</code></td><td><code>commands/music.rs</code> / API response</td></tr>
+            <tr><td>有地址但暂停、进度、缓冲异常</td><td><code>playbackEngine.ts</code> / <code>htmlAudioRuntime.ts</code></td><td>PlayerBar / ProgressBar</td></tr>
+            <tr><td>歌词内容或对齐错误</td><td><code>useLyric.ts</code></td><td><code>lrcParser.ts</code> / <code>lyricTiming.ts</code></td></tr>
+            <tr><td>桌面歌词窗口独有问题</td><td><code>stores/desktopLyrics.ts</code></td><td>desktop bridge / window prefs / Rust window command</td></tr>
+            <tr><td>换账号后看到旧数据</td><td><code>services/authEpoch.ts</code></td><td>Query cache / 引擎 URL 缓存 / user store</td></tr>
+          </tbody>
+        </table>
+
+        <h2>最小验证矩阵</h2>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>改动范围</th><th>最低验证</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vue / TypeScript / 样式</td><td><code>npm run build</code></td></tr>
+            <tr><td>播放引擎（src/playback/）</td><td><code>node --test tests/playbackEngine.test.mjs</code> + <code>npm run build</code></td></tr>
+            <tr><td>LRC 解析或时间轴</td><td><code>npm run test:lyrics</code> + <code>npm run build</code></td></tr>
+            <tr><td>主题 token</td><td><code>npm run test:theme</code> + <code>npm run build</code></td></tr>
+            <tr><td>Rust 命令、状态或模型</td><td><code>cargo check --manifest-path src-tauri/Cargo.toml</code></td></tr>
+            <tr><td>端到端登录 / 播放 / 窗口</td><td><code>npm run tauri dev</code> 中手动走对应路径</td></tr>
+          </tbody>
+        </table>
+
+        <p class="small">
+          这是活文档。每次课程确认了新的非显然边界，应更新这张地图；只有学习者真正证明掌握后，才新增 learning record。
+        </p>
+      </main>
+
+      <footer class="course-footer">
+        <a href="../lessons/0001-follow-a-song-to-sound.html">← 回到第 1 课</a>
+        <span>来源：当前工作区源码与项目 README</span>
+      </footer>
+    </article>
+  </body>
+</html>

@@ -7,8 +7,9 @@
 //               主窗收到后立即推一份最新快照，解决"打开瞬间空白"
 //
 // 设计原则：
-//   - useAudioPlayer 内部已存在唯一的 <audio> 元素（由 player store 持有），
-//     useLyric 每帧读取其权威 currentTime，不用墙钟推测媒体位置。
+//   - Playback Engine（经 player store 装配）是媒体时钟的唯一生产者，
+//     useLyric 每帧经 getMediaClockSample 读取权威 Playback Position，
+//     不用墙钟推测媒体位置。
 //   - 切歌时自动重置并重新拉取。
 //   - 桌面歌词事件 emit 失败时静默（不影响主流程）。
 //   - 引擎运行在 detached effect scope 中，是跨路由共享的全局单例；歌词面板
