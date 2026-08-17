@@ -16,6 +16,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::borrow::Cow;
 use std::time::Duration;
 
 use ncm_api::{ApiClient, ApiResponse};
@@ -122,8 +123,15 @@ impl AppState {
 
     /// 获取当前 cookie 字符串。仅锁 auth，不锁 api。
     /// 命令中应先调此方法拿到 cookie，再锁 api 发请求，避免 ABBA 死锁。
-    pub async fn cookie(&self) -> String {
-        self.auth.lock().await.cookie.clone().unwrap_or_default()
+    /// 未登录时返回空串借用，不产生堆分配。
+    pub async fn cookie(&self) -> Cow<'static, str> {
+        self.auth
+            .lock()
+            .await
+            .cookie
+            .clone()
+            .map(Cow::Owned)
+            .unwrap_or(Cow::Borrowed(""))
     }
 
     /// 提取 NCM 业务码。
@@ -137,14 +145,14 @@ impl AppState {
             .unwrap_or(resp.status)
     }
 
-    /// 提取响应消息。
-    pub fn response_message(resp: &ApiResponse) -> String {
+    /// 提取响应消息。返回借用，不产生堆分配。
+    pub fn response_message(resp: &ApiResponse) -> Cow<'_, str> {
         resp.body
             .get("msg")
             .or_else(|| resp.body.get("message"))
             .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error")
-            .to_string()
+            .map(Cow::Borrowed)
+            .unwrap_or(Cow::Borrowed("Unknown error"))
     }
 }
 

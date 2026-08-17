@@ -6,6 +6,7 @@
 //   4. 启动时从 session.toml 读取 cookie，调 login_status 校验有效性
 //   5. cookie 由 AppState.auth.cookie 显式持有，每次请求通过 Query::cookie() 传入
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use ncm_api::{ApiResponse, Query};
@@ -140,15 +141,15 @@ pub async fn login_qr_check(
     }
 
     let message = match code {
-        800 => "二维码已过期".to_string(),
-        801 => "等待扫码".to_string(),
-        802 => "已扫码，等待确认".to_string(),
+        800 => Cow::Borrowed("二维码已过期"),
+        801 => Cow::Borrowed("等待扫码"),
+        802 => Cow::Borrowed("已扫码，等待确认"),
         _ => AppState::response_message(&resp),
     };
 
     Ok(QrCheckResponse {
         code,
-        message: message.to_string(),
+        message: message.into_owned(),
         nickname: None,
         user_id: None,
         avatar_url: None,
@@ -311,13 +312,13 @@ async fn finalize_login(
         auth.nickname = Some(nickname.clone());
         auth.cookie = Some(merged_cookie);
         auth.login_method = Some(method.to_string());
-        auth.avatar_url = avatar_url.clone();
+        auth.avatar_url = avatar_url.clone().map(|c| c.into_owned());
     }
 
     Ok(LoginResult {
         user_id,
         nickname,
-        avatar_url,
+        avatar_url: avatar_url.map(|c| c.into_owned()),
     })
 }
 
@@ -332,7 +333,7 @@ pub(crate) fn ensure_business_success(resp: &ApiResponse, accepted: &[i64], acti
     )))
 }
 
-fn extract_profile(resp: &ApiResponse) -> Option<(u64, String, Option<String>)> {
+fn extract_profile(resp: &ApiResponse) -> Option<(u64, String, Option<Cow<'_, str>>)> {
     let user_id = resp
         .body
         .pointer("/account/id")
@@ -484,13 +485,13 @@ pub async fn save_cookie(
         auth.nickname = Some(nickname.clone());
         auth.cookie = Some(payload.cookie);
         auth.login_method = Some("cookie".to_string());
-        auth.avatar_url = avatar_url.clone();
+        auth.avatar_url = avatar_url.clone().map(|c| c.into_owned());
     }
 
     Ok(LoginResult {
         user_id,
         nickname,
-        avatar_url,
+        avatar_url: avatar_url.map(|c| c.into_owned()),
     })
 }
 
@@ -576,25 +577,26 @@ fn build_anonymous_client() -> AppResult<ncm_api::ApiClient> {
 
 /// 把 NCM avatarUrl 规整成可直接 <img src> 使用的 URL。
 /// NCM 偶尔返回 protocol-relative URL（"//p1.music.126.net/..."）或缺 scheme 的相对路径。
-pub fn normalize_avatar_url(raw: &str) -> Option<String> {
+/// 已经是完整 URL 时零拷贝借用，否则构造新串。
+pub fn normalize_avatar_url(raw: &str) -> Option<Cow<'_, str>> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
     }
     // protocol-relative: //p1.music.126.net/...
     if let Some(rest) = s.strip_prefix("//") {
-        return Some(format!("https://{rest}"));
+        return Some(Cow::Owned(format!("https://{rest}")));
     }
     // 完整 URL
     if s.starts_with("http://") || s.starts_with("https://") {
-        return Some(s.to_string());
+        return Some(Cow::Borrowed(s));
     }
     // 缺 scheme 但以 / 开头（p1.music.126.net 是 NCM 头像域名）
     if let Some(rest) = s.strip_prefix('/') {
-        return Some(format!("https://p1.music.126.net/{rest}"));
+        return Some(Cow::Owned(format!("https://p1.music.126.net/{rest}")));
     }
     // 兜底：当作相对路径
-    Some(format!("https://p1.music.126.net/{s}"))
+    Some(Cow::Owned(format!("https://p1.music.126.net/{s}")))
 }
 
 // ============================================================

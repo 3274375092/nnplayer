@@ -11,7 +11,7 @@ impl ApiClient {
     pub async fn comment_hug_list(&self, query: &Query) -> Result<ApiResponse> {
         let resource_type = query.get_or("type", "0");
         let thread_id = crate::util::config::RESOURCE_TYPE_MAP
-            .get(resource_type.as_str())
+            .get(resource_type.as_ref())
             .map(|prefix| format!("{}{}", prefix, query.get_or("sid", "0")))
             .unwrap_or_default();
         let data = json!({

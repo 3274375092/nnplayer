@@ -10,7 +10,7 @@ impl ApiClient {
     /// 对应 /banner
     pub async fn banner(&self, query: &Query) -> Result<ApiResponse> {
         let type_val = query.get_or("type", "0");
-        let client_type = match type_val.as_str() {
+        let client_type = match type_val.as_ref() {
             "0" => "pc",
             "1" => "android",
             "2" => "iphone",

@@ -11,7 +11,7 @@ impl ApiClient {
     pub async fn summary_annual(&self, query: &Query) -> Result<ApiResponse> {
         let data = json!({});
         let year = query.get_or("year", "2023");
-        let key = match year.as_str() {
+        let key = match year.as_ref() {
             "2017" | "2018" | "2019" => "userdata",
             _ => "data",
         };

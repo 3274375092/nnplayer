@@ -13,7 +13,7 @@ impl ApiClient {
         let path = if t == "1" { "like" } else { "unlike" };
         let resource_type = query.get_or("type", "0");
         let thread_id = crate::util::config::RESOURCE_TYPE_MAP
-            .get(resource_type.as_str())
+            .get(resource_type.as_ref())
             .map(|prefix| format!("{}{}", prefix, query.get_or("id", "0")))
             .unwrap_or_default();
         let data = json!({

@@ -11,7 +11,7 @@ impl ApiClient {
     pub async fn comment_info_list(&self, query: &Query) -> Result<ApiResponse> {
         let resource_type = query.get_or("type", "0");
         let type_id = crate::util::config::RESOURCE_TYPE_MAP
-            .get(resource_type.as_str())
+            .get(resource_type.as_ref())
             .map(|prefix| {
                 prefix
                     .trim_end_matches('_')

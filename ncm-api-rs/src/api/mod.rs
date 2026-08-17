@@ -3,6 +3,7 @@
 /// 每个 API 接口拆分为独立文件，通过 `impl ApiClient` 扩展方法
 /// 所有方法统一使用 `Query` 对象传参
 use crate::request::{CryptoType, RequestOption};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 // ---- 歌曲相关 ----
@@ -511,11 +512,13 @@ impl Query {
     }
 
     /// 获取参数值，若不存在则返回默认值
-    pub fn get_or(&self, key: &str, default: &str) -> String {
-        self.params
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| default.to_string())
+    ///
+    /// 返回 `Cow`：参数存在时零拷贝借用，缺省时借用静态默认值，不产生堆分配。
+    pub fn get_or<'a>(&'a self, key: &str, default: &'a str) -> Cow<'a, str> {
+        match self.params.get(key) {
+            Some(v) => Cow::Borrowed(v.as_str()),
+            None => Cow::Borrowed(default),
+        }
     }
 
     /// 获取 i64 参数，解析失败返回默认值

@@ -15,7 +15,7 @@ impl ApiClient {
             "unlike"
         };
 
-        let resource_type_prefix = match query.get_or("type", "0").as_str() {
+        let resource_type_prefix = match query.get_or("type", "0").as_ref() {
             "0" => "R_SO_4_",
             "1" => "R_MV_5_",
             "2" => "A_PL_0_",

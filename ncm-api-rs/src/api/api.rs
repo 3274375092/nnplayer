@@ -13,7 +13,7 @@ impl ApiClient {
         let data_str = query.get_or("data", "{}");
         let data: serde_json::Value = serde_json::from_str(&data_str).unwrap_or_else(|_| json!({}));
         let crypto_str = query.get_or("crypto", "");
-        let crypto = CryptoType::from(crypto_str.as_str());
+        let crypto = CryptoType::from(crypto_str.as_ref());
         self.request(&uri, data, query.to_option(crypto)).await
     }
 }

@@ -57,7 +57,7 @@ impl ApiClient {
         self.client
             .post(&upload_url)
             .header("x-nos-token", token)
-            .header("Content-Type", &img_mimetype)
+            .header("Content-Type", img_mimetype.as_ref())
             .body(img_data)
             .send()
             .await

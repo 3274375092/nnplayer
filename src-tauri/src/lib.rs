@@ -3,6 +3,8 @@ mod error;
 mod models;
 mod state;
 
+use std::borrow::Cow;
+
 use state::AppState;
 use tauri::Emitter;
 use tauri::Manager;
@@ -127,7 +129,8 @@ async fn restore_session(
                 .or_else(|| resp.body.pointer("/profile/avatarUrl"))
                 .and_then(|v| v.as_str())
                 .and_then(commands::auth::normalize_avatar_url)
-                .or_else(|| record.avatar_url.clone());
+                .or_else(|| record.avatar_url.clone().map(Cow::Owned))
+                .map(|c| c.into_owned());
 
             drop(api);
             let mut auth = state.auth.lock().await;

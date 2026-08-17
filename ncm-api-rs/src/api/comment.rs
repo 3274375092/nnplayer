@@ -11,7 +11,7 @@ impl ApiClient {
     /// t: 1=发送, 0=删除, 2=回复
     pub async fn comment(&self, query: &Query) -> Result<ApiResponse> {
         let t = query.get_or("t", "1");
-        let action = match t.as_str() {
+        let action = match t.as_ref() {
             "1" => "add",
             "0" => "delete",
             "2" => "reply",
@@ -19,7 +19,7 @@ impl ApiClient {
         };
         let resource_type = query.get_or("type", "0");
         let thread_id = crate::util::config::RESOURCE_TYPE_MAP
-            .get(resource_type.as_str())
+            .get(resource_type.as_ref())
             .map(|prefix| format!("{}{}", prefix, query.get_or("id", "0")))
             .unwrap_or_default();
         let mut data = json!({

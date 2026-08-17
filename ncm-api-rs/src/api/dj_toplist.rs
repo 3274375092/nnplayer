@@ -10,7 +10,7 @@ impl ApiClient {
     /// 对应 /dj/toplist
     pub async fn dj_toplist(&self, query: &Query) -> Result<ApiResponse> {
         let type_val = query.get_or("type", "new");
-        let type_id = match type_val.as_str() {
+        let type_id = match type_val.as_ref() {
             "hot" => 1,
             _ => 0,
         };

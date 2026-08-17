@@ -22,11 +22,11 @@ impl ApiClient {
         let cursor = match sort_type {
             99 => format!("{}", (page_no - 1) * page_size),
             2 => format!("normalHot#{}", (page_no - 1) * page_size),
-            _ => query.get_or("cursor", "0"),
+            _ => query.get_or("cursor", "0").into_owned(),
         };
 
         let thread_id = crate::util::config::RESOURCE_TYPE_MAP
-            .get(resource_type.as_str())
+            .get(resource_type.as_ref())
             .map(|prefix| format!("{}{}", prefix, id))
             .unwrap_or_default();
 
