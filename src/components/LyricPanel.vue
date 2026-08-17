@@ -9,7 +9,7 @@
 // 行高策略（修复 1.5 行歌词与下一行重叠 bug）：
 //   - 不再硬锁 height: lineHeight，而是用 min-height + line-height: 1.6
 //   - 偏移量通过 ResizeObserver 测量每行实际高度累加，不再假设等高
-//   - 当前行每个字符独立双层渲染，换行后仍按演唱顺序染色
+//   - 当前行每个字符单 span（background-clip:text 渐变擦色），换行后仍按演唱顺序染色
 //   - 超长行允许换行，并由 ResizeObserver 把真实高度计入滚动定位
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -177,15 +177,14 @@ watch(
 
 // 只对当前视口附近的行做 GPU blur。远行本来不可见，继续保留 filter 会让
 // 浏览器为整首歌词创建昂贵的离屏图层；跳过它不影响行高测量或弹簧定位。
+// 2026-08: 收窄到距离 <= 4、最大 1px，减少常驻 blur 渲染目标数量。
 function filterFor(idx: number): string {
   const cur = activeLineIndex.value;
   if (cur < 0 || idx === cur) return "none";
   const absoluteDistance = Math.abs(idx - cur);
-  if (absoluteDistance > 8) return "none";
-  const dist = Math.max(0, absoluteDistance - 2);
-  return dist > 0
-    ? `blur(${Math.min(4, dist * 0.5).toFixed(2)}px)`
-    : "none";
+  if (absoluteDistance > 4) return "none";
+  const dist = Math.max(0, absoluteDistance - 3);
+  return dist > 0 ? `blur(${Math.min(1, dist * 0.5).toFixed(2)}px)` : "none";
 }
 
 // 仅用于视觉层级：把距离封顶在 3，避免远端歌词在换行时反复更新 DOM。
@@ -196,8 +195,24 @@ function visualDistanceFor(idx: number): number {
 }
 
 const karaokeFrameProjector = createKaraokeFrameProjector();
+// 卡拉OK擦色 30fps 节流：文字擦除在 30fps 与 60fps 下无肉眼差异，
+// 但能把逐字样式重算/重绘次数减半（逐字 clip/渐变是歌词渲染的大头）。
+const karaokeProgressMs = ref(0);
+let lastKaraokePaint = 0;
+watch(karaokeTokens, () => {
+  // 换行立即投影，避免上一行进度泄漏到新行
+  lastKaraokePaint = 0;
+  karaokeProgressMs.value = progressMs.value;
+});
+watch(progressMs, (ms) => {
+  const now = performance.now();
+  if (now - lastKaraokePaint >= 33) {
+    lastKaraokePaint = now;
+    karaokeProgressMs.value = ms;
+  }
+});
 const renderedKaraokeFrame = computed(() =>
-  karaokeFrameProjector.project(karaokeTokens.value, progressMs.value)
+  karaokeFrameProjector.project(karaokeTokens.value, karaokeProgressMs.value)
 );
 
 function onLineClick(timeMs: number) {
@@ -279,7 +294,7 @@ const hasSong = computed(() => player.currentSong !== null);
             idx === activeLineIndex,
             visualDistanceFor(idx),
             filterFor(idx),
-            idx === activeLineIndex ? progressMs : 0,
+            idx === activeLineIndex ? karaokeProgressMs : 0,
           ]"
           :ref="(el) => setLineRef(el, idx)"
           :data-lyric-index="idx"
@@ -297,7 +312,7 @@ const hasSong = computed(() => player.currentSong !== null);
           :style="{ filter: filterFor(idx) }"
           @click="onLineClick(line.time)"
         >
-          <!-- 当前行：每个 YRC 字符独立计算字内擦色，可自然换行。 -->
+          <!-- 当前行：每字符单 span + background-clip:text 渐变擦色（替代双层 clip-path，光栅成本减半），可自然换行。 -->
           <template v-if="idx === activeLineIndex && renderedKaraokeFrame.tokens.length > 0">
             <span class="lyric-karaoke" dir="auto" aria-hidden="true">
               <span
@@ -305,12 +320,7 @@ const hasSong = computed(() => player.currentSong !== null);
                 :key="i"
                 class="lyric-char"
                 :style="{ '--char-pct': `${(token.progress * 100).toFixed(2)}%` }"
-              >
-                <span class="lyric-char__sung">{{ token.char }}</span>
-                <span
-                  class="lyric-char__pending"
-                >{{ token.char }}</span>
-              </span>
+              >{{ token.char }}</span>
             </span>
             <span class="sr-only">{{ line.text }}</span>
           </template>
@@ -478,34 +488,31 @@ const hasSong = computed(() => player.currentSong !== null);
   word-break: break-word;
 }
 
+/* 卡拉OK擦色：每字符单 span，用 background-clip:text 渐变硬停实现字内擦除。
+   相比旧的"双层 span + clip-path"：节点减半、去掉绝对定位层，
+   渐变擦色与 clip-path 视觉一致。不打 per-char 阴影（逐字光栅大头），
+   当前行本身已有 accent 高亮 + 背景渐变，视觉层级足够。
+   不加 transition：rAF 每帧更新 pct，CSS 补间反而会引入延迟让逐字失同步。 */
 .lyric-char {
   display: inline-block;
-  position: relative;
   white-space: pre;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--color-accent) var(--char-pct, 0%),
+    color-mix(in srgb, var(--color-text-primary) 62%, transparent) var(--char-pct, 0%)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
 }
 
-.lyric-char__sung {
-  display: inline-block;
-  color: var(--color-accent);
-  clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
-  text-shadow: 0 0 10px var(--color-glow);
-}
-
-.lyric-char__pending {
-  position: absolute;
-  inset: 0;
-  display: inline-block;
-  color: color-mix(in srgb, var(--color-text-primary) 62%, transparent);
-  clip-path: inset(0 0 0 var(--char-pct, 0%));
-  pointer-events: none;
-}
-
-.lyric-karaoke:dir(rtl) .lyric-char__sung {
-  clip-path: inset(0 0 0 calc(100% - var(--char-pct, 0%)));
-}
-
-.lyric-karaoke:dir(rtl) .lyric-char__pending {
-  clip-path: inset(0 var(--char-pct, 0%) 0 0);
+.lyric-karaoke:dir(rtl) .lyric-char {
+  background-image: linear-gradient(
+    270deg,
+    var(--color-accent) var(--char-pct, 0%),
+    color-mix(in srgb, var(--color-text-primary) 62%, transparent) var(--char-pct, 0%)
+  );
 }
 
 .will-change-transform {
