@@ -328,7 +328,11 @@ async fn finalize_login(
     })
 }
 
-pub(crate) fn ensure_business_success(resp: &ApiResponse, accepted: &[i64], action: &str) -> AppResult<()> {
+pub(crate) fn ensure_business_success(
+    resp: &ApiResponse,
+    accepted: &[i64],
+    action: &str,
+) -> AppResult<()> {
     let code = AppState::response_code(resp);
     if accepted.contains(&code) {
         return Ok(());
@@ -574,8 +578,7 @@ fn now_unix() -> i64 {
 }
 
 fn build_anonymous_client() -> AppResult<ncm_api::ApiClient> {
-    let http = crate::state::build_http_client()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let http = crate::state::build_http_client().map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(ncm_api::ApiClient::new(None, http))
 }
 
@@ -715,7 +718,10 @@ login_method = "email"
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(partial).ok();
-        assert!(result.is_none(), "TOML missing 'cookie' should parse to None");
+        assert!(
+            result.is_none(),
+            "TOML missing 'cookie' should parse to None"
+        );
     }
 
     /// Missing required field `nickname`: deserialization fails → `.ok()` → None.
@@ -728,7 +734,10 @@ cookie = "MUSIC_U=abc123"
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(partial).ok();
-        assert!(result.is_none(), "TOML missing 'nickname' should parse to None");
+        assert!(
+            result.is_none(),
+            "TOML missing 'nickname' should parse to None"
+        );
     }
 
     /// Missing required field `login_method`: deserialization fails → `.ok()` → None.
@@ -741,7 +750,10 @@ cookie = "MUSIC_U=abc123"
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(partial).ok();
-        assert!(result.is_none(), "TOML missing 'login_method' should parse to None");
+        assert!(
+            result.is_none(),
+            "TOML missing 'login_method' should parse to None"
+        );
     }
 
     /// Malformed syntax (random junk text, not TOML): parse fails → `.ok()` → None.
@@ -763,7 +775,10 @@ cookie = 12345
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(wrong_type).ok();
-        assert!(result.is_none(), "TOML with wrong-type cookie should parse to None");
+        assert!(
+            result.is_none(),
+            "TOML with wrong-type cookie should parse to None"
+        );
     }
 
     /// `user_id` with wrong type (string instead of integer): fails → None.
@@ -777,7 +792,10 @@ cookie = "MUSIC_U=abc123"
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(wrong_type).ok();
-        assert!(result.is_none(), "TOML with wrong-type user_id should parse to None");
+        assert!(
+            result.is_none(),
+            "TOML with wrong-type user_id should parse to None"
+        );
     }
 
     /// Valid TOML with all required fields correctly typed parses successfully.
@@ -798,7 +816,10 @@ avatar_url = "https://example.com/avatar.jpg"
         assert_eq!(record.nickname, "testuser");
         assert_eq!(record.login_method, "email");
         assert_eq!(record.cookie, "MUSIC_U=abc123; __csrf=token");
-        assert_eq!(record.avatar_url, Some("https://example.com/avatar.jpg".to_string()));
+        assert_eq!(
+            record.avatar_url,
+            Some("https://example.com/avatar.jpg".to_string())
+        );
     }
 
     /// Valid TOML without optional `avatar_url` parses correctly (Option field absent).
@@ -812,7 +833,10 @@ cookie = "MUSIC_U=xyz"
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(valid).ok();
-        assert!(result.is_some(), "valid TOML without optional fields should parse");
+        assert!(
+            result.is_some(),
+            "valid TOML without optional fields should parse"
+        );
         let record = result.unwrap();
         assert_eq!(record.user_id, 999);
         assert_eq!(record.avatar_url, None);
@@ -832,12 +856,14 @@ updated_at = 1710000000
 
         let corrupt_cases: &[(&str, &[u8])] = &[
             ("empty file", b""),
-            ("partial missing cookie",
-             br#"user_id = 1
+            (
+                "partial missing cookie",
+                br#"user_id = 1
 nickname = "x"
 login_method = "qr"
 updated_at = 1
-"#),
+"#,
+            ),
             ("malformed syntax", b"this is garbage {{{ not toml"),
             ("binary garbage (non-UTF8)", b"\x00\x01\x02\xFF\xFE\xFD"),
         ];
@@ -872,7 +898,10 @@ updated_at = 1
         std::fs::write(&path, b"corrupt garbage {{{ not toml").unwrap();
 
         // Step 2: load_session_meta() returns None
-        assert!(load_session_meta().is_none(), "corrupt file should yield None");
+        assert!(
+            load_session_meta().is_none(),
+            "corrupt file should yield None"
+        );
 
         // Step 3: persist_session_meta() overwrites corrupt file
         persist_session_meta(42, "recovery", None, "qr", "MUSIC_U=recovered")

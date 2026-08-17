@@ -12,11 +12,11 @@
 //   - 自动按 CryptoType 进行 weapi/eapi 加密
 // 调用方只需 login_status / login / login_cellphone 等接口即可。
 
+use std::borrow::Cow;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::borrow::Cow;
 use std::time::Duration;
 
 use ncm_api::{ApiClient, ApiResponse};
@@ -245,7 +245,10 @@ mod tests {
     fn auth_state_require_login_returns_error_when_not_logged_in() {
         let auth = AuthState::default();
         assert!(auth.require_login().is_err());
-        assert!(matches!(auth.require_login().unwrap_err(), AppError::Unauthorized));
+        assert!(matches!(
+            auth.require_login().unwrap_err(),
+            AppError::Unauthorized
+        ));
     }
 
     #[test]
@@ -268,9 +271,7 @@ mod tests {
         init_rustls();
         let state = AppState::new(None, Default::default()).expect("create state");
         let state_clone = state.clone();
-        let handle = tokio::spawn(async move {
-            state_clone.check_login().await
-        });
+        let handle = tokio::spawn(async move { state_clone.check_login().await });
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         state.mark_restore_complete();
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)

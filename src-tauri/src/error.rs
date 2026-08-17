@@ -80,7 +80,14 @@ mod tests {
 
     /// ── The 8 canonical kind strings matching frontend APP_ERROR_KINDS ──
     const FRONTEND_KINDS: [&str; 8] = [
-        "Unauthorized", "Ncm", "Network", "Json", "Io", "Store", "InvalidParam", "Internal",
+        "Unauthorized",
+        "Ncm",
+        "Network",
+        "Json",
+        "Io",
+        "Store",
+        "InvalidParam",
+        "Internal",
     ];
 
     #[test]
@@ -168,7 +175,9 @@ mod tests {
         ];
         for e in &errors {
             let v = serialize_err(e);
-            let obj = v.as_object().expect("AppError must serialize to a JSON object");
+            let obj = v
+                .as_object()
+                .expect("AppError must serialize to a JSON object");
             assert_eq!(
                 obj.len(),
                 2,
@@ -184,17 +193,36 @@ mod tests {
         // This is critical: the frontend toAppError() reads these strings
         // verbatim. If we ever change variant names, this test fails.
         assert_eq!(serialize_err(&AppError::Ncm("".into()))["kind"], "Ncm");
-        assert_eq!(serialize_err(&AppError::Network("".into()))["kind"], "Network");
-        assert_eq!(serialize_err(&AppError::Json(
-            serde_json::from_str::<serde_json::Value>("x").unwrap_err()
-        ))["kind"], "Json");
-        assert_eq!(serialize_err(&AppError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "")
-        ))["kind"], "Io");
+        assert_eq!(
+            serialize_err(&AppError::Network("".into()))["kind"],
+            "Network"
+        );
+        assert_eq!(
+            serialize_err(&AppError::Json(
+                serde_json::from_str::<serde_json::Value>("x").unwrap_err()
+            ))["kind"],
+            "Json"
+        );
+        assert_eq!(
+            serialize_err(&AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                ""
+            )))["kind"],
+            "Io"
+        );
         assert_eq!(serialize_err(&AppError::Store("".into()))["kind"], "Store");
-        assert_eq!(serialize_err(&AppError::Unauthorized)["kind"], "Unauthorized");
-        assert_eq!(serialize_err(&AppError::InvalidParam("".into()))["kind"], "InvalidParam");
-        assert_eq!(serialize_err(&AppError::Internal("".into()))["kind"], "Internal");
+        assert_eq!(
+            serialize_err(&AppError::Unauthorized)["kind"],
+            "Unauthorized"
+        );
+        assert_eq!(
+            serialize_err(&AppError::InvalidParam("".into()))["kind"],
+            "InvalidParam"
+        );
+        assert_eq!(
+            serialize_err(&AppError::Internal("".into()))["kind"],
+            "Internal"
+        );
     }
 
     /// ── map_ncm_err mapping (6 explicit + 1 catch-all) ──
