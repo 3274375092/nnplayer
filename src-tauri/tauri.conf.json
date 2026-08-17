@@ -15,7 +15,6 @@
       {
         "label": "main",
         "title": "nnplayer",
-        "additionalBrowserArgs": "--force-gpu-mem-available-mb=256",
         "width": 1200,
         "height": 800,
         "minWidth": 960,
