@@ -15,7 +15,7 @@
       {
         "label": "main",
         "title": "nnplayer",
-        "additionalBrowserArgs": "--disable-gpu-compositing",
+        "additionalBrowserArgs": "--disable-gpu",
         "width": 1200,
         "height": 800,
         "minWidth": 960,
