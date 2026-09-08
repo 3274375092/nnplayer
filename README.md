@@ -11,6 +11,7 @@
 ![Version](https://img.shields.io/badge/version-0.2.3-E85D3A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
+[![Listed on DSH Directory](https://dsh.directory/badges/listed.svg)](https://dsh.directory/plugins/3274375092/dsh-voice)
 
 </div>
 
