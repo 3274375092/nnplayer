@@ -31,7 +31,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis",
+      "deb",
+      "appimage",
+      "rpm"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
@@ -47,7 +52,9 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2NDFEQUQ3ODhBRkUyOTgKUldTWTRxK0kxOXBCOWpvOU5Sc05qRWY4MnZFR3UwUUxnY01TVVBTY25haGp3WEQxYTdSTjQyMSsK",
-      "endpoints": ["https://github.com/3274375092/nnplayer/releases/latest/download/latest.json"]
+      "endpoints": [
+        "https://github.com/3274375092/nnplayer/releases/latest/download/latest.json"
+      ]
     }
   }
 }

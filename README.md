@@ -8,8 +8,8 @@
 
 [下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [提交问题](https://github.com/3274375092/nnplayer/issues)
 
-![Version](https://img.shields.io/badge/version-0.2.3-E85D3A?style=flat-square)
-![Platform](https://img.shields.io/badge/platform-Windows-2563EB?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.7-E85D3A?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
 [![Listed on DSH Directory](https://dsh.directory/badges/listed.svg)](https://dsh.directory/plugins/3274375092/dsh-voice)
 
@@ -50,10 +50,10 @@
 
 ## 下载与使用
 
-当前发布流程面向 Windows x86_64，主要在 Windows 11 上测试。运行前请确保系统已安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。
+当前发布流程支持 Windows x86_64 与 Linux x86_64（Debian/Ubuntu `.deb`、AppImage）。Linux 运行需要 GTK/WebKitGTK 4.1 及系统托盘支持；不同发行版的依赖名称可能略有差异。
 
-1. 前往 [Releases](https://github.com/3274375092/nnplayer/releases/latest) 下载最新的 NSIS 安装包。
-2. 安装并启动 nnplayer。
+1. 前往 [Releases](https://github.com/3274375092/nnplayer/releases/latest) 下载 Windows 安装包，或 Linux 的 `.deb` / `AppImage`。
+2. Linux 可执行 `chmod +x nnplayer*.AppImage` 后直接启动；Debian/Ubuntu 可使用 `sudo apt install ./nnplayer*.deb`。
 3. 使用网易云音乐 App 扫码，或通过账号、手机验证码登录。
 
 部分歌曲是否能够播放由账号权限、版权区域和网易云音乐接口状态决定。
@@ -65,6 +65,7 @@
 - Node.js 20 LTS
 - Rust stable
 - Windows 下的 Tauri 开发依赖：WebView2、Microsoft C++ Build Tools
+- Linux 下的 Tauri 开发依赖：`libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`
 
 完整系统依赖请参考 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)。
 
@@ -190,6 +191,22 @@ cargo run --manifest-path ncm-api-rs/Cargo.toml --features server --bin ncm-serv
 
 - [`imsyy/ncm-api-rs`](https://github.com/imsyy/ncm-api-rs)：仓库内 Rust NCM 客户端的上游项目
 - [Tauri](https://tauri.app/)、[Vue](https://vuejs.org/)、[Pinia](https://pinia.vuejs.org/)、[Tailwind CSS](https://tailwindcss.com/)、[Lucide](https://lucide.dev/)
+
+## Fedora 安装
+
+Release 同时提供 Fedora/RHEL 系列使用的 RPM 包：
+
+```bash
+sudo dnf install ./nnplayer-*.x86_64.rpm
+```
+
+如果依赖未自动安装：
+
+```bash
+sudo dnf install webkit2gtk4.1 libappindicator-gtk3 librsvg2
+```
+
+也可以使用同一 Release 中的 AppImage。GNOME Wayland 用户如需系统托盘，请启用 AppIndicator 扩展。
 
 ## 许可
 
