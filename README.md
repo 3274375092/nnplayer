@@ -6,12 +6,11 @@
 
 一个使用 Tauri v2、Rust、Vue 3 与 TypeScript 构建的网易云音乐桌面播放器。
 
-[下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [提交问题](https://github.com/3274375092/nnplayer/issues)
+[下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [English](./README.en.md) · [提交问题](https://github.com/3274375092/nnplayer/issues)
 
 ![Version](https://img.shields.io/badge/version-0.2.7-E85D3A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
-[![Listed on DSH Directory](https://dsh.directory/badges/listed.svg)](https://dsh.directory/plugins/3274375092/dsh-voice)
 
 </div>
 
@@ -50,11 +49,20 @@
 
 ## 下载与使用
 
-当前发布流程支持 Windows x86_64 与 Linux x86_64（Debian/Ubuntu `.deb`、AppImage）。Linux 运行需要 GTK/WebKitGTK 4.1 及系统托盘支持；不同发行版的依赖名称可能略有差异。
+当前发布流程支持 Windows x86_64 与 Linux x86_64，提供 Windows NSIS 安装包、Debian/Ubuntu `.deb`、Fedora/RHEL `.rpm` 和 AppImage。Linux 运行需要 GTK/WebKitGTK 4.1 及系统托盘支持；不同发行版的依赖名称可能略有差异。
 
-1. 前往 [Releases](https://github.com/3274375092/nnplayer/releases/latest) 下载 Windows 安装包，或 Linux 的 `.deb` / `AppImage`。
-2. Linux 可执行 `chmod +x nnplayer*.AppImage` 后直接启动；Debian/Ubuntu 可使用 `sudo apt install ./nnplayer*.deb`。
-3. 使用网易云音乐 App 扫码，或通过账号、手机验证码登录。
+- **Windows**：前往 [Releases](https://github.com/3274375092/nnplayer/releases/latest) 下载 NSIS 安装包并运行。
+- **Debian/Ubuntu**：`sudo apt install ./nnplayer*.deb`
+- **Fedora/RHEL**：`sudo dnf install ./nnplayer*.rpm`
+- **AppImage**：`chmod +x nnplayer*.AppImage && ./nnplayer*.AppImage`
+
+如果 Fedora/RHEL 没有自动安装依赖，可以执行：
+
+```bash
+sudo dnf install webkit2gtk4.1 libappindicator-gtk3 librsvg2
+```
+
+GNOME Wayland 用户如需系统托盘，请启用 AppIndicator 扩展。安装后使用网易云音乐 App 扫码，或通过账号、手机验证码登录。
 
 部分歌曲是否能够播放由账号权限、版权区域和网易云音乐接口状态决定。
 
@@ -110,7 +118,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 npm run tauri build
 ```
 
-Windows 安装包默认输出到 `src-tauri/target/release/bundle/nsis/`。
+构建产物默认输出到 `src-tauri/target/release/bundle/`，包含 `nsis`、`deb`、`rpm` 和 `appimage` 等目录。
 
 ## 架构
 
@@ -152,7 +160,7 @@ nnplayer/
 ├── ncm-api-rs/             # 内嵌网易云音乐 Rust API crate
 ├── tests/                  # 歌词解析与对齐回归测试
 ├── screenshots/            # README 截图
-└── .github/workflows/      # CI 与 Windows 发布流程
+└── .github/workflows/      # CI 与多平台发布流程
 ```
 
 ## ncm-api-rs
@@ -181,7 +189,7 @@ cargo run --manifest-path ncm-api-rs/Cargo.toml --features server --bin ncm-serv
 
 | 领域 | 技术 |
 | --- | --- |
-| 桌面运行时 | Tauri v2、Wry、WebView2 |
+| 桌面运行时 | Tauri v2、Wry、WebView2（Windows）/ WebKitGTK（Linux） |
 | 前端 | Vue 3、TypeScript、Pinia、Vue Router、Vite |
 | 样式与图标 | Tailwind CSS、Lucide |
 | Rust | Tokio、Serde、Reqwest、Rustls |
@@ -191,22 +199,6 @@ cargo run --manifest-path ncm-api-rs/Cargo.toml --features server --bin ncm-serv
 
 - [`imsyy/ncm-api-rs`](https://github.com/imsyy/ncm-api-rs)：仓库内 Rust NCM 客户端的上游项目
 - [Tauri](https://tauri.app/)、[Vue](https://vuejs.org/)、[Pinia](https://pinia.vuejs.org/)、[Tailwind CSS](https://tailwindcss.com/)、[Lucide](https://lucide.dev/)
-
-## Fedora 安装
-
-Release 同时提供 Fedora/RHEL 系列使用的 RPM 包：
-
-```bash
-sudo dnf install ./nnplayer-*.x86_64.rpm
-```
-
-如果依赖未自动安装：
-
-```bash
-sudo dnf install webkit2gtk4.1 libappindicator-gtk3 librsvg2
-```
-
-也可以使用同一 Release 中的 AppImage。GNOME Wayland 用户如需系统托盘，请启用 AppIndicator 扩展。
 
 ## 许可
 
