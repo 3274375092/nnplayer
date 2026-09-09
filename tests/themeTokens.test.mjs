@@ -179,8 +179,8 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
     "--color-ambient-secondary": "#458588",
     "--color-card": GRUVBOX_LIGHT_THEME.card,
     "--color-card-hover": GRUVBOX_LIGHT_THEME.cardHover,
-    "--color-border": GRUVBOX_LIGHT_THEME.border,
-    "--color-border-strong": GRUVBOX_LIGHT_THEME.borderStrong,
+    "--color-border": "transparent",
+    "--color-border-strong": "transparent",
     "--color-accent": DEFAULT_THEME_SEED,
     "--color-on-accent": GRUVBOX_LIGHT_THEME.background,
     "--color-accent-secondary": "#d65d0e",
@@ -188,8 +188,8 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
     "--color-text-primary": GRUVBOX_LIGHT_THEME.foreground,
     "--color-text-secondary": GRUVBOX_LIGHT_THEME.textSecondary,
     "--color-text-tertiary": GRUVBOX_LIGHT_THEME.textTertiary,
-    "--color-ring": "rgba(60, 56, 54, 0.22)",
-    "--color-glow": "rgba(175, 58, 3, 0.22)",
+    "--color-ring": "transparent",
+    "--color-glow": "rgba(175, 58, 3, 0.14)",
   };
   for (const name of DYNAMIC_THEME_CSS_VARIABLES) {
     assert.ok(name in expected, `${name} needs an explicit default CSS token`);
