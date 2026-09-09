@@ -61,10 +61,10 @@ defineEmits<{
   <button
     v-else-if="variant === 'song' && song"
     type="button"
-    class="group block w-full bg-surface-soft border border-border rounded-2xl p-3.5 cursor-pointer text-left hover:bg-surface-strong hover:border-border-strong hover:-translate-y-1 hover:shadow-xl transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98]"
+    class="group block w-full bg-surface-soft rounded-md p-3.5 cursor-pointer text-left hover:bg-surface-strong hover:-translate-y-1 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98]"
     @click="$emit('click')"
   >
-    <div class="aspect-square rounded-xl bg-surface-soft mb-3 flex items-center justify-center ring-1 ring-ring relative">
+    <div class="aspect-square rounded-md bg-surface-soft mb-3 flex items-center justify-center relative">
       <Music2 :size="48" :stroke-width="1.25" class="text-text-tertiary group-hover:scale-110 transition-transform duration-300" />
       <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
         <div class="w-12 h-12 rounded-full bg-accent text-on-accent flex items-center justify-center shadow-[0_8px_24px_var(--color-glow)] scale-90 group-hover:scale-100 transition-transform duration-300">
@@ -100,7 +100,7 @@ defineEmits<{
   color: var(--color-on-accent);
   background: var(--color-accent);
   opacity: 0;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.36);
+  box-shadow: none;
   transform: translateY(0.375rem) scale(0.95);
   transition:
     opacity 200ms ease,
@@ -119,7 +119,6 @@ defineEmits<{
 .playlist-tile:focus-visible .playlist-cover {
   box-shadow:
     0 0 0 2px var(--color-bg),
-    0 0 0 4px var(--color-accent),
-    0 18px 38px rgba(0, 0, 0, 0.38);
+    0 0 0 4px var(--color-accent);
 }
 </style>

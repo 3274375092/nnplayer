@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   ChevronLeft,
@@ -33,25 +33,6 @@ const menu = [
   { to: "/daily", label: "每日推荐", icon: Sparkles },
   { to: "/playlists", label: "我的歌单", icon: Folder },
 ] as const;
-
-const itemRefs = ref<HTMLElement[]>([]);
-const indicatorTop = ref(0);
-const activeIdx = ref(0);
-
-function setItemRef(el: unknown, idx: number) {
-  const target =
-    (el as { $el?: Element } | null)?.$el ?? (el as Element | null);
-  if (target instanceof HTMLElement) {
-    itemRefs.value[idx] = target;
-  }
-}
-
-function updateIndicator() {
-  const el = itemRefs.value[activeIdx.value];
-  if (el) {
-    indicatorTop.value = el.offsetTop;
-  }
-}
 
 const keyword = ref("");
 const suggestions = ref<SearchSuggestion[]>([]);
@@ -163,7 +144,6 @@ function logout() {
 function toggleCollapsed() {
   collapsed.value = !collapsed.value;
   localStorage.setItem(STORAGE_KEY, collapsed.value ? "1" : "0");
-  void nextTick(updateIndicator);
 }
 
 const queueDrawerRef = ref<InstanceType<typeof QueueDrawer> | null>(null);
@@ -180,12 +160,7 @@ async function openDesktopLyrics() {
 
 watch(
   () => router.currentRoute.value.path,
-  (path) => {
-    const idx = menu.findIndex((m) => m.to === path);
-    if (idx >= 0) {
-      activeIdx.value = idx;
-    }
-    void nextTick(updateIndicator);
+  () => {
     hideSuggest();
   },
   { immediate: true },
@@ -205,8 +180,7 @@ onBeforeUnmount(() => {
 <template>
   <aside
     :class="[
-      'h-full flex flex-col transition-[width,padding] duration-220 ease-out overflow-hidden',
-      'bg-card border-r border-border',
+      'sidebar h-full py-6 flex flex-col transition-[width,padding] duration-220 ease-out overflow-hidden',
       collapsed ? 'w-16 px-2' : 'w-60 px-4',
     ]"
   >
@@ -266,7 +240,7 @@ onBeforeUnmount(() => {
       </form>
       <div
         v-if="showSuggest && suggestions.length > 0"
-        class="absolute left-0 right-0 top-full mt-1 z-30 bg-card border border-border-strong rounded-xl shadow-theme max-h-80 overflow-y-auto py-1 backdrop-blur-2xl"
+        class="glass absolute left-0 right-0 top-full mt-2 z-30 max-h-80 overflow-y-auto py-1"
       >
         <div
           v-for="(s, idx) in suggestions"
@@ -319,7 +293,7 @@ onBeforeUnmount(() => {
           class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-start justify-center pt-20 px-4"
           @click.self="searchExpand = false"
         >
-          <div class="bg-card border border-border-strong rounded-2xl p-4 w-full max-w-md shadow-theme">
+          <div class="glass p-4 w-full max-w-md">
             <input
               v-model="keyword"
               type="text"
@@ -379,23 +353,18 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
 
-    <!-- 导航菜单 + 指示器 -->
+    <!-- 导航菜单 -->
     <nav class="relative flex-1 mt-2">
-      <div
-        class="absolute left-0 w-0.5 h-12 bg-accent rounded-r transition-all duration-220 ease-out pointer-events-none shadow-[0_0_12px_var(--color-glow)]"
-        :style="{ top: indicatorTop + 'px' }"
-      />
       <RouterLink
-        v-for="(item, idx) in menu"
+        v-for="item in menu"
         :key="item.to"
         :to="item.to"
-        :ref="(el) => setItemRef(el, idx)"
         :class="[
-          'flex items-center h-12 rounded-xl text-sm transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
+          'flex items-center h-12 rounded-md text-sm transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
           collapsed ? 'justify-center px-2' : 'px-4 gap-3',
           'text-text-secondary hover:text-text-primary hover:bg-card-hover',
         ]"
-        active-class="!text-text-primary !bg-gradient-to-r !from-accent-subtle !to-transparent font-medium"
+        active-class="!text-accent !bg-accent-subtle font-medium"
         :title="collapsed ? item.label : undefined"
       >
         <component
@@ -411,7 +380,7 @@ onBeforeUnmount(() => {
     <!-- 底部按钮区 -->
     <div
       :class="[
-        'mt-auto pt-4 border-t border-border flex flex-col gap-1 shrink-0',
+        'mt-auto pt-4 flex flex-col gap-1 shrink-0',
         collapsed ? 'px-0' : 'px-1',
       ]"
     >
@@ -462,7 +431,7 @@ onBeforeUnmount(() => {
         v-if="userStore.avatarUrl"
         :src="userStore.avatarUrl"
         :alt="userStore.displayName"
-        class="w-8 h-8 rounded-full bg-card-hover object-cover shrink-0 ring-1 ring-border-strong"
+        class="w-8 h-8 rounded-full bg-card-hover object-cover shrink-0"
           @error="userStore.clearAvatar()"
       />
       <div
@@ -493,7 +462,7 @@ onBeforeUnmount(() => {
         v-if="userStore.avatarUrl"
         :src="userStore.avatarUrl"
         :alt="userStore.displayName"
-        class="w-9 h-9 rounded-full bg-card-hover object-cover ring-1 ring-border-strong"
+        class="w-9 h-9 rounded-full bg-card-hover object-cover"
         :title="userStore.displayName"
           @error="userStore.clearAvatar()"
       />
@@ -511,6 +480,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.sidebar {
+  background: var(--color-surface-soft);
+}
+
 .search-fade-enter-active,
 .search-fade-leave-active {
   transition: opacity 0.18s ease;

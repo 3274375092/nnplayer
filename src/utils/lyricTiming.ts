@@ -42,6 +42,17 @@ export function areLyricTextsEquivalent(left: string, right: string): boolean {
   return normalized.length > 0 && normalized === normalizeLyricMatchText(right);
 }
 
+function lowerBoundTimes(lines: readonly AlignableLyricLine[], time: number): number {
+  let low = 0;
+  let high = lines.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (lines[middle].time < time) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 function stableMedian(samples: number[], minimumSamples: number): number {
   if (samples.length < minimumSamples) return 0;
   const sorted = [...samples].sort((a, b) => a - b);
@@ -95,9 +106,11 @@ function estimateTimelineOffset(
 
   const bins = new Map<number, number[]>();
   for (const yrc of yrcLines) {
-    for (const lrc of lrcLines) {
+    const start = lowerBoundTimes(lrcLines, yrc.time - 10_000);
+    const end = lowerBoundTimes(lrcLines, yrc.time + 10_000);
+    for (let index = start; index < end; index += 1) {
+      const lrc = lrcLines[index];
       const difference = yrc.time - lrc.time;
-      if (Math.abs(difference) > 10_000) continue;
       const bin = Math.round(difference / 100);
       const values = bins.get(bin) ?? [];
       values.push(difference);
@@ -151,14 +164,25 @@ export function alignLyricTimelines(
   options: LyricTimelineAlignmentOptions = {},
 ): LyricTimelineAlignment {
   const offsetSamples: number[] = [];
+  const normalizedYrc = yrcLines.map((line) => normalizeLyricMatchText(line.text));
+  const normalizedLrc = lrcLines.map((line) => normalizeLyricMatchText(line.text));
+  const lrcIndexesByText = new Map<string, number[]>();
+  normalizedLrc.forEach((text, index) => {
+    if (!text) return;
+    const indexes = lrcIndexesByText.get(text) ?? [];
+    indexes.push(index);
+    lrcIndexesByText.set(text, indexes);
+  });
+
   if (!options.lrcTextIsTranslation) {
-    for (const yrc of yrcLines) {
-      const normalizedYrc = normalizeLyricMatchText(yrc.text);
-      if (!normalizedYrc) continue;
+    for (let yrcIndex = 0; yrcIndex < yrcLines.length; yrcIndex += 1) {
+      const yrc = yrcLines[yrcIndex];
+      const normalizedText = normalizedYrc[yrcIndex];
+      if (!normalizedText) continue;
       let bestDistance = 10_001;
       let bestOffset: number | null = null;
-      for (const lrc of lrcLines) {
-        if (normalizeLyricMatchText(lrc.text) !== normalizedYrc) continue;
+      for (const lrcIndex of lrcIndexesByText.get(normalizedText) ?? []) {
+        const lrc = lrcLines[lrcIndex];
         const offset = yrc.time - lrc.time;
         const distance = Math.abs(offset);
         if (distance <= 10_000 && distance < bestDistance) {
@@ -188,21 +212,30 @@ export function alignLyricTimelines(
   const matchedOffsets: number[] = [];
   let lastMatchedLrcIndex = -1;
 
-  for (const yrc of yrcLines) {
-    const normalizedYrc = normalizeLyricMatchText(yrc.text);
+  for (let yrcIndex = 0; yrcIndex < yrcLines.length; yrcIndex += 1) {
+    const yrc = yrcLines[yrcIndex];
+    const normalizedText = normalizedYrc[yrcIndex];
     let exactIndex = -1;
     let exactDistance = Number.POSITIVE_INFINITY;
     let nearestIndex = -1;
     let nearestDistance = 2501;
 
-    for (let i = lastMatchedLrcIndex + 1; i < lrcLines.length; i += 1) {
+    const firstCandidate = Math.max(
+      lastMatchedLrcIndex + 1,
+      lowerBoundTimes(lrcLines, yrc.time - sourceOffset - 2500),
+    );
+    const lastCandidate = Math.min(
+      lrcLines.length,
+      lowerBoundTimes(lrcLines, yrc.time - sourceOffset + 2500),
+    );
+    for (let i = firstCandidate; i < lastCandidate; i += 1) {
       const lrc = lrcLines[i];
       const adjustedTime = Math.max(0, lrc.time + sourceOffset);
       const distance = Math.abs(adjustedTime - yrc.time);
       if (
         !options.lrcTextIsTranslation &&
-        normalizedYrc.length > 0 &&
-        normalizeLyricMatchText(lrc.text) === normalizedYrc &&
+        normalizedText.length > 0 &&
+        normalizedLrc[i] === normalizedText &&
         distance <= 2500 &&
         distance < exactDistance
       ) {

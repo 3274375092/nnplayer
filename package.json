@@ -9,6 +9,7 @@
     "test:lyrics": "node --test tests/lrcParser.test.mjs tests/lyricFrame.test.mjs tests/desktopLyricsSync.test.mjs tests/desktopLyricsTransport.test.mjs",
     "test:utils": "node --test tests/format.test.mjs tests/coverImage.test.mjs",
     "test:theme": "node --test tests/themeTokens.test.mjs",
+    "perf:lyrics": "node tools/lyric-performance.mjs",
     "test": "node --test tests/*.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

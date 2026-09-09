@@ -17,6 +17,11 @@ import { useLyric } from "@/composables/useLyric";
 import { useSpringValue } from "@/composables/useSpringScroll";
 import { usePlayerStore } from "@/stores/player";
 import { createKaraokeFrameProjector } from "@/lyrics/lyricFrame";
+import {
+  buildLyricHeightPrefix,
+  getLyricRenderRange,
+  getLyricVirtualPadding,
+} from "@/lyrics/lyricViewport";
 
 const props = withDefaults(
   defineProps<{
@@ -57,6 +62,28 @@ const {
 const lineHeights = ref<number[]>([]);
 const containerRef = ref<HTMLElement | null>(null);
 
+const isVirtual = computed(() => lines.value.length > 160);
+
+const visibleRange = computed(() =>
+  getLyricRenderRange(lines.value.length, activeLineIndex.value)
+);
+
+const visibleLines = computed(() => {
+  const { start, end } = visibleRange.value;
+  return lines.value.slice(start, end).map((line, offset) => ({
+    line,
+    index: start + offset,
+  }));
+});
+
+const heightPrefix = computed(() =>
+  buildLyricHeightPrefix(lines.value.length, lineHeights.value, props.lineHeight)
+);
+
+const virtualPadding = computed(() => {
+  return getLyricVirtualPadding(heightPrefix.value, visibleRange.value);
+});
+
 let ro: ResizeObserver | null = null;
 let releaseRealtimeUpdates: (() => void) | null = null;
 
@@ -75,9 +102,12 @@ function measureAll() {
   // 限定在组件根元素内查询,避免与其他 LyricPanel 实例或同名 class 冲突
   const nodes = containerRef.value?.querySelectorAll<HTMLElement>(".lyric-line");
   if (!nodes) return;
-  const heights: number[] = [];
-  nodes.forEach((n) => heights.push(n.offsetHeight));
-  lineHeights.value = heights;
+  const next = [...lineHeights.value];
+  nodes.forEach((node) => {
+    const index = Number(node.dataset.lyricIndex);
+    if (Number.isInteger(index) && index >= 0) next[index] = node.offsetHeight;
+  });
+  lineHeights.value = next;
 }
 
 function updateMeasuredEntries(entries: ResizeObserverEntry[]) {
@@ -149,13 +179,9 @@ const reduceMotion =
 const targetY = computed(() => {
   const idx = activeLineIndex.value;
   if (idx < 0) return 0;
-  const heights = lineHeights.value;
-  // 测量未完成时：用基准行高估算,避免首帧从 0 弹到正确位置
-  const fallback = (i: number) => heights[i] ?? props.lineHeight;
-  // 累计到 idx 之前所有行的高度
-  let offset = 0;
-  for (let i = 0; i < idx; i++) offset += fallback(i);
-  const cur = fallback(idx);
+  const prefix = heightPrefix.value;
+  const offset = prefix[idx];
+  const cur = prefix[idx + 1] - offset;
   return lyricViewportHeight.value / 2 - cur / 2 - offset;
 });
 
@@ -261,7 +287,7 @@ const hasSong = computed(() => player.currentSong !== null);
       <span>{{ error }}</span>
       <button
         type="button"
-        class="px-3 py-1 rounded-md border border-border-strong hover:bg-surface-strong"
+        class="px-3 py-1 rounded-md bg-surface-soft hover:bg-surface-strong"
         @click="retry"
       >
         重试
@@ -285,8 +311,14 @@ const hasSong = computed(() => player.currentSong !== null);
         class="absolute left-0 right-0 will-change-transform"
         :style="{ transform: `translate3d(0, ${translateY}px, 0)` }"
       >
+        <div
+          v-if="isVirtual"
+          aria-hidden="true"
+          class="lyric-virtual-spacer"
+          :style="{ height: `${virtualPadding.top}px` }"
+        />
         <button
-          v-for="(line, idx) in lines"
+          v-for="{ line, index: idx } in visibleLines"
           :key="`${line.time}-${idx}`"
           v-memo="[
             line.text,
@@ -333,12 +365,14 @@ const hasSong = computed(() => player.currentSong !== null);
             :class="{ 'is-active-translation': idx === activeLineIndex }"
           >{{ line.translation }}</span>
         </button>
+        <div
+          v-if="isVirtual"
+          aria-hidden="true"
+          class="lyric-virtual-spacer"
+          :style="{ height: `${virtualPadding.bottom}px` }"
+        />
       </div>
 
-      <!-- 中央分割线（视觉提示） -->
-      <div
-        class="lyric-focus-marker pointer-events-none absolute left-0 top-1/2 -translate-y-1/2"
-      />
     </div>
   </div>
 </template>
@@ -348,39 +382,10 @@ const hasSong = computed(() => player.currentSong !== null);
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, transparent);
-  border-radius: 1.35rem;
-  background:
-    radial-gradient(
-      circle at 14% -8%,
-      color-mix(in srgb, var(--color-accent) 10%, transparent),
-      transparent 38%
-    ),
-    linear-gradient(
-      145deg,
-      var(--color-highlight),
-      var(--color-surface-soft) 52%,
-      var(--color-surface-strong)
-    );
-  background-color: var(--color-card);
-  box-shadow:
-    inset 0 1px 0 var(--color-highlight),
-    0 18px 48px color-mix(in srgb, var(--color-shadow) 54%, transparent);
-}
-
-.lyric-panel::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background: linear-gradient(
-    105deg,
-    color-mix(in srgb, var(--color-highlight) 82%, transparent),
-    transparent 28%,
-    transparent 72%,
-    color-mix(in srgb, var(--color-surface-soft) 72%, transparent)
-  );
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .lyric-panel__header {
@@ -394,16 +399,7 @@ const hasSong = computed(() => player.currentSong !== null);
   align-items: center;
   gap: 0.5rem;
   color: color-mix(in srgb, var(--color-text-primary) 74%, transparent);
-  letter-spacing: 0.04em;
-}
-
-.lyric-panel__title::before {
-  content: "";
-  width: 0.35rem;
-  height: 0.35rem;
-  border-radius: 999px;
-  background: var(--color-accent);
-  box-shadow: 0 0 10px var(--color-glow);
+  letter-spacing: 0;
 }
 
 .lyric-panel__song {
@@ -428,6 +424,12 @@ const hasSong = computed(() => player.currentSong !== null);
   );
 }
 
+.lyric-virtual-spacer {
+  display: block;
+  width: 100%;
+  pointer-events: none;
+}
+
 /* 行基础样式：允许长歌词换行，真实高度由 ResizeObserver 参与居中计算。 */
 .lyric-line {
   display: block;
@@ -440,7 +442,7 @@ const hasSong = computed(() => player.currentSong !== null);
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
-  border-radius: 0.75rem;
+  border-radius: 6px;
   color: color-mix(in srgb, var(--color-text-primary) 46%, transparent);
   font-family: inherit;
   font-size: 0.975rem;
@@ -541,22 +543,6 @@ const hasSong = computed(() => player.currentSong !== null);
 
 .lyric-translation.is-active-translation {
   opacity: 0.68;
-}
-
-.lyric-focus-marker {
-  z-index: 2;
-  width: 2px;
-  height: 1.75rem;
-  border-radius: 999px;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    var(--color-accent) 28%,
-    var(--color-accent) 72%,
-    transparent
-  );
-  box-shadow: 0 0 10px var(--color-glow);
-  opacity: 0.72;
 }
 
 @media (prefers-reduced-motion: reduce) {

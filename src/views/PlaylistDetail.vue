@@ -75,7 +75,7 @@ onMounted(() => void load());
       <!-- 头部信息 -->
       <header class="flex gap-6 mb-6 items-end">
         <div
-          class="w-44 h-44 rounded-card bg-hover overflow-hidden shrink-0 shadow-card"
+          class="w-44 h-44 rounded-md bg-hover overflow-hidden shrink-0"
         >
           <img
             v-if="detail.playlist.coverUrl"

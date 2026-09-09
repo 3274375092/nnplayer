@@ -8,20 +8,23 @@ use crate::error::Result;
 use crate::request::{ApiClient, ApiResponse};
 use serde_json::json;
 
+fn audio_match_url(duration: &str, audio_fp: &str) -> String {
+    let encoded_fp = urlencoding::encode(audio_fp);
+    format!(
+        "https://interface.music.163.com/api/music/audio/match?sessionId=0123456789abcdef&algorithmCode=shazam_v2&duration={}&rawdata={}&times=1&decrypt=1",
+        duration, encoded_fp
+    )
+}
+
 impl ApiClient {
     /// 听歌识曲
     /// 对应 /audio/match
     pub async fn audio_match(&self, query: &Query) -> Result<ApiResponse> {
         let duration = query.get_or("duration", "0");
         let audio_fp = query.get_or("audioFP", "");
-        let encoded_fp = urlencoding::encode(&audio_fp);
-        let url = format!(
-            "https://interface.music.163.com/api/music/audio/match?sessionId=0123456789abcdef&algorithmCode=shazam_v2&duration={}&rawdata={}&times=1&decrypt=1",
-            duration, encoded_fp
-        );
+        let url = audio_match_url(&duration, &audio_fp);
 
-        let client = reqwest::Client::new();
-        let res = client.get(&url).send().await?;
+        let res = self.client.get(&url).send().await?;
         let body: serde_json::Value = res.json().await?;
 
         Ok(ApiResponse {
@@ -32,5 +35,18 @@ impl ApiClient {
             }),
             cookie: vec![],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::audio_match_url;
+
+    #[test]
+    fn audio_match_url_encodes_fingerprint_and_duration() {
+        let url = audio_match_url("12.5", "abc+/=");
+        assert!(url.contains("duration=12.5"));
+        assert!(url.contains("rawdata=abc%2B%2F%3D"));
+        assert!(url.contains("algorithmCode=shazam_v2"));
     }
 }

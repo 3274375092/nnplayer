@@ -55,7 +55,6 @@ onMounted(() => void load());
   <div class="daily-page px-8 py-6 mobile-content-padding">
     <header class="daily-header">
       <div class="daily-header__eyebrow">
-        <span aria-hidden="true" />
         为你挑选
       </div>
       <h1 class="daily-header__title">每日推荐</h1>
@@ -89,6 +88,9 @@ onMounted(() => void load());
 
 <style scoped>
 .daily-page {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
   container-name: daily-content;
   container-type: inline-size;
 }
@@ -99,23 +101,6 @@ onMounted(() => void load());
   padding: 0.35rem 0 0.15rem;
 }
 
-.daily-header::after {
-  content: "";
-  position: absolute;
-  top: -2.5rem;
-  left: -3rem;
-  z-index: -1;
-  width: 16rem;
-  height: 9rem;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse,
-    color-mix(in srgb, var(--color-accent) 7%, transparent),
-    transparent 68%
-  );
-  filter: blur(10px);
-}
-
 .daily-header__eyebrow {
   display: flex;
   align-items: center;
@@ -124,23 +109,16 @@ onMounted(() => void load());
   color: color-mix(in srgb, var(--color-text-primary) 48%, transparent);
   font-size: 0.68rem;
   font-weight: 600;
-  letter-spacing: 0.14em;
-}
-
-.daily-header__eyebrow > span {
-  width: 1.35rem;
-  height: 1px;
-  background: var(--color-accent);
-  box-shadow: 0 0 8px var(--color-glow);
+  letter-spacing: 0;
 }
 
 .daily-header__title {
   margin: 0;
   color: color-mix(in srgb, var(--color-text-primary) 96%, transparent);
-  font-size: clamp(2.05rem, 3.2vw, 2.625rem);
+  font-size: 2rem;
   font-weight: 680;
-  letter-spacing: -0.045em;
-  line-height: 1.02;
+  letter-spacing: 0;
+  line-height: 1.2;
   text-wrap: balance;
 }
 
@@ -166,7 +144,7 @@ onMounted(() => void load());
 .daily-layout {
   grid-template-columns: minmax(0, 1.65fr) minmax(18.75rem, 0.9fr);
   align-items: start;
-  gap: 1.25rem;
+  gap: 2rem;
 }
 
 .daily-lyric {
@@ -177,26 +155,9 @@ onMounted(() => void load());
 }
 
 .daily-lyric :deep(.lyric-panel) {
-  border-color: color-mix(in srgb, var(--color-border-strong) 64%, transparent);
-  background:
-    radial-gradient(
-      circle at 10% -8%,
-      color-mix(in srgb, var(--color-accent) 8%, transparent),
-      transparent 40%
-    ),
-    linear-gradient(
-      150deg,
-      var(--color-highlight),
-      var(--color-surface-soft)
-    );
-  background-color: color-mix(
-    in srgb,
-    var(--color-card) 92%,
-    var(--color-surface-soft)
-  );
-  box-shadow:
-    inset 0 1px 0 var(--color-highlight),
-    0 16px 42px color-mix(in srgb, var(--color-shadow) 68%, transparent);
+  border-radius: 8px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
 }
 
 .daily-state {
@@ -222,8 +183,5 @@ onMounted(() => void load());
     margin-bottom: 1.25rem;
   }
 
-  .daily-header__title {
-    font-size: clamp(2rem, 3.4vw, 2.45rem);
-  }
 }
 </style>

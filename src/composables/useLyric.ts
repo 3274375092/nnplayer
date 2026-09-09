@@ -46,6 +46,22 @@ import {
   areLyricTextsEquivalent,
 } from "@/utils/lyricTiming";
 
+let performanceMeasureId = 0;
+
+function measureDevelopment<T>(name: string, task: () => T): T {
+  if (!import.meta.env.DEV || typeof performance === "undefined") return task();
+  const id = `${name}-${performanceMeasureId++}`;
+  performance.mark(`${id}-start`);
+  try {
+    return task();
+  } finally {
+    performance.mark(`${id}-end`);
+    performance.measure(`nnplayer:${name}`, `${id}-start`, `${id}-end`);
+    performance.clearMarks(`${id}-start`);
+    performance.clearMarks(`${id}-end`);
+  }
+}
+
 // =============== 桌面歌词 Timeline Snapshot / Clock Anchor ===============
 
 export type { KaraokeToken } from "@/lyrics/lyricFrame";
@@ -149,7 +165,7 @@ function createLyricEngine(): UseLyricReturn {
     lrcLines: LyricLine[],
     fallbackTextIsTranslation: boolean,
   ): { lyricLines: LyricLine[]; tokens: KaraokeToken[][] } | null {
-    const parsed = parseYrc(yrcText);
+    const parsed = measureDevelopment("parseYrc", () => parseYrc(yrcText));
     const rows = parsed
       .map((line) => {
         const text = getYrcLineText(line);
@@ -182,10 +198,12 @@ function createLyricEngine(): UseLyricReturn {
 
     if (rows.length === 0) return null;
 
-    const alignment = alignLyricTimelines(
-      rows.map((row) => row.lyricLine),
-      lrcLines,
-      { lrcTextIsTranslation: fallbackTextIsTranslation },
+    const alignment = measureDevelopment("alignLyricTimelines", () =>
+      alignLyricTimelines(
+        rows.map((row) => row.lyricLine),
+        lrcLines,
+        { lrcTextIsTranslation: fallbackTextIsTranslation },
+      )
     );
     const usedLrcIndexes = new Set<number>();
     rows.forEach((row, rowIndex) => {
@@ -254,11 +272,16 @@ function createLyricEngine(): UseLyricReturn {
     const request = (async () => {
       const res = await getLyric(songId);
       const hasLrc = !!res.lrc;
-      const lrcLines = hasLrc
-        ? parseLrcWithTranslation(res.lrc, res.tLrc)
-        : parseLrc(res.tLrc);
-      const yrcTimeline = res.yLrc
-        ? buildYrcTimeline(res.yLrc, lrcLines, !hasLrc && !!res.tLrc)
+      const lrcLines = measureDevelopment("parseLrc", () =>
+        hasLrc
+          ? parseLrcWithTranslation(res.lrc, res.tLrc)
+          : parseLrc(res.tLrc)
+      );
+      const yrcText = res.yLrc;
+      const yrcTimeline = yrcText
+        ? measureDevelopment("buildYrcTimeline", () =>
+            buildYrcTimeline(yrcText, lrcLines, !hasLrc && !!res.tLrc)
+          )
         : null;
       const timeline = yrcTimeline ?? {
         lyricLines: lrcLines,

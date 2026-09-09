@@ -78,9 +78,6 @@ function openNowPlaying() {
         :title="player.currentSong ? '进入正在播放' : '尚未播放'"
         @click="openNowPlaying"
       >
-        <div
-          class="player-cover-edge absolute inset-0 pointer-events-none z-10"
-        />
         <img
           v-if="player.currentSong?.picUrl"
           :src="currentCover"
@@ -216,35 +213,27 @@ function openNowPlaying() {
   gap: 16px;
   overflow: hidden;
   transform: translateX(-50%);
-  border: 1px solid var(--color-border-strong);
-  border-radius: 22px;
-  background: var(--color-card);
-  box-shadow:
-    0 18px 52px var(--color-shadow),
-    0 3px 14px color-mix(in srgb, var(--color-shadow) 58%, transparent),
-    inset 0 1px 0 var(--color-highlight, var(--color-border));
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-floating);
 }
 
 .player-cover-button {
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: 6px;
   background: var(--color-surface-soft, var(--color-card-hover));
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--color-shadow) 48%, transparent);
+  box-shadow: none;
   transition:
     transform 0.2s cubic-bezier(0.32, 0.72, 0, 1),
     box-shadow 0.2s ease;
 }
 
-.player-cover-edge {
-  border: 1px solid var(--color-border);
-  border-radius: inherit;
-}
-
 .player-cover-button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--color-shadow) 62%, transparent);
+  box-shadow: none;
 }
 
 .player-cover-button:active {
@@ -274,7 +263,7 @@ function openNowPlaying() {
 .player-icon-button {
   width: 36px;
   height: 36px;
-  border-radius: 12px;
+  border-radius: 6px;
   color: var(--color-text-secondary);
   background: transparent;
 }
@@ -294,16 +283,12 @@ function openNowPlaying() {
   height: 40px;
   margin: 0 2px;
   border-radius: 50%;
-  box-shadow:
-    0 5px 16px var(--color-glow),
-    inset 0 1px 0 var(--color-highlight, var(--color-border));
+  box-shadow: 0 3px 10px var(--color-glow);
 }
 
 .player-play-button:hover:not(:disabled) {
   transform: scale(1.045);
-  box-shadow:
-    0 7px 22px var(--color-glow),
-    inset 0 1px 0 var(--color-highlight, var(--color-border-strong));
+  box-shadow: 0 4px 14px var(--color-glow);
 }
 
 .player-play-button:active:not(:disabled) {
@@ -359,10 +344,10 @@ function openNowPlaying() {
   height: 13px;
   margin-top: -4.5px;
   appearance: none;
-  border: 2px solid var(--color-border-strong);
+  border: 0;
   border-radius: 50%;
-  background: var(--color-thumb, var(--color-text-primary));
-  box-shadow: 0 2px 7px color-mix(in srgb, var(--color-shadow) 58%, transparent);
+  background: var(--color-accent);
+  box-shadow: none;
 }
 
 .player-volume-range::-moz-range-track {
@@ -374,10 +359,10 @@ function openNowPlaying() {
 .player-volume-range::-moz-range-thumb {
   width: 13px;
   height: 13px;
-  border: 2px solid var(--color-border-strong);
+  border: 0;
   border-radius: 50%;
-  background: var(--color-thumb, var(--color-text-primary));
-  box-shadow: 0 2px 7px color-mix(in srgb, var(--color-shadow) 58%, transparent);
+  background: var(--color-accent);
+  box-shadow: none;
 }
 
 /* 极窄窗口只保留封面，左右各占同样宽度，中间控制区仍严格居中。 */
@@ -397,7 +382,7 @@ function openNowPlaying() {
   .mobile-player-cover {
     width: 40px;
     height: 40px;
-    border-radius: 12px;
+    border-radius: 6px;
   }
 
   .player-icon-button {

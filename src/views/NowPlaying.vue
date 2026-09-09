@@ -11,9 +11,6 @@ const router = useRouter();
 const currentCover = computed(() =>
   coverImageUrl(player.currentSong?.picUrl, 400),
 );
-const blurredBackgroundCover = computed(() =>
-  coverImageUrl(player.currentSong?.picUrl, 128),
-);
 
 function close() {
   void router.back();
@@ -37,25 +34,8 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="now-playing" aria-label="正在播放">
-    <div
-      v-if="player.currentSong?.picUrl"
-      class="now-playing__ambient"
-      aria-hidden="true"
-    >
-      <img
-        :src="blurredBackgroundCover"
-        class="now-playing__ambient-image"
-        alt=""
-        loading="eager"
-        decoding="async"
-        fetchpriority="low"
-      />
-      <div class="now-playing__veil" />
-    </div>
-
     <header class="now-playing__header">
       <div class="now-playing__eyebrow">
-        <span class="now-playing__status-dot" aria-hidden="true" />
         <span>正在播放</span>
       </div>
       <button
@@ -70,12 +50,6 @@ onBeforeUnmount(() => {
 
     <section class="now-playing__content" aria-label="当前歌曲">
       <div class="now-playing__artwork-wrap">
-        <div
-          v-if="player.currentSong?.picUrl"
-          class="now-playing__artwork-glow"
-          :class="{ 'is-playing': player.audioState.playing }"
-          aria-hidden="true"
-        />
         <div class="now-playing__artwork">
           <img
             v-if="player.currentSong?.picUrl"
@@ -129,72 +103,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   container-name: now-playing;
   container-type: inline-size;
-  background:
-    radial-gradient(
-      ellipse 58% 48% at 18% 34%,
-      color-mix(in srgb, var(--color-ambient-primary) 11%, transparent),
-      transparent 70%
-    ),
-    radial-gradient(
-      ellipse 54% 52% at 88% 72%,
-      color-mix(in srgb, var(--color-ambient-secondary) 9%, transparent),
-      transparent 72%
-    ),
-    linear-gradient(145deg, var(--color-bg-from), var(--color-bg) 46%, var(--color-bg-to));
-  background-color: var(--color-bg);
-}
-
-.now-playing::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--color-surface-soft, var(--color-card)) 44%, transparent),
-      transparent 36%,
-      color-mix(in srgb, var(--color-surface-strong, var(--color-card)) 28%, transparent)
-    ),
-    radial-gradient(
-      circle at 50% 0%,
-      color-mix(in srgb, var(--color-highlight, var(--color-border)) 52%, transparent),
-      transparent 44%
-    );
-}
-
-.now-playing__ambient {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-}
-
-.now-playing__ambient-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0.24;
-  filter: blur(60px) saturate(0.72) brightness(1.18) contrast(0.78);
-  transform: scale(1.14);
-}
-
-.now-playing__veil {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(
-      to bottom,
-      color-mix(in srgb, var(--color-bg-from) 64%, transparent),
-      color-mix(in srgb, var(--color-bg) 76%, transparent) 58%,
-      color-mix(in srgb, var(--color-bg-to) 92%, transparent)
-    ),
-    radial-gradient(
-      circle at 25% 46%,
-      transparent,
-      color-mix(in srgb, var(--color-surface-soft, var(--color-card)) 54%, transparent) 68%
-    );
+  background: var(--color-canvas);
 }
 
 .now-playing__header {
@@ -214,15 +123,7 @@ onBeforeUnmount(() => {
   color: var(--color-text-secondary);
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.14em;
-}
-
-.now-playing__status-dot {
-  width: 0.4rem;
-  height: 0.4rem;
-  border-radius: 999px;
-  background: var(--color-accent);
-  box-shadow: 0 0 12px var(--color-glow);
+  letter-spacing: 0;
 }
 
 .now-playing__close {
@@ -230,22 +131,18 @@ onBeforeUnmount(() => {
   width: 2.5rem;
   height: 2.5rem;
   place-items: center;
-  border: 1px solid var(--color-border);
-  border-radius: 0.8rem;
+  border: 0;
+  border-radius: 0.35rem;
   color: var(--color-text-secondary);
-  background: var(--color-glass, var(--color-card));
-  box-shadow: inset 0 1px 0 var(--color-highlight, var(--color-border));
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
   transition:
     color 180ms ease,
     background-color 180ms ease,
-    border-color 180ms ease,
     transform 180ms ease;
 }
 
 .now-playing__close:hover {
-  border-color: var(--color-border-strong);
   color: var(--color-text-primary);
   background: var(--color-surface-strong, var(--color-card-hover));
 }
@@ -281,25 +178,6 @@ onBeforeUnmount(() => {
   aspect-ratio: 1;
 }
 
-.now-playing__artwork-glow {
-  position: absolute;
-  inset: 3%;
-  border-radius: 2rem;
-  opacity: 0.22;
-  background: linear-gradient(
-    135deg,
-    var(--color-ambient-primary),
-    var(--color-ambient-secondary)
-  );
-  filter: blur(32px) saturate(0.8);
-  transform: translateY(5%) scale(0.93);
-  transition: opacity 500ms ease;
-}
-
-.now-playing__artwork-glow.is-playing {
-  opacity: 0.36;
-}
-
 .now-playing__artwork {
   position: relative;
   display: grid;
@@ -307,26 +185,10 @@ onBeforeUnmount(() => {
   height: 100%;
   place-items: center;
   overflow: hidden;
-  border: 1px solid var(--color-border-strong);
-  border-radius: clamp(1.25rem, 2.5vw, 1.75rem);
+  border: 0;
+  border-radius: 8px;
   background: var(--color-surface-soft, var(--color-card));
-  box-shadow:
-    0 32px 70px rgba(0, 0, 0, 0.42),
-    0 8px 24px color-mix(in srgb, var(--color-shadow) 62%, transparent),
-    inset 0 1px 0 var(--color-highlight, var(--color-border));
-}
-
-.now-playing__artwork::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px color-mix(
-    in srgb,
-    var(--color-highlight, var(--color-border)) 58%,
-    transparent
-  );
+  box-shadow: var(--shadow-floating);
 }
 
 .now-playing__cover {
@@ -359,9 +221,9 @@ onBeforeUnmount(() => {
   /* Windows WebView 在紧行高 + line-clamp 下会裁掉 g/y 等字形的下伸部。 */
   padding-bottom: 0.1em;
   color: var(--color-text-primary);
-  font-size: clamp(2rem, 3.4vw, 3.15rem);
+  font-size: 2.5rem;
   font-weight: 650;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   line-height: 1.12;
   text-wrap: balance;
   -webkit-box-orient: vertical;
@@ -385,22 +247,10 @@ onBeforeUnmount(() => {
 }
 
 .now-playing__lyrics :deep(.lyric-panel) {
-  border-color: var(--color-border);
-  background:
-    radial-gradient(
-      circle at 12% -12%,
-      color-mix(in srgb, var(--color-accent) 9%, transparent),
-      transparent 42%
-    ),
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--color-highlight, var(--color-border)) 42%, transparent),
-      color-mix(in srgb, var(--color-surface-soft, var(--color-card)) 88%, transparent)
-    );
-  background-color: var(--color-glass, var(--color-card));
-  box-shadow:
-    inset 0 1px 0 var(--color-highlight, var(--color-border)),
-    0 20px 56px color-mix(in srgb, var(--color-shadow) 38%, transparent);
+  border: 0;
+  padding-inline: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 @media (max-height: 700px) and (min-width: 821px) {
@@ -438,7 +288,7 @@ onBeforeUnmount(() => {
   }
 
   .now-playing__title {
-    font-size: clamp(1.65rem, 4cqw, 2.35rem);
+    font-size: 2rem;
   }
 }
 
@@ -462,7 +312,6 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .now-playing__artwork-glow,
   .now-playing__close {
     transition: none;
   }

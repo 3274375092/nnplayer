@@ -183,8 +183,8 @@ function playAll() {
 </script>
 
 <template>
-  <div class="bg-surface-soft border border-border rounded-2xl p-5">
-    <div class="flex items-center justify-between mb-4">
+  <div class="min-w-0">
+    <div class="flex items-center justify-between gap-3 px-3 mb-4">
       <h2 class="text-base font-semibold text-text-primary">
         {{ title ?? "歌曲列表" }}
         <span class="text-xs text-text-tertiary ml-2 font-normal">
@@ -192,7 +192,7 @@ function playAll() {
         </span>
       </h2>
       <button
-        class="btn btn-primary rounded-xl text-xs px-4 py-2"
+        class="btn btn-primary shrink-0 text-xs px-4 py-2"
         :disabled="songs.length === 0"
         @click="playAll"
       >
@@ -202,7 +202,7 @@ function playAll() {
 
     <div
       v-if="showIndex"
-      class="grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary border-b border-border font-medium mobile-song-grid-header"
+      class="grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium mobile-song-grid-header"
     >
       <div>#</div>
       <div></div>
@@ -219,7 +219,7 @@ function playAll() {
       <li
         v-for="{ song, index: idx } in visibleSongs"
         :key="`${song.id}:${idx}`"
-        class="grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-xl hover:bg-surface-strong cursor-pointer transition-all duration-150 items-center group relative mobile-song-grid"
+        class="grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md hover:bg-surface-strong cursor-pointer transition-all duration-150 items-center group relative mobile-song-grid"
         :class="{
           'bg-accent-subtle': currentId === song.id,
         }"
@@ -227,12 +227,6 @@ function playAll() {
         :aria-setsize="songs.length"
         @dblclick="playAt(idx)"
       >
-        <!-- 左侧 accent 指示线 -->
-        <div
-          v-if="currentId === song.id"
-          class="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-accent rounded-r"
-        />
-
         <div class="relative text-xs text-text-tertiary font-medium tabular-nums text-center">
           <Play
             v-if="currentId === song.id && player.audioState.playing"
@@ -251,7 +245,7 @@ function playAll() {
         </div>
 
         <!-- 封面缩略图 -->
-        <div class="w-10 h-10 rounded-lg bg-surface-soft overflow-hidden shrink-0 ring-1 ring-ring">
+        <div class="w-10 h-10 rounded-md bg-surface-soft overflow-hidden shrink-0">
           <img
             v-if="song.picUrl"
             :src="coverImageUrl(song.picUrl, 40)"

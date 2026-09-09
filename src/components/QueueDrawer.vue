@@ -90,7 +90,7 @@ defineExpose({
     <Transition name="queue-fade">
       <div
         v-if="open"
-        class="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
+        class="fixed inset-0 bg-black/20 z-40"
         @click="open = false"
       />
     </Transition>
@@ -98,12 +98,12 @@ defineExpose({
     <Transition name="queue-slide">
       <aside
         v-if="open"
-        class="fixed top-0 right-0 bottom-0 w-[380px] max-w-[calc(100vw-16px)] bg-glass backdrop-blur-2xl border-l border-border z-50 shadow-2xl flex flex-col"
+        class="glass fixed top-4 right-4 bottom-4 w-[380px] max-w-[calc(100vw-32px)] z-50 flex flex-col overflow-hidden"
         role="dialog"
         aria-label="播放队列"
       >
         <header
-          class="flex items-center justify-between px-5 py-4 border-b border-border"
+          class="flex items-center justify-between px-5 py-4"
         >
           <h2 class="text-base font-semibold text-text-primary">播放队列</h2>
           <button
@@ -116,7 +116,7 @@ defineExpose({
           </button>
         </header>
 
-        <div class="px-5 py-3 text-xs text-text-secondary flex gap-4 border-b border-border">
+        <div class="px-5 py-3 text-xs text-text-secondary flex gap-4">
           <span>{{ totalCount }} 首</span>
           <span>总时长 {{ totalDuration }}</span>
         </div>
@@ -142,7 +142,7 @@ defineExpose({
             <span class="text-text-tertiary text-xs w-5 tabular-nums text-right font-medium">
               {{ i + 1 }}
             </span>
-            <div class="w-9 h-9 overflow-hidden shrink-0 ring-1 ring-ring relative">
+            <div class="w-9 h-9 rounded-md overflow-hidden shrink-0 relative">
               <img
                 v-if="song.picUrl"
                 :src="coverImageUrl(song.picUrl, 36)"
@@ -178,7 +178,7 @@ defineExpose({
 
         <footer
           v-if="totalCount > 0"
-          class="px-5 py-3 border-t border-border flex gap-2"
+          class="px-5 py-3 flex gap-2"
         >
           <button
             type="button"
@@ -216,6 +216,6 @@ defineExpose({
 }
 .queue-slide-enter-from,
 .queue-slide-leave-to {
-  transform: translateX(100%);
+  transform: translateX(calc(100% + 16px));
 }
 </style>

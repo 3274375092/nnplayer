@@ -240,7 +240,7 @@ const accountHint = computed(() => {
       <div class="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full opacity-[0.05] blur-3xl" style="background: radial-gradient(circle, var(--color-ambient-secondary) 0%, transparent 70%);" />
     </div>
 
-    <div class="card w-full max-w-md p-8 animate-fade-in-up relative z-10">
+    <div class="login-panel w-full max-w-md p-8 animate-fade-in-up relative z-10">
       <h1 class="text-xl font-semibold mb-1">登录 nnplayer</h1>
       <p class="text-xs text-text-secondary mb-5">
         选择一种登录方式开始使用
@@ -373,7 +373,7 @@ const accountHint = computed(() => {
       </form>
 
       <!-- =============== 调试：粘贴 Cookie =============== -->
-      <div class="mt-6 pt-4 border-t border-border">
+      <div class="mt-6 pt-4">
         <button
           class="text-[11px] text-text-secondary hover:text-text-primary transition-colors"
           @click="showCookieDebug = !showCookieDebug"
@@ -399,3 +399,11 @@ const accountHint = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.login-panel {
+  border-radius: 10px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-floating);
+}
+</style>

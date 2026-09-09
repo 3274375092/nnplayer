@@ -89,6 +89,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .theme-root {
   color: var(--color-text-primary);
+  background: var(--color-canvas);
   transition:
     color 0.45s ease,
     background-color 0.6s ease;
