@@ -1,6 +1,6 @@
 [package]
 name = "nnplayer"
-version = "0.2.8"
+version = "0.2.9"
 description = "nnplayer - 网易云音乐桌面客户端"
 authors = ["nnplayer team"]
 edition = "2021"

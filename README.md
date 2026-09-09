@@ -8,7 +8,7 @@
 
 [下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [English](./README.en.md) · [提交问题](https://github.com/3274375092/nnplayer/issues)
 
-![Version](https://img.shields.io/badge/version-0.2.7-E85D3A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.9-E85D3A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
 

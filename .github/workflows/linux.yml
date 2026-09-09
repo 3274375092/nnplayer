@@ -19,4 +19,5 @@ jobs:
       - run: npm test
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets
-      - run: npm run tauri build -- --bundles deb,appimage,rpm
+      - name: Build Linux bundles (CI, without updater signature)
+        run: npm run tauri build -- --bundles deb,appimage,rpm --config '{"bundle":{"createUpdaterArtifacts":false}}'
