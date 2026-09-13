@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Music2, Play } from "lucide-vue-next";
+import { Music2, Play } from "@lucide/vue";
 import type { Playlist, Song } from "@/types/music";
 import { coverImageUrl } from "@/utils/coverImage";
 

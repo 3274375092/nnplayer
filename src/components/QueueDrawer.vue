@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { Music2, Play, Trash2, X } from "lucide-vue-next";
+import { Music2, Play, Trash, X } from "@lucide/vue";
 import { usePlayerStore } from "@/stores/player";
 import { coverImageUrl } from "@/utils/coverImage";
 import { fmtDurationMs } from "@/utils/format";
@@ -192,7 +192,7 @@ defineExpose({
             class="btn btn-ghost text-xs text-text-tertiary hover:text-accent rounded-xl ml-auto"
             @click="clear"
           >
-            <Trash2 :size="14" :stroke-width="1.5" class="mr-1" />清空
+            <Trash :size="14" :stroke-width="1.5" class="mr-1" />清空
           </button>
         </footer>
       </aside>

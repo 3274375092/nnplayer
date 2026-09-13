@@ -10,7 +10,7 @@ import {
   Pin,
   Search,
   Sparkles,
-} from "lucide-vue-next";
+} from "@lucide/vue";
 
 import { searchSuggest } from "@/composables/useNcmApi";
 import type { SearchSuggestion } from "@/types/music";

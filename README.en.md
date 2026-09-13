@@ -55,7 +55,8 @@ Linux requires GTK/WebKitGTK 4.1 and tray support. Package names may vary betwee
 
 Requirements:
 
-- Node.js 20 LTS
+- Node.js `^20.19.0` or `>=22.12.0` (required by Vite 8)
+- pnpm 12 — the version is pinned by the `packageManager` field in `package.json`; do not mix in npm
 - Stable Rust
 - Windows: WebView2 and Microsoft C++ Build Tools
 - Linux: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, and `patchelf`
@@ -63,21 +64,21 @@ Requirements:
 ```bash
 git clone https://github.com/3274375092/nnplayer.git
 cd nnplayer
-npm ci
-npm run tauri dev
+pnpm install --frozen-lockfile
+pnpm tauri dev
 ```
 
 Run the frontend only with:
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 Check and test:
 
 ```bash
-npm run build
-npm test
+pnpm build
+pnpm test
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 ```
@@ -85,7 +86,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 Build packages:
 
 ```bash
-npm run tauri build
+pnpm tauri build
 ```
 
 Outputs are placed under `src-tauri/target/release/bundle/`, including `nsis`, `deb`, `rpm`, and `appimage` bundles.

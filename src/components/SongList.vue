@@ -7,7 +7,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { Play, Music2 } from "lucide-vue-next";
+import { Play, Music2 } from "@lucide/vue";
 import type { Song } from "@/types/music";
 import { usePlayerStore } from "@/stores/player";
 import { coverImageUrl } from "@/utils/coverImage";

@@ -11,26 +11,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Must run before setup-node: `cache: pnpm` needs pnpm on PATH.
+      # Version comes from the `packageManager` field in package.json.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
+          node-version: 22
+          cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
-        run: npm run build
+        run: pnpm build
 
       - name: Test lyric timing parser
-        run: npm run test:lyrics
+        run: pnpm test:lyrics
 
       - name: Test theme token contrast
-        run: npm run test:theme
+        run: pnpm test:theme
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check

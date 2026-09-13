@@ -70,7 +70,8 @@ GNOME Wayland 用户如需系统托盘，请启用 AppIndicator 扩展。安装�
 
 ### 环境要求
 
-- Node.js 20 LTS
+- Node.js `^20.19.0` 或 `>=22.12.0`（Vite 8 的引擎要求）
+- pnpm 12 —— 版本由 `package.json` 的 `packageManager` 字段锁定，请勿混用 npm
 - Rust stable
 - Windows 下的 Tauri 开发依赖：WebView2、Microsoft C++ Build Tools
 - Linux 下的 Tauri 开发依赖：`libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`
@@ -82,8 +83,8 @@ GNOME Wayland 用户如需系统托盘，请启用 AppIndicator 扩展。安装�
 ```powershell
 git clone https://github.com/3274375092/nnplayer.git
 cd nnplayer
-npm ci
-npm run tauri dev
+pnpm install --frozen-lockfile
+pnpm tauri dev
 ```
 
 `ncm-api-rs` 通过 Cargo 路径依赖直接编译进应用，正常开发和运行 nnplayer 不需要额外启动 API 服务。
@@ -91,7 +92,7 @@ npm run tauri dev
 只调试前端界面时可以运行：
 
 ```powershell
-npm run dev
+pnpm dev
 ```
 
 该命令只启动 Vite；登录、播放等依赖 Tauri `invoke` 的功能需要在完整桌面环境中调试。
@@ -100,10 +101,10 @@ npm run dev
 
 ```powershell
 # TypeScript 类型检查与前端生产构建
-npm run build
+pnpm build
 
 # 歌词解析、对齐和时间轴回归测试
-npm run test:lyrics
+pnpm test:lyrics
 
 # Rust 检查
 cargo check --manifest-path src-tauri/Cargo.toml
@@ -115,7 +116,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 ### 构建安装包
 
 ```powershell
-npm run tauri build
+pnpm tauri build
 ```
 
 构建产物默认输出到 `src-tauri/target/release/bundle/`，包含 `nsis`、`deb`、`rpm` 和 `appimage` 等目录。

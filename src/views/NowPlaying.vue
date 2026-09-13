@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { Music2, X } from "lucide-vue-next";
+import { Music2, X } from "@lucide/vue";
 import LyricPanel from "@/components/LyricPanel.vue";
 import { usePlayerStore } from "@/stores/player";
 import { coverImageUrl } from "@/utils/coverImage";

@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { useRouter } from "vue-router";
 import {
-  Loader2,
+  LoaderCircle,
   Music2,
   Pause,
   Play,
@@ -12,7 +12,7 @@ import {
   SkipBack,
   SkipForward,
   Volume2,
-} from "lucide-vue-next";
+} from "@lucide/vue";
 import ProgressBar from "@/components/ProgressBar.vue";
 import { fmtDuration } from "@/utils/format";
 import ScrollText from "@/components/ScrollText.vue";
@@ -135,7 +135,7 @@ function openNowPlaying() {
           :aria-label="player.audioState.playing ? '暂停' : '播放'"
           @click="player.togglePlay"
         >
-          <Loader2
+          <LoaderCircle
             v-if="player.audioState.loading"
             :size="17"
             :stroke-width="1.7"

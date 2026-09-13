@@ -1,6 +1,6 @@
 [package]
 name = "nnplayer"
-version = "0.2.9"
+version = "0.3.0"
 description = "nnplayer - 网易云音乐桌面客户端"
 authors = ["nnplayer team"]
 edition = "2021"
@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", default-features = false, features = ["wry", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
-tauri-plugin-updater = "2.10.1"
+tauri-plugin-updater = "2.11.0"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
 
