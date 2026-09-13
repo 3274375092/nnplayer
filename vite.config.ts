@@ -36,7 +36,10 @@ export default defineConfig(async () => ({
   build: {
     // Tauri 使用 Chromium，请勿使用 ES2020 之前未支持的语法
     target: process.env.TAURI_ENV_PLATFORM == "windows" ? "chrome105" : "safari13",
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+    // Vite 8 基于 rolldown，默认压缩器已是 oxc。
+    // 显式指定 "esbuild" 会失败：Vite 8 不再随包提供 esbuild，而 esbuild
+    // 仅作为传递依赖时不会出现在全新安装中（CI 就是这么挂的）。
+    minify: !process.env.TAURI_ENV_DEBUG,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 }));
