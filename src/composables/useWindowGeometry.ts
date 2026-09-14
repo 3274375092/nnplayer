@@ -27,9 +27,12 @@ export function useWindowGeometry() {
         void emit("desktop-lyrics:control", {
           action: "geometry",
           value: { x: pos.x, y: pos.y, w: size.width, h: size.height },
-        }).catch(() => {});
-      } catch {
-        // 窗口已销毁等
+        }).catch((e) => {
+          console.warn("[desktop-lyrics] 几何信息发送失败", e);
+        });
+      } catch (e) {
+        // 窗口已销毁等；位置持久化失败只影响下次恢复的位置，不阻塞交互。
+        console.warn("[desktop-lyrics] 读取窗口几何失败", e);
       }
     }, SAVE_DEBOUNCE_MS);
   }
@@ -50,8 +53,9 @@ export function useWindowGeometry() {
         return;
       }
       unlisteners.push(stopResized);
-    } catch {
-      // 窗口在监听注册期间已销毁
+    } catch (e) {
+      // 窗口在监听注册期间已销毁；缺了监听就再也存不下几何，必须留痕。
+      console.warn("[desktop-lyrics] 注册窗口 move/resize 监听失败", e);
     }
   });
 

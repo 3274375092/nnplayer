@@ -1,4 +1,4 @@
-﻿// 歌词 composable：
+// 歌词 composable：
 //   1. 拉取并解析当前歌曲歌词
 //   2. 前台播放时逐帧读取 audio.currentTime，后台/暂停按媒体事件同步
 //   3. 有 YRC 时以 YRC 行/字时间为权威，暴露精确 karaokeTokens
@@ -362,6 +362,9 @@ function createLyricEngine(): UseLyricReturn {
       cancelRetryTimer();
     } catch (e) {
       if (seq !== lyricSeq) return;
+      // 保留原始错误对象：AppError 的 kind/original 是后端诊断的关键，
+      // 只把 message 写进 UI 会让失败原因不可追溯。
+      console.warn("[lyric] 歌词加载失败", e);
       error.value = e instanceof Error ? e.message : "歌词加载失败";
       // Timeline 身份必须继续匹配当前媒体，这样桌面窗口能收到“已同步但
       // 暂无歌词”的空快照；显式 force 参数负责绕过同歌短路并继续重试。

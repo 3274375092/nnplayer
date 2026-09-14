@@ -1,4 +1,4 @@
-﻿import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DesktopLyricsClockAnchor,
@@ -39,6 +39,8 @@ export function useDesktopLyricsBridge() {
 
   function requestSnapshotOnce() {
     if (disposed) return;
+    // 失败无需逐次上报：snapshotRecovery 会按 burst（500ms / 1500ms）与
+    // watchdog（每 2s）继续重试，主窗不可用期间打日志只会刷屏。
     void emitTo("main", "desktop-lyrics:request-snapshot").catch(() => {});
   }
 

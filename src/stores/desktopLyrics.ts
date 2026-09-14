@@ -22,12 +22,22 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
   const isOpen = ref<boolean>(false);
   const label = "desktop-lyrics";
 
-  async function resolveInitialPosition(): Promise<
-    { x: number; y: number } | undefined
-  > {
+  /**
+   * 读取并校验持久化几何。损坏的条目就地清除，否则每次启动都会重新踩同一条
+   * 静默失败路径；localStorage 不可用（隐私模式）与内容损坏要区分开，
+   * 后者可以自愈。
+   */
+  function readStoredGeometry(): { x: number; y: number } | undefined {
+    let raw: string | null;
     try {
-      const raw = localStorage.getItem(GEOM_KEY);
-      if (!raw) return undefined;
+      raw = localStorage.getItem(GEOM_KEY);
+    } catch (e) {
+      console.warn("[desktop-lyrics] 读取几何信息失败", e);
+      return undefined;
+    }
+    if (!raw) return undefined;
+
+    try {
       const g = JSON.parse(raw) as { x?: unknown; y?: unknown };
       if (
         typeof g.x !== "number" ||
@@ -35,11 +45,32 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
         !Number.isFinite(g.x) ||
         !Number.isFinite(g.y)
       ) {
-        return undefined;
+        throw new Error("几何信息字段不合法");
       }
-      const onScreen = await isPositionOnScreen(g.x, g.y);
-      return onScreen ? { x: g.x, y: g.y } : undefined;
-    } catch {
+      return { x: g.x, y: g.y };
+    } catch (e) {
+      console.warn("[desktop-lyrics] 几何信息损坏，已清除", e);
+      try {
+        localStorage.removeItem(GEOM_KEY);
+      } catch {
+        // 清除失败不影响本次恢复流程；下次启动会再次走到这里并留下 warn。
+      }
+      return undefined;
+    }
+  }
+
+  async function resolveInitialPosition(): Promise<
+    { x: number; y: number } | undefined
+  > {
+    const stored = readStoredGeometry();
+    if (!stored) return undefined;
+    try {
+      // 屏幕边界校验是一次 IPC：查询失败时宁可不恢复位置，也不赌一个可能落在
+      // 屏幕外的坐标，但必须留痕——否则用户只会看到"窗口位置记不住"。
+      const onScreen = await isPositionOnScreen(stored.x, stored.y);
+      return onScreen ? stored : undefined;
+    } catch (e) {
+      console.warn("[desktop-lyrics] 屏幕边界校验失败，跳过位置恢复", e);
       return undefined;
     }
   }
@@ -129,25 +160,20 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
   }
 
   /** 切换桌面歌词窗口开关。
-   * 不信任 isOpen 缓存，直接查实际窗口状态决定开/关。 */
+   * 不信任 isOpen 缓存，直接查实际窗口状态决定开/关。
+   * 查询失败时直接抛出，不依据 isOpen 猜测降级：catch 分支走的
+   * openWindow/closeWindow 内部同样依赖 WebviewWindow IPC，拿不到窗口时
+   * 只会再失败一次，却可能把 isOpen 落成与真实窗口状态相反的值。
+   * 调用方（useTauriBridge、Sidebar.openDesktopLyrics）负责记录错误。 */
   async function toggleWindow() {
-    try {
-      const existing = await WebviewWindow.getByLabel(label);
-      if (existing) {
-        // 窗口确实存在 → 关闭。委托给 closeWindow（走 destroy 路径）。
-        await closeWindow();
-      } else {
-        // 窗口不存在 → 打开
-        isOpen.value = false;
-        await openWindow();
-      }
-    } catch {
-      // getByLabel 异常时退化到 isOpen 判断
-      if (isOpen.value) {
-        await closeWindow();
-      } else {
-        await openWindow();
-      }
+    const existing = await WebviewWindow.getByLabel(label);
+    if (existing) {
+      // 窗口确实存在 → 关闭。委托给 closeWindow（走 destroy 路径）。
+      await closeWindow();
+    } else {
+      // 窗口不存在 → 打开
+      isOpen.value = false;
+      await openWindow();
     }
   }
 
@@ -159,7 +185,10 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
     try {
       const w = await WebviewWindow.getByLabel(label);
       isOpen.value = !!w;
-    } catch {
+    } catch (e) {
+      // 查询失败不等于窗口不存在，但 UI 只能先按"未打开"展示；
+      // 留痕以便区分 IPC 故障与窗口确实已关闭。
+      console.warn("[desktop-lyrics] 同步窗口状态失败，按未打开处理", e);
       isOpen.value = false;
     }
   }

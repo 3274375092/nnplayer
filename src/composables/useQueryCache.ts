@@ -297,6 +297,18 @@ export function useQueryCache<T, TError = unknown>() {
     });
   }
 
+  /**
+   * 执行一次查询。
+   *
+   * 契约：**不抛错**。返回值与 `error` 的组合含义是——
+   * - 返回数据：命中新鲜缓存，或本次请求成功且仍是当前 revision；
+   * - 返回 `undefined` 且 `error` 非空：请求失败；
+   * - 返回 `undefined` 且 `error` 为空：结果已被更新的 revision / auth epoch
+   *   取代，属有意取消，不写 `error`，也不覆盖已展示的数据。
+   *
+   * 只读 `data` 而不读 `error` 的调用方会把失败呈现成空态，这是本接口最容易
+   * 踩的坑。
+   */
   async function execute(
     key: QueryKey,
     fetcher: () => Promise<T>,

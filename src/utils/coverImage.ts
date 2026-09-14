@@ -64,6 +64,7 @@ export function coverImageUrl(
     url.searchParams.set("param", `${edge}y${edge}`);
     return cacheResult(cacheKey, url.toString());
   } catch {
+    // 非 URL（相对路径、data:/blob: 片段）属正常输入，按原样返回而不是报错。
     return cacheResult(cacheKey, source);
   }
 }

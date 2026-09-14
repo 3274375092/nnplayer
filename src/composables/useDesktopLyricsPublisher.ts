@@ -153,7 +153,11 @@ export function useDesktopLyricsPublisher(
     if (!isTauri() || !subscribed) return;
     void emitTo(DESKTOP_LYRICS_LABEL, "desktop-lyrics:appearance", {
       accentColor: source.desktopAccent(),
-    }).catch(() => {});
+    }).catch((e) => {
+      // 只影响主题色同步，且不在重试路径上（仅在 activate 与色调变化时发送），
+      // 低频失败值得留痕。
+      console.warn("[desktop-lyrics] appearance 发送失败", e);
+    });
   }
 
   function updateReanchorTimer() {

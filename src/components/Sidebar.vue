@@ -72,8 +72,10 @@ async function fetchSuggest() {
     suggestions.value = res;
     showSuggest.value = true;
     highlightIndex.value = res.length > 0 ? 0 : -1;
-  } catch {
+  } catch (e) {
     if (seq !== inFlightSeq) return;
+    // 失败不能表现为"没有建议"：用户需要能区分空结果与请求失败。
+    console.warn("[search] 搜索建议获取失败", e);
     suggestions.value = [];
     showSuggest.value = false;
   }

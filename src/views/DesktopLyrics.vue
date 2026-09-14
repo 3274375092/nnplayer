@@ -230,7 +230,10 @@ function _onDragMove(ev: MouseEvent) {
   if (dx * dx + dy * dy > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
     _dragMoved = true;
     _cleanupDragListeners();
-    getCurrentWindow().startDragging().catch(() => {});
+    getCurrentWindow().startDragging().catch((e) => {
+      // 拖拽是用户显式手势，失败时表现为"拖不动"；不记录就完全看不出原因。
+      console.warn("[desktop-lyrics] startDragging 失败", e);
+    });
   }
 }
 

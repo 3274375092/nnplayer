@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,10 +17,16 @@ const isLoginRoute = computed(() => route.name === "Login");
 const isNowPlayingRoute = computed(() => route.name === "NowPlaying");
 
 const isDesktopLyrics = computed(() => {
+  // Vite 浏览器预览没有 Tauri runtime，这里只可能是主窗。
+  if (!isTauri()) return false;
   try {
     return getCurrentWindow().label === "desktop-lyrics";
-  } catch {
-    return false;
+  } catch (e) {
+    // label 读不到时按受限的桌面歌词窗处理：主窗退化成极简界面只是不好看，
+    // 而桌面歌词窗一旦被当成主窗，会在透明置顶窗里装载第二套 player/audio/
+    // MediaSession，那才是真危害。降级方向必须偏安全侧。
+    console.warn("[app] 无法读取当前窗口 label，按桌面歌词窗处理", e);
+    return true;
   }
 });
 

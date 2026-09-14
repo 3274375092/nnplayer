@@ -66,7 +66,10 @@ function load(): LyricWindowPrefs {
     // 只是当时的默认值，不能视为用户主动选择。
     if (storedVersion !== PREFS_SCHEMA_VERSION) next.showPrevNext = false;
     return next;
-  } catch {
+  } catch (e) {
+    // 读取失败或内容损坏都只能用默认值，但必须留痕：用户看到的是
+    // "字号/颜色设置自己变回去了"，没有日志就无从定位。
+    console.warn("[desktop-lyrics] 读取窗口偏好失败，使用默认值", e);
     return { ...DEFAULTS };
   }
 }

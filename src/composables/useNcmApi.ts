@@ -34,16 +34,28 @@ export class AppError extends Error {
   }
 }
 
-const APP_ERROR_KINDS = new Set<AppErrorPayload["kind"]>([
-  "Unauthorized",
-  "Ncm",
-  "Network",
-  "Json",
-  "Io",
-  "Store",
-  "InvalidParam",
-  "Internal",
-]);
+/**
+ * 后端错误类别在前端的唯一清单。
+ *
+ * 用 `Record<AppErrorPayload["kind"], true>` 而不是数组：多一个键或少一个键都会
+ * 编译失败。Rust 的 `AppError`（src-tauri/src/error.rs:13）新增类别时，若前端
+ * 忘了同步，未知 kind 会被静默降级成 "Unknown"，让按 kind 分支的调用方走错路
+ * 且毫无迹象——这里让它在编译期就暴露。
+ */
+const APP_ERROR_KIND_MAP: Record<AppErrorPayload["kind"], true> = {
+  Unauthorized: true,
+  Ncm: true,
+  Network: true,
+  Json: true,
+  Io: true,
+  Store: true,
+  InvalidParam: true,
+  Internal: true,
+};
+
+const APP_ERROR_KINDS: ReadonlySet<string> = new Set(
+  Object.keys(APP_ERROR_KIND_MAP),
+);
 
 function readErrorPayload(value: unknown): AppErrorPayload | null {
   if (!value || typeof value !== "object") return null;
