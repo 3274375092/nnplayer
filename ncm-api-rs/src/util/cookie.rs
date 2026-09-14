@@ -10,7 +10,15 @@ pub fn cookie_to_json(cookie: &str) -> HashMap<String, String> {
     for item in cookie.split(';') {
         let parts: Vec<&str> = item.splitn(2, '=').collect();
         if parts.len() == 2 {
-            map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+            // cookie_obj_to_string 会做百分号编码，这里必须解码才可往返一致；
+            // 解码失败（含裸 '%' 等）时退回原文，避免破坏原始 cookie。
+            let key = urlencoding::decode(parts[0].trim())
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| parts[0].trim().to_string());
+            let value = urlencoding::decode(parts[1].trim())
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| parts[1].trim().to_string());
+            map.insert(key, value);
         }
     }
     map
@@ -55,5 +63,20 @@ mod tests {
         map.insert("name".to_string(), "value".to_string());
         let s = cookie_obj_to_string(&map);
         assert!(s.contains("name=value"));
+    }
+
+    #[test]
+    fn test_cookie_roundtrip_preserves_special_characters() {
+        let mut map = HashMap::new();
+        map.insert("key with space".to_string(), "a=b; c".to_string());
+        let serialized = cookie_obj_to_string(&map);
+        let parsed = cookie_to_json(&serialized);
+        assert_eq!(parsed.get("key with space").unwrap(), "a=b; c");
+    }
+
+    #[test]
+    fn test_cookie_to_json_keeps_raw_percent() {
+        let map = cookie_to_json("broken=%zz");
+        assert_eq!(map.get("broken").unwrap(), "%zz");
     }
 }

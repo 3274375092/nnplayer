@@ -135,9 +135,14 @@ async fn extract_merged_query(
     }
 
     // 3. 处理 cookie
-    // 优先使用参数中传入的 cookie
+    // 与 Node 版一致：允许调用方通过参数传入自己的会话 cookie。
+    // 但该值会被拼进 Cookie 头，必须拒绝控制字符（否则可注入额外的头）。
     if let Some(cookie_param) = query.params.remove("cookie") {
-        query.cookie = Some(cookie_param);
+        if cookie_param.chars().any(char::is_control) {
+            tracing::warn!("忽略包含控制字符的 cookie 参数");
+        } else {
+            query.cookie = Some(cookie_param);
+        }
     } else if let Some(cookie_header) = headers.get(header::COOKIE) {
         if let Ok(c) = cookie_header.to_str() {
             query.cookie = Some(c.to_string());
@@ -150,6 +155,8 @@ async fn extract_merged_query(
     }
 
     // 5. 处理 proxy
+    // 注意：request() 现在会直接拒绝 proxy（改由调用方在构造 Client 时配置），
+    // 因此这里的赋值只会得到一个明确的错误，不会形成 SSRF 出口。
     if let Some(proxy) = query.params.remove("proxy") {
         query.proxy = Some(proxy);
     }
@@ -163,7 +170,9 @@ async fn extract_merged_query(
 
 /// 构建成功响应
 fn build_success_response(api_resp: ApiResponse) -> Response {
-    let status = axum::http::StatusCode::from_u16(api_resp.status as u16)
+    let status = u16::try_from(api_resp.status)
+        .ok()
+        .and_then(|code| axum::http::StatusCode::from_u16(code).ok())
         .unwrap_or(axum::http::StatusCode::OK);
     let mut response = (status, Json(api_resp.body)).into_response();
 
@@ -199,7 +208,7 @@ fn build_error_response(err: crate::error::NcmError) -> Response {
             json!({ "code": 504, "msg": msg }),
         ),
         NcmError::Api { code, msg } => {
-            let http_status = axum::http::StatusCode::from_u16(*code as u16)
+            let http_status = axum::http::StatusCode::from_u16((*code).clamp(100, 599) as u16)
                 .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
             (http_status, json!({ "code": code, "msg": msg }))
         }
@@ -291,11 +300,9 @@ fn register_routes(router: Router<AppState>) -> Router<AppState> {
     let router = { include!(concat!(env!("OUT_DIR"), "/api_routes_generated.rs")) };
 
     // 文件上传路由（特殊签名，需要 multipart 处理）
-    let router = router
-        .route("/avatar/upload", post(upload::handle_avatar_upload))
-        .route("/voice/upload", post(upload::handle_voice_upload));
-
     router
+        .route("/avatar/upload", post(upload::handle_avatar_upload))
+        .route("/voice/upload", post(upload::handle_voice_upload))
 }
 
 // ============================================================
@@ -363,21 +370,28 @@ pub fn build_app_with_config(client: ApiClient, config: &ServerConfig) -> Router
 }
 
 /// 启动 HTTP 服务器
-pub async fn start_server(config: ServerConfig) {
+pub async fn start_server(config: ServerConfig) -> Result<(), String> {
     let http_client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(12))
         .build()
-        .expect("Failed to create HTTP client");
+        .map_err(|e| format!("failed to create HTTP client: {e}"))?;
     let client = ApiClient::new(None, http_client);
     let app = build_app_with_config(client, &config);
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("Failed to bind address");
+        .map_err(|e| format!("failed to bind {addr}: {e}"))?;
 
     tracing::info!("NCM API Server listening on http://{}", addr);
 
-    axum::serve(listener, app).await.expect("Server error");
+    // 必须挂载 ConnectInfo，否则限流中间件拿不到直连地址，
+    // 只能退化成共享的 "unknown" 桶（或被伪造的 X-Forwarded-For 左右）。
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("server error: {e}"))
 }

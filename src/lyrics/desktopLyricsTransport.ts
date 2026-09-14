@@ -168,7 +168,7 @@ export async function registerDesktopLyricsListenersAtomically(
   registrations: readonly (() => Promise<() => void>)[],
 ): Promise<(() => void)[]> {
   const results = await Promise.allSettled(
-    registrations.map((register) => register()),
+    registrations.map(async (register) => register()),
   );
   const failed = results.find(
     (result): result is PromiseRejectedResult => result.status === "rejected",

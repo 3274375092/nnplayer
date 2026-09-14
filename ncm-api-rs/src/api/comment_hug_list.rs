@@ -26,7 +26,7 @@ impl ApiClient {
         self.request(
             "/api/v2/resource/comments/hug/list",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

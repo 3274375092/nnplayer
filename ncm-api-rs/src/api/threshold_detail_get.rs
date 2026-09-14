@@ -13,7 +13,7 @@ impl ApiClient {
         self.request(
             "/api/influencer/web/apply/threshold/detail/get",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

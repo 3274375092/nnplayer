@@ -31,15 +31,27 @@ impl ApiClient {
         let is_req = query.get_or("isReq", "true") != "false";
         let pure_hex = hex_string.replace(' ', "");
 
+        // 解密失败不能返回 200 + null：调用方无法区分解析失败与合法的空结果
+        let decrypt_failed = || {
+            Ok(ApiResponse {
+                status: 400,
+                body: json!({
+                    "code": 400,
+                    "message": "failed to decrypt input"
+                }),
+                cookie: vec![],
+            })
+        };
+
         let data = if is_req {
             match eapi_req_decrypt(&pure_hex) {
                 Some((url, body)) => json!({ "url": url, "body": body }),
-                None => json!(null),
+                None => return decrypt_failed(),
             }
         } else {
             match eapi_res_decrypt(&pure_hex) {
                 Some(val) => val,
-                None => json!(null),
+                None => return decrypt_failed(),
             }
         };
 

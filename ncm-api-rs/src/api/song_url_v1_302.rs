@@ -25,7 +25,7 @@ impl ApiClient {
             .request(
                 "/api/song/enhance/download/url/v1",
                 data,
-                query.to_option(CryptoType::default()),
+                query.to_option(CryptoType::Eapi),
             )
             .await?;
 
@@ -59,7 +59,7 @@ impl ApiClient {
             .request(
                 "/api/song/enhance/player/url/v1",
                 fallback_data,
-                query.to_option(CryptoType::default()),
+                query.to_option(CryptoType::Eapi),
             )
             .await?;
 

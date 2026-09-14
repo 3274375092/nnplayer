@@ -13,7 +13,7 @@ impl ApiClient {
         self.request(
             "/api/content/activity/listen/data/today/song/play/rank",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

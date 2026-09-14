@@ -150,23 +150,31 @@ export function useDesktopLyricsBridge() {
 
   onMounted(async () => {
     disposed = false;
-    const stops = await registerDesktopLyricsListenersAtomically([
-      () =>
-        listen<DesktopLyricsTimelineSnapshot>(
-          "desktop-lyrics:snapshot",
-          (event) => onSnapshot(event.payload),
-        ),
-      () =>
-        listen<DesktopLyricsClockAnchor>(
-          "desktop-lyrics:clock",
-          (event) => onClock(event.payload),
-        ),
-      () =>
-        listen<DesktopLyricsAppearancePayload>(
-          "desktop-lyrics:appearance",
-          (event) => onAppearance(event.payload),
-        ),
-    ]);
+    // 监听注册可能因 IPC/权限问题失败；若不捕获，整条桌面歌词通道会
+    // 无声地永久失效（后续订阅与快照恢复都不会执行）。
+    let stops: (() => void)[];
+    try {
+      stops = await registerDesktopLyricsListenersAtomically([
+        () =>
+          listen<DesktopLyricsTimelineSnapshot>(
+            "desktop-lyrics:snapshot",
+            (event) => onSnapshot(event.payload),
+          ),
+        () =>
+          listen<DesktopLyricsClockAnchor>(
+            "desktop-lyrics:clock",
+            (event) => onClock(event.payload),
+          ),
+        () =>
+          listen<DesktopLyricsAppearancePayload>(
+            "desktop-lyrics:appearance",
+            (event) => onAppearance(event.payload),
+          ),
+      ]);
+    } catch (e) {
+      console.error("[desktop-lyrics] 监听注册失败，桥接不可用", e);
+      return;
+    }
     if (disposed) {
       stops.forEach((stop) => stop());
       return;

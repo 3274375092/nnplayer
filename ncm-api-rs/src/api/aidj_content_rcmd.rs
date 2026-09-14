@@ -22,6 +22,8 @@ impl ApiClient {
             "listenedTs": false
         });
 
+        // 与上游 module/aidj_content_rcmd.js 一致：只判断 latitude 是否存在，
+        // 且经纬度以查询参数原文（字符串）透传。
         if let Some(latitude) = query.get("latitude") {
             if let Some(longitude) = query.get("longitude") {
                 ext_info["lbsInfoList"] = json!([{

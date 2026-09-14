@@ -27,7 +27,7 @@ use crate::error::AppError;
 
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ",
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/53736"
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 );
 
 /// Build a shared reqwest Client with the standard UA, cookie store, and timeouts.
@@ -110,6 +110,10 @@ impl AppState {
             return;
         }
         let notified = self.restore_ready.notified();
+        tokio::pin!(notified);
+        // Register the waiter before re-checking the flag so a concurrent
+        // `mark_restore_complete` cannot be lost between the check and the await.
+        notified.as_mut().enable();
         if !self.restore_complete.load(Ordering::Acquire) {
             notified.await;
         }
@@ -132,6 +136,16 @@ impl AppState {
             .clone()
             .map(Cow::Owned)
             .unwrap_or(Cow::Borrowed(""))
+    }
+
+    /// 取一份 ApiClient 快照用于发请求。
+    ///
+    /// 直接 `state.api.read().await` 会让读锁横跨整个网络往返；tokio 的 RwLock 是
+    /// 公平的，因此挂起的写者（logout / save_cookie）会把后续读者一起堵住，
+    /// 最坏要等到请求超时（15s）。快照共享同一个 reqwest Client（内部 Arc），
+    /// 所以 cookie jar 仍然一致。
+    pub async fn api_snapshot(&self) -> ApiClient {
+        self.api.read().await.clone()
     }
 
     /// 提取 NCM 业务码。

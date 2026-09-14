@@ -16,7 +16,7 @@ impl ApiClient {
             _ => "data",
         };
         let url = format!("/api/activity/summary/annual/{}/{}", year, key);
-        self.request(&url, data, query.to_option(CryptoType::default()))
+        self.request(&url, data, query.to_option(CryptoType::Eapi))
             .await
     }
 }

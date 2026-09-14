@@ -8,7 +8,9 @@ import { fmtDurationMs } from "@/utils/format";
 const open = ref(false);
 const player = usePlayerStore();
 
-const list = computed(() => player.getNextUp(100));
+const list = computed(() =>
+  player.queue.slice(player.index + 1, player.index + 101),
+);
 
 const totalDuration = computed(() => {
   const ms = list.value.reduce((sum, s) => sum + (s.duration ?? 0), 0);

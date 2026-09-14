@@ -86,11 +86,27 @@ const virtualPadding = computed(() => {
 
 let ro: ResizeObserver | null = null;
 let releaseRealtimeUpdates: (() => void) | null = null;
+/** 已观察的歌词行：卸载时用于 unobserve，避免 RO 长期持有游离 DOM。 */
+const observedEls = new Map<number, HTMLElement>();
 
 function setLineRef(el: Element | { $el?: Element } | null, idx: number) {
   // v-for + ref=fn 时 el 可能是组件实例(带 $el)或原生 Element
   const target = (el as { $el?: Element } | null)?.$el ?? (el as Element | null);
-  if (!(target instanceof HTMLElement)) return;
+  const prev = observedEls.get(idx);
+  if (!(target instanceof HTMLElement)) {
+    // Vue 是在 unmount() 开头就以 null 调用函数 ref、之后才移除 DOM 节点，
+    // 此刻 isConnected 仍为 true，所以不能用它判断"真的卸载了"：只要 ref 被
+    // 清空就解除观察，否则 RO 会长期持有已移除的歌词节点，其 0×0 尺寸条目
+    // 还会经 updateMeasuredEntries 写回 lineHeights，造成累计偏移错位。
+    if (prev) {
+      ro?.unobserve(prev);
+      observedEls.delete(idx);
+    }
+    return;
+  }
+  // 同一 index 换成了新节点：旧节点也要解除观察（表项马上被覆盖）
+  if (prev && prev !== target) ro?.unobserve(prev);
+  observedEls.set(idx, target);
   // 同步一次初值,让首屏 targetY 不至于 0
   if (lineHeights.value[idx] !== target.offsetHeight) {
     lineHeights.value[idx] = target.offsetHeight;

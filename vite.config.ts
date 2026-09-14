@@ -20,11 +20,13 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: process.env.TAURI_DEV_HOST || false,
-    hmr: {
-      protocol: "ws",
-      host: "localhost",
-      port: 1421,
-    },
+    hmr: process.env.TAURI_DEV_HOST
+      ? {
+          protocol: "ws",
+          host: process.env.TAURI_DEV_HOST,
+          port: 1421,
+        }
+      : undefined,
     watch: {
       // 防止 Vite 监听 src-tauri 目录造成 Rust 文件被频繁重建
       ignored: ["**/src-tauri/**"],
@@ -39,7 +41,7 @@ export default defineConfig(async () => ({
     // Vite 8 基于 rolldown，默认压缩器已是 oxc。
     // 显式指定 "esbuild" 会失败：Vite 8 不再随包提供 esbuild，而 esbuild
     // 仅作为传递依赖时不会出现在全新安装中（CI 就是这么挂的）。
-    minify: !process.env.TAURI_ENV_DEBUG,
-    sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    minify: process.env.TAURI_ENV_DEBUG !== "true",
+    sourcemap: process.env.TAURI_ENV_DEBUG === "true",
   },
 }));

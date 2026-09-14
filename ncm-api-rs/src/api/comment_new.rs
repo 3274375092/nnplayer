@@ -18,10 +18,18 @@ impl ApiClient {
         // 确定正确的 sortType（1 -> 99）
         let sort_type = if sort_type == 1 { 99 } else { sort_type };
 
-        // 计算 cursor
+        // 计算 cursor：pageNo/pageSize 来自调用方，必须用受检运算避免下溢/溢出
+        let offset = page_no
+            .checked_sub(1)
+            .and_then(|n| n.checked_mul(page_size))
+            .filter(|c| *c >= 0)
+            .ok_or_else(|| {
+                crate::error::NcmError::InvalidParam("pageNo/pageSize out of range".into())
+            })?;
+
         let cursor = match sort_type {
-            99 => format!("{}", (page_no - 1) * page_size),
-            2 => format!("normalHot#{}", (page_no - 1) * page_size),
+            99 => format!("{}", offset),
+            2 => format!("normalHot#{}", offset),
             _ => query.get_or("cursor", "0").into_owned(),
         };
 
@@ -42,7 +50,7 @@ impl ApiClient {
         self.request(
             "/api/v2/resource/comments",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

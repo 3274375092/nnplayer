@@ -23,7 +23,7 @@ impl ApiClient {
         self.request(
             "/api/v2/banner/get",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

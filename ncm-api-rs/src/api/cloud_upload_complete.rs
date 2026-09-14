@@ -32,7 +32,7 @@ impl ApiClient {
         self.request(
             "/api/upload/cloud/info/v2",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }
@@ -43,11 +43,7 @@ impl ApiClient {
         let data = json!({
             "songid": query.get_or("songId", "")
         });
-        self.request(
-            "/api/cloud/pub/v2",
-            data,
-            query.to_option(CryptoType::default()),
-        )
-        .await
+        self.request("/api/cloud/pub/v2", data, query.to_option(CryptoType::Eapi))
+            .await
     }
 }

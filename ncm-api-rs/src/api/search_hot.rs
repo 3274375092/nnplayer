@@ -12,11 +12,7 @@ impl ApiClient {
         let data = json!({
             "type": 1111,
         });
-        self.request(
-            "/api/search/hot",
-            data,
-            query.to_option(CryptoType::default()),
-        )
-        .await
+        self.request("/api/search/hot", data, query.to_option(CryptoType::Eapi))
+            .await
     }
 }

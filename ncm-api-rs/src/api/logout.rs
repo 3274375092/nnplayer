@@ -10,7 +10,7 @@ impl ApiClient {
     /// 对应 /logout
     pub async fn logout(&self, query: &Query) -> Result<ApiResponse> {
         let data = json!({});
-        self.request("/api/logout", data, query.to_option(CryptoType::default()))
+        self.request("/api/logout", data, query.to_option(CryptoType::Eapi))
             .await
     }
 }

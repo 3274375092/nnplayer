@@ -21,7 +21,7 @@ pub async fn get_lyric(state: State<'_, AppState>, song_id: u64) -> AppResult<Ly
     }
 
     let cookie = state.cookie().await;
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .lyric_new(
             &Query::new()
@@ -48,7 +48,6 @@ pub async fn get_lyric(state: State<'_, AppState>, song_id: u64) -> AppResult<Ly
         .pointer("/yrc/lyric")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    drop(api);
 
     Ok(LyricResult { lrc, t_lrc, y_lrc })
 }

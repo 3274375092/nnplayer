@@ -21,7 +21,7 @@ impl ApiClient {
             self.request(
                 "/api/search/voice/get",
                 data,
-                query.to_option(CryptoType::default()),
+                query.to_option(CryptoType::Eapi),
             )
             .await
         } else {
@@ -31,12 +31,8 @@ impl ApiClient {
                 "limit": query.get_or("limit", "30").parse::<i64>().unwrap_or(30),
                 "offset": query.get_or("offset", "0").parse::<i64>().unwrap_or(0)
             });
-            self.request(
-                "/api/search/get",
-                data,
-                query.to_option(CryptoType::default()),
-            )
-            .await
+            self.request("/api/search/get", data, query.to_option(CryptoType::Eapi))
+                .await
         }
     }
 }

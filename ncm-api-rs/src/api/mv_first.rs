@@ -14,11 +14,7 @@ impl ApiClient {
             "limit": query.get_or("limit", "30").parse::<i64>().unwrap_or(30),
             "total": true
         });
-        self.request(
-            "/api/mv/first",
-            data,
-            query.to_option(CryptoType::default()),
-        )
-        .await
+        self.request("/api/mv/first", data, query.to_option(CryptoType::Eapi))
+            .await
     }
 }

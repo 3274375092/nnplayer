@@ -20,7 +20,7 @@ impl ApiClient {
             "total": "true",
             "limit": query.get_or("limit", "30").parse::<i64>().unwrap_or(30)
         });
-        self.request("/api/mv/all", data, query.to_option(CryptoType::default()))
+        self.request("/api/mv/all", data, query.to_option(CryptoType::Eapi))
             .await
     }
 }

@@ -726,6 +726,8 @@ export function createPlaybackEngine(
   }
 
   function destroy() {
+    // 取消所有尚未完成的装载，避免 destroy 之后仍创建/启动新代际媒体。
+    playSeq += 1;
     destroyActiveMedia();
     songUrlCache.clear();
     songUrlRequests.clear();

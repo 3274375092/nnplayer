@@ -16,7 +16,7 @@ impl ApiClient {
         self.request(
             "/api/music/sheet/list/v1",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

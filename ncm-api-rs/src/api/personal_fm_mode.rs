@@ -14,11 +14,7 @@ impl ApiClient {
             "subMode": query.get_or("submode", ""),
             "limit": query.get_or("limit", "3").parse::<i64>().unwrap_or(3)
         });
-        self.request(
-            "/api/v1/radio/get",
-            data,
-            query.to_option(CryptoType::default()),
-        )
-        .await
+        self.request("/api/v1/radio/get", data, query.to_option(CryptoType::Eapi))
+            .await
     }
 }

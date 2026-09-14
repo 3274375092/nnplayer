@@ -27,7 +27,10 @@ export function buildLyricHeightPrefix(
 ): Float64Array {
   const prefix = new Float64Array(count + 1);
   for (let index = 0; index < count; index += 1) {
-    prefix[index + 1] = prefix[index] + (heights[index] ?? fallbackHeight);
+    const height = heights[index];
+    const safeHeight =
+      Number.isFinite(height) && height > 0 ? height : fallbackHeight;
+    prefix[index + 1] = prefix[index] + safeHeight;
   }
   return prefix;
 }

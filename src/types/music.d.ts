@@ -11,7 +11,7 @@ export interface Song {
   album: string;
   /** 毫秒 */
   duration: number;
-  picUrl?: string;
+  picUrl?: string | null;
 }
 
 // 歌曲播放 URL
@@ -28,7 +28,7 @@ export interface Playlist {
   name: string;
   coverUrl: string;
   trackCount: number;
-  creator?: string;
+  creator?: string | null;
 }
 
 // 歌单详情
@@ -52,7 +52,7 @@ export interface DailyRecommend {
 // 搜索建议（阶段1）
 export interface SearchSuggestion {
   keyword: string;
-  song?: Song;
+  song?: Song | null;
 }
 
 // 歌词（阶段3）
@@ -66,10 +66,10 @@ export interface LyricResult {
 // 登录态
 export interface AuthState {
   loggedIn: boolean;
-  nickname?: string;
-  userId?: number;
-  loginMethod?: "qr" | "account" | "phone" | "cookie" | "unknown";
-  avatarUrl?: string;
+  nickname?: string | null;
+  userId?: number | null;
+  loginMethod?: "qr" | "account" | "phone" | "cookie" | "unknown" | null;
+  avatarUrl?: string | null;
 }
 
 // 后端错误结构

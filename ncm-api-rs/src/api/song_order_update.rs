@@ -9,6 +9,7 @@ impl ApiClient {
     /// 更新歌曲顺序
     /// 对应 /song/order/update
     pub async fn song_order_update(&self, query: &Query) -> Result<ApiResponse> {
+        // 与上游 module/song_order_update.js 一致：trackIds 直接透传逗号分隔串
         let data = json!({
             "pid": query.get_or("pid", ""),
             "trackIds": query.get_or("ids", ""),
@@ -17,7 +18,7 @@ impl ApiClient {
         self.request(
             "/api/playlist/manipulate/tracks",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

@@ -48,13 +48,21 @@ impl ApiClient {
         let token = result["token"].as_str().unwrap_or_default();
         let doc_id = result["docId"].clone();
 
+        // token 申请失败时必须立即报错，否则会用空 token 上传并注册空 imgid
+        if object_key.is_empty() || token.is_empty() || doc_id.is_null() {
+            return Err(crate::error::NcmError::InvalidParam(
+                "NOS token alloc failed: missing objectKey/token/docId".to_string(),
+            ));
+        }
+
         // Step 2: 上传文件到 NOS
         let upload_url = format!(
             "https://nosup-hz1.127.net/yyimgs/{}?offset=0&complete=true&version=1.0",
             object_key
         );
 
-        self.client
+        let upload_res = self
+            .client
             .post(&upload_url)
             .header("x-nos-token", token)
             .header("Content-Type", img_mimetype.as_ref())
@@ -62,6 +70,14 @@ impl ApiClient {
             .send()
             .await
             .map_err(crate::error::NcmError::Http)?;
+
+        // reqwest 只在传输层失败时返回 Err，NOS 返回的 4xx/5xx 必须显式检查
+        if !upload_res.status().is_success() {
+            return Err(crate::error::NcmError::Unknown(format!(
+                "NOS upload failed with HTTP status {}",
+                upload_res.status()
+            )));
+        }
 
         // Step 3: 更新头像
         let update_data = json!({
@@ -72,7 +88,7 @@ impl ApiClient {
             .request(
                 "/api/user/avatar/upload/v1",
                 update_data,
-                query.to_option(CryptoType::default()),
+                query.to_option(CryptoType::Eapi),
             )
             .await?;
 

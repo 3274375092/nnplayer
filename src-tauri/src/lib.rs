@@ -46,8 +46,16 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let state = initial_app_state.clone();
             tauri::async_runtime::spawn(async move {
+                // 无论 restore_session 正常返回还是 panic，都必须解除等待，
+                // 否则所有依赖 wait_restore_complete() 的命令会永久阻塞。
+                struct RestoreGuard<'a>(&'a AppState);
+                impl Drop for RestoreGuard<'_> {
+                    fn drop(&mut self) {
+                        self.0.mark_restore_complete();
+                    }
+                }
+                let _guard = RestoreGuard(&state);
                 restore_session(&app_handle, &state, session).await;
-                state.mark_restore_complete();
             });
 
             if let Err(e) = build_tray(app.handle()) {
@@ -98,11 +106,24 @@ async fn restore_session(
 
     state.api.write().await.set_cookie(record.cookie.clone());
 
-    let api = state.api.read().await;
-    match api
+    // 复制一份 client 再发请求：读锁一旦跨越整个网络往返，
+    // logout/save_cookie 等写锁调用会被阻塞数秒。
+    let client = state.api_snapshot().await;
+    let login_result = client
         .login_status(&ncm_api::Query::new().cookie(&record.cookie))
-        .await
+        .await;
+
+    // 恢复请求期间用户可能已经登录或登出（两条路径都会写 auth）：
+    // 此时写回旧会话会覆盖刚建立的登录态，失败分支还会删掉刚写入的 session.toml。
     {
+        let auth = state.auth.lock().await;
+        if auth.user_id.is_some() || auth.cookie.is_some() {
+            log::info!("[startup] 恢复期间登录态已变化，放弃本次恢复结果");
+            return;
+        }
+    }
+
+    match login_result {
         Ok(resp) => {
             let uid = resp
                 .body
@@ -112,7 +133,6 @@ async fn restore_session(
                 .filter(|id| *id > 0);
             let Some(uid) = uid else {
                 log::warn!("[startup] login_status 未返回有效账户，会话已失效");
-                drop(api);
                 clear_invalid_session(app, state).await;
                 return;
             };
@@ -124,7 +144,6 @@ async fn restore_session(
                     record.user_id,
                     uid
                 );
-                drop(api);
                 clear_invalid_session(app, state).await;
                 return;
             }
@@ -145,7 +164,6 @@ async fn restore_session(
                 .or_else(|| record.avatar_url.clone().map(Cow::Owned))
                 .map(|c| c.into_owned());
 
-            drop(api);
             let mut auth = state.auth.lock().await;
             auth.user_id = Some(uid);
             auth.nickname = Some(nick);
@@ -159,7 +177,6 @@ async fn restore_session(
         }
         Err(e) => {
             log::warn!("[startup] 会话已失效，清空: {e}");
-            drop(api);
             clear_invalid_session(app, state).await;
         }
     }
@@ -272,6 +289,6 @@ fn register_global_shortcuts(app: &tauri::AppHandle) -> tauri::Result<()> {
             let _ = app.emit(emit_name, ());
         })
         .build();
-    let _ = app.plugin(plugin);
+    app.plugin(plugin)?;
     Ok(())
 }

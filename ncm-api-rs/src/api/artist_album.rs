@@ -1,5 +1,5 @@
 use super::Query;
-use crate::error::Result;
+use crate::error::{NcmError, Result};
 /// 歌手专辑
 /// 对应 Node.js module/artist_album.js
 use crate::request::{ApiClient, ApiResponse, CryptoType};
@@ -14,8 +14,13 @@ impl ApiClient {
             "offset": query.get_or("offset", "0").parse::<i64>().unwrap_or(0),
             "total": true
         });
+        let id: i64 = query
+            .get("id")
+            .ok_or_else(|| NcmError::InvalidParam("id is required".into()))?
+            .parse()
+            .map_err(|_| NcmError::InvalidParam("id must be numeric".into()))?;
         self.request(
-            &format!("/api/artist/albums/{}", query.get_or("id", "0")),
+            &format!("/api/artist/albums/{}", id),
             data,
             query.to_option(CryptoType::Weapi),
         )

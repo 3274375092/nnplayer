@@ -10,6 +10,9 @@ use rand::RngExt;
 use rsa::traits::PublicKeyParts;
 use rsa::{BigUint, RsaPublicKey};
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use crate::error::NcmError;
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128EcbEnc = ecb::Encryptor<aes::Aes128>;
@@ -25,21 +28,43 @@ const BASE62: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123
 const PUBLIC_KEY_DER_B64: &str = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB";
 
 /// AES-128-CBC 加密，输出 Base64
-fn aes_cbc_encrypt_base64(plaintext: &[u8], key: &[u8], iv: &[u8]) -> String {
+fn aes_cbc_encrypt_base64(plaintext: &[u8], key: &[u8], iv: &[u8]) -> Result<String, String> {
+    if key.len() != 16 || iv.len() != 16 {
+        return Err(format!(
+            "AES-128-CBC requires a 16-byte key and iv (got key={}, iv={})",
+            key.len(),
+            iv.len()
+        ));
+    }
     let cipher = Aes128CbcEnc::new(key.into(), iv.into());
     let ciphertext = cipher.encrypt_padded_vec_mut::<Pkcs7>(plaintext);
-    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &ciphertext)
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &ciphertext,
+    ))
 }
 
 /// AES-128-ECB 加密，输出大写 Hex
-fn aes_ecb_encrypt_hex(plaintext: &[u8], key: &[u8]) -> String {
+fn aes_ecb_encrypt_hex(plaintext: &[u8], key: &[u8]) -> Result<String, String> {
+    if key.len() != 16 {
+        return Err(format!(
+            "AES-128-ECB requires a 16-byte key (got {})",
+            key.len()
+        ));
+    }
     let cipher = Aes128EcbEnc::new(key.into());
     let ciphertext = cipher.encrypt_padded_vec_mut::<Pkcs7>(plaintext);
-    hex::encode_upper(&ciphertext)
+    Ok(hex::encode_upper(&ciphertext))
 }
 
 /// AES-128-ECB 解密（输入大写 Hex）
 fn aes_ecb_decrypt_hex(ciphertext_hex: &str, key: &[u8]) -> Result<Vec<u8>, String> {
+    if key.len() != 16 {
+        return Err(format!(
+            "AES-128-ECB requires a 16-byte key (got {})",
+            key.len()
+        ));
+    }
     let ciphertext = hex::decode(ciphertext_hex).map_err(|e| e.to_string())?;
     let cipher = Aes128EcbDec::new(key.into());
     cipher
@@ -47,18 +72,23 @@ fn aes_ecb_decrypt_hex(ciphertext_hex: &str, key: &[u8]) -> Result<Vec<u8>, Stri
         .map_err(|e| e.to_string())
 }
 
-/// RSA 加密（NONE / raw / textbook RSA，无 padding）
-/// 对应 Node.js: forge.publicKey.encrypt(str, 'NONE')
-fn rsa_encrypt_no_padding(plaintext: &[u8]) -> String {
+/// RSA 公钥（进程内只解析一次；解析失败时缓存错误而不是 panic）
+static RSA_PUBLIC_KEY: LazyLock<Result<RsaPublicKey, String>> = LazyLock::new(|| {
     use base64::Engine;
     use rsa::pkcs8::DecodePublicKey;
 
     let der_bytes = base64::engine::general_purpose::STANDARD
         .decode(PUBLIC_KEY_DER_B64)
-        .expect("Failed to decode RSA public key base64");
+        .map_err(|e| format!("failed to decode RSA public key base64: {e}"))?;
 
-    let public_key =
-        RsaPublicKey::from_public_key_der(&der_bytes).expect("Failed to parse RSA public key DER");
+    RsaPublicKey::from_public_key_der(&der_bytes)
+        .map_err(|e| format!("failed to parse RSA public key DER: {e}"))
+});
+
+/// RSA 加密（NONE / raw / textbook RSA，无 padding）
+/// 对应 Node.js: forge.publicKey.encrypt(str, 'NONE')
+fn rsa_encrypt_no_padding(plaintext: &[u8]) -> Result<String, String> {
+    let public_key = RSA_PUBLIC_KEY.as_ref().map_err(|e| e.clone())?;
 
     let n = public_key.n().clone();
     let e = public_key.e().clone();
@@ -71,16 +101,20 @@ fn rsa_encrypt_no_padding(plaintext: &[u8]) -> String {
     let n_bytes = n.bits() / 8;
     let c_bytes = c.to_bytes_be();
 
+    if c_bytes.len() > n_bytes {
+        return Err("RSA ciphertext is longer than the modulus".to_string());
+    }
+
     // 左侧填充 0
     let mut padded = vec![0u8; n_bytes - c_bytes.len()];
     padded.extend_from_slice(&c_bytes);
-    hex::encode(&padded)
+    Ok(hex::encode(&padded))
 }
 
 /// weapi 加密
 /// 双层 AES-128-CBC + RSA 加密随机密钥
-pub fn weapi(object: &serde_json::Value) -> HashMap<String, String> {
-    let text = serde_json::to_string(object).unwrap();
+pub fn weapi(object: &serde_json::Value) -> Result<HashMap<String, String>, NcmError> {
+    let text = serde_json::to_string(object)?;
     let mut rng = rand::rng();
 
     // 生成 16 位随机密钥
@@ -89,36 +123,38 @@ pub fn weapi(object: &serde_json::Value) -> HashMap<String, String> {
         .collect();
 
     // 第一层 AES-CBC：preset_key + iv
-    let first_encrypt = aes_cbc_encrypt_base64(text.as_bytes(), PRESET_KEY, IV);
+    let first_encrypt =
+        aes_cbc_encrypt_base64(text.as_bytes(), PRESET_KEY, IV).map_err(NcmError::Crypto)?;
     // 第二层 AES-CBC：secret_key + iv
-    let params = aes_cbc_encrypt_base64(first_encrypt.as_bytes(), secret_key.as_bytes(), IV);
+    let params = aes_cbc_encrypt_base64(first_encrypt.as_bytes(), secret_key.as_bytes(), IV)
+        .map_err(NcmError::Crypto)?;
 
     // RSA 加密反转后的 secret_key
     let reversed_key: String = secret_key.chars().rev().collect();
-    let enc_sec_key = rsa_encrypt_no_padding(reversed_key.as_bytes());
+    let enc_sec_key = rsa_encrypt_no_padding(reversed_key.as_bytes()).map_err(NcmError::Crypto)?;
 
     let mut result = HashMap::new();
     result.insert("params".to_string(), params);
     result.insert("encSecKey".to_string(), enc_sec_key);
-    result
+    Ok(result)
 }
 
 /// linuxapi 加密
 /// 单层 AES-128-ECB
-pub fn linuxapi(object: &serde_json::Value) -> HashMap<String, String> {
-    let text = serde_json::to_string(object).unwrap();
+pub fn linuxapi(object: &serde_json::Value) -> Result<HashMap<String, String>, NcmError> {
+    let text = serde_json::to_string(object)?;
     let mut result = HashMap::new();
     result.insert(
         "eparams".to_string(),
-        aes_ecb_encrypt_hex(text.as_bytes(), LINUXAPI_KEY),
+        aes_ecb_encrypt_hex(text.as_bytes(), LINUXAPI_KEY).map_err(NcmError::Crypto)?,
     );
-    result
+    Ok(result)
 }
 
 /// eapi 加密
 /// MD5 签名 + AES-128-ECB
-pub fn eapi(url: &str, object: &serde_json::Value) -> HashMap<String, String> {
-    let text = serde_json::to_string(object).unwrap();
+pub fn eapi(url: &str, object: &serde_json::Value) -> Result<HashMap<String, String>, NcmError> {
+    let text = serde_json::to_string(object)?;
     let message = format!("nobody{}use{}md5forencrypt", url, text);
     let digest = hex::encode(Md5::digest(message.as_bytes()));
     let data = format!("{}-36cd479b6b5-{}-36cd479b6b5-{}", url, text, digest);
@@ -126,9 +162,9 @@ pub fn eapi(url: &str, object: &serde_json::Value) -> HashMap<String, String> {
     let mut result = HashMap::new();
     result.insert(
         "params".to_string(),
-        aes_ecb_encrypt_hex(data.as_bytes(), EAPI_KEY),
+        aes_ecb_encrypt_hex(data.as_bytes(), EAPI_KEY).map_err(NcmError::Crypto)?,
     );
-    result
+    Ok(result)
 }
 
 /// eapi 响应解密
@@ -161,15 +197,20 @@ mod tests {
     #[test]
     fn test_aes_ecb_roundtrip() {
         let plaintext = b"hello world test";
-        let encrypted = aes_ecb_encrypt_hex(plaintext, EAPI_KEY);
+        let encrypted = aes_ecb_encrypt_hex(plaintext, EAPI_KEY).unwrap();
         let decrypted = aes_ecb_decrypt_hex(&encrypted, EAPI_KEY).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
+    fn test_aes_cbc_rejects_wrong_key_length() {
+        assert!(aes_cbc_encrypt_base64(b"data", b"short", IV).is_err());
+    }
+
+    #[test]
     fn test_weapi_produces_params_and_encseckey() {
         let obj = serde_json::json!({"id": 123});
-        let result = weapi(&obj);
+        let result = weapi(&obj).unwrap();
         assert!(result.contains_key("params"));
         assert!(result.contains_key("encSecKey"));
         assert!(!result["params"].is_empty());
@@ -180,7 +221,7 @@ mod tests {
     #[test]
     fn test_linuxapi_produces_eparams() {
         let obj = serde_json::json!({"method": "POST", "url": "https://music.163.com/api/test"});
-        let result = linuxapi(&obj);
+        let result = linuxapi(&obj).unwrap();
         assert!(result.contains_key("eparams"));
         assert!(!result["eparams"].is_empty());
     }
@@ -189,7 +230,7 @@ mod tests {
     fn test_eapi_encrypt_decrypt() {
         let url = "/api/song/detail";
         let obj = serde_json::json!({"id": 123});
-        let encrypted = eapi(url, &obj);
+        let encrypted = eapi(url, &obj).unwrap();
         let params = &encrypted["params"];
 
         // 验证能解密回来

@@ -10,7 +10,9 @@ impl ApiClient {
     /// 对应 /batch
     pub async fn batch(&self, query: &Query) -> Result<ApiResponse> {
         let mut data = json!({});
-        let map = data.as_object_mut().unwrap();
+        let map = data.as_object_mut().ok_or_else(|| {
+            crate::error::NcmError::InvalidParam("batch payload must be an object".into())
+        })?;
         for (key, value) in &query.params {
             if key.starts_with("/api/") {
                 map.insert(
@@ -19,7 +21,7 @@ impl ApiClient {
                 );
             }
         }
-        self.request("/api/batch", data, query.to_option(CryptoType::default()))
+        self.request("/api/batch", data, query.to_option(CryptoType::Eapi))
             .await
     }
 }

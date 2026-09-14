@@ -11,6 +11,8 @@ impl ApiClient {
     pub async fn listentogether_sync_list_command(&self, query: &Query) -> Result<ApiResponse> {
         let random_list_str = query.get_or("randomList", "");
         let display_list_str = query.get_or("displayList", "");
+        // 与上游 module/listentogether_sync_list_command.js 一致：直接 split(',')。
+        // 这两个列表是按位置对应的，过滤空项会错位，因此不做 trim/filter。
         let random_list: Vec<&str> = random_list_str.split(',').collect();
         let display_list: Vec<&str> = display_list_str.split(',').collect();
         let playlist_param = json!({

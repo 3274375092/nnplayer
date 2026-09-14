@@ -34,7 +34,11 @@ export function useSpringValue(
   target: Ref<number>,
   opts: SpringOptions = {},
 ) {
-  const o = { ...DEFAULTS, ...opts };
+  const o = {
+    stiffness: opts.stiffness ?? DEFAULTS.stiffness,
+    damping: opts.damping ?? DEFAULTS.damping,
+    mass: opts.mass ?? DEFAULTS.mass,
+  };
   const value = ref(target.value);
   let velocity = 0;
 

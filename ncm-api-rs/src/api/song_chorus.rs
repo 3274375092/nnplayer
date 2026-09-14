@@ -13,11 +13,7 @@ impl ApiClient {
         let data = json!({
             "ids": format!("[{}]", id),
         });
-        self.request(
-            "/api/song/chorus",
-            data,
-            query.to_option(CryptoType::default()),
-        )
-        .await
+        self.request("/api/song/chorus", data, query.to_option(CryptoType::Eapi))
+            .await
     }
 }

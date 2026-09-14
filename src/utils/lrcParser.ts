@@ -39,9 +39,18 @@ function readLrcOffset(lrc: string | null | undefined): number {
  * - 同一文本多时间戳会展开为多条
  * - 末尾按时间升序
  */
-export function parseLrc(lrc: string | null | undefined): LyricLine[] {
+/**
+ * 解析 LRC 并返回**未经截断**的时间戳（内部使用）。
+ *
+ * `parseLrc` 会把负时间钳到 0（播放器要求非负）。配对翻译时必须使用原始
+ * 坐标：`[offset:-3000]` 时前置歌词行会被钳成 0，若在钳过的值上再补偏移，
+ * 这些行会全部塌缩到同一时间点。
+ */
+function parseLrcEntries(
+  lrc: string | null | undefined,
+): { time: number; text: string }[] {
   if (!lrc) return [];
-  const out: LyricLine[] = [];
+  const out: { time: number; text: string }[] = [];
   const rawLines = lrc.split(/\r\n?|\n/);
 
   // offset 是整份 LRC 的全局元数据，可能出现在任意歌词行之前或之后。
@@ -75,16 +84,25 @@ export function parseLrc(lrc: string | null | undefined): LyricLine[] {
     if (!text) continue;
 
     for (const t of tags) {
-      const shiftedTime = Math.max(0, t + offsetMs);
-      out.push({
-        time: Math.min(Number.MAX_SAFE_INTEGER, shiftedTime),
-        text,
-      });
+      out.push({ time: t + offsetMs, text });
     }
   }
 
   out.sort((a, b) => a.time - b.time);
   return out;
+}
+
+/** 把原始毫秒钳到播放器可用的非负安全整数范围。 */
+function clampLyricTime(time: number): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, time));
+}
+
+export function parseLrc(lrc: string | null | undefined): LyricLine[] {
+  // 钳位是单调的，因此先排序再钳位与逐条钳位再排序结果一致。
+  return parseLrcEntries(lrc).map((entry) => ({
+    time: clampLyricTime(entry.time),
+    text: entry.text,
+  }));
 }
 
 /**
@@ -108,9 +126,11 @@ export function parseLrcWithTranslation(
   const sourceOffset = readLrcOffset(lrc);
   const translationOffset = readLrcOffset(tLrc);
   const translationShift = sourceOffset - translationOffset;
-  const tLines = parseLrc(tLrc).map((line) => ({
-    ...line,
-    time: Math.max(0, line.time + translationShift),
+  // 必须用未截断的原始时间做平移：parseLrc 的 clamp 会让负 offset 下的
+  // 早期翻译行全部落到 0，从而共享同一条（错误的）翻译。
+  const tLines = parseLrcEntries(tLrc).map((entry) => ({
+    time: clampLyricTime(entry.time + translationShift),
+    text: entry.text,
   }));
   const tMap = new Map<number, string>();
   for (const t of tLines) {

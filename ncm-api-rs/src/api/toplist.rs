@@ -10,7 +10,7 @@ impl ApiClient {
     /// 对应 /toplist
     pub async fn toplist(&self, query: &Query) -> Result<ApiResponse> {
         let data = json!({});
-        self.request("/api/toplist", data, query.to_option(CryptoType::default()))
+        self.request("/api/toplist", data, query.to_option(CryptoType::Eapi))
             .await
     }
 }

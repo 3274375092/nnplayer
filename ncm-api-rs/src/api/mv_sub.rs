@@ -14,7 +14,8 @@ impl ApiClient {
         let mvid = query.get_or("mvid", "0");
         let data = json!({
             "mvId": mvid,
-            "mvIds": format!(r#"["{}"]"#, mvid)
+            // mvIds 是内嵌 JSON 数组，手写 format! 会被引号/反斜杠破坏
+            "mvIds": json!([mvid.as_ref()]).to_string()
         });
         self.request(
             &format!("/api/mv/{}", path),

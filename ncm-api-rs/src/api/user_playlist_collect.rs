@@ -20,7 +20,7 @@ impl ApiClient {
         self.request(
             "/api/user/playlist/collect",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

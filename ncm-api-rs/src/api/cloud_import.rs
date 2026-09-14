@@ -22,7 +22,7 @@ impl ApiClient {
         self.request(
             "/api/cloud/upload/check/v2",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }
@@ -33,7 +33,8 @@ impl ApiClient {
         let song_name = query.get_or("song", "");
         let file_type = query.get_or("fileType", "mp3");
         let songs = json!([{
-            "songId": query.get_or("songId", ""),
+            // 与检查步骤保持一致：优先 id，兼容传入 songId 的调用方
+            "songId": query.get("id").or_else(|| query.get("songId")).unwrap_or(""),
             "bitrate": query.get_or("bitrate", ""),
             "song": &song_name,
             "artist": query.get_or("artist", "未知"),
@@ -47,7 +48,7 @@ impl ApiClient {
         self.request(
             "/api/cloud/user/song/import",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

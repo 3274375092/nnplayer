@@ -21,7 +21,7 @@ impl ApiClient {
         self.request(
             "/api/mlog/rcmd/feed/list",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

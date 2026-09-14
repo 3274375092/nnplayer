@@ -178,10 +178,17 @@ async function submitPhone() {
 
 function redirectAfterLogin() {
   const raw = typeof route.query.redirect === "string" ? route.query.redirect : "";
-  const redirect = raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/login")
-    ? raw
-    : "/daily";
-  router.replace(redirect);
+  let target = "/daily";
+  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/login")) {
+    try {
+      // 浏览器会把 '\' 归一化为 '/'，必须校验解析后的来源是否同源
+      const url = new URL(raw.replace(/\\/g, "/"), window.location.origin);
+      if (url.origin === window.location.origin) target = raw;
+    } catch {
+      target = "/daily";
+    }
+  }
+  router.replace(target);
 }
 
 function switchTab(t: Tab) {

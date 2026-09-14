@@ -18,7 +18,7 @@ impl ApiClient {
         self.request(
             &format!("/api/event/get/{}", query.get_or("uid", "0")),
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

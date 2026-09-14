@@ -10,9 +10,10 @@ use serde_json::json;
 
 fn audio_match_url(duration: &str, audio_fp: &str) -> String {
     let encoded_fp = urlencoding::encode(audio_fp);
+    let encoded_duration = urlencoding::encode(duration);
     format!(
         "https://interface.music.163.com/api/music/audio/match?sessionId=0123456789abcdef&algorithmCode=shazam_v2&duration={}&rawdata={}&times=1&decrypt=1",
-        duration, encoded_fp
+        encoded_duration, encoded_fp
     )
 }
 
@@ -25,12 +26,13 @@ impl ApiClient {
         let url = audio_match_url(&duration, &audio_fp);
 
         let res = self.client.get(&url).send().await?;
+        let status = res.status().as_u16();
         let body: serde_json::Value = res.json().await?;
 
         Ok(ApiResponse {
-            status: 200,
+            status: i64::from(status),
             body: json!({
-                "code": 200,
+                "code": i64::from(status),
                 "data": body.get("data").cloned().unwrap_or(json!(null)),
             }),
             cookie: vec![],

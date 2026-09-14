@@ -10,12 +10,20 @@ impl ApiClient {
     /// 对应 /comment
     /// t: 1=发送, 0=删除, 2=回复
     pub async fn comment(&self, query: &Query) -> Result<ApiResponse> {
-        let t = query.get_or("t", "1");
-        let action = match t.as_ref() {
+        // 上游对 t 没有默认值：缺参数应当是失败，而不是悄悄走"发布评论"写路径
+        let t = query
+            .get("t")
+            .ok_or_else(|| crate::error::NcmError::InvalidParam("t is required".into()))?;
+        let action = match t {
             "1" => "add",
             "0" => "delete",
             "2" => "reply",
-            _ => "add",
+            other => {
+                // 未知取值不能回落成写操作，否则一个拼写错误就会真的发出评论
+                return Err(crate::error::NcmError::InvalidParam(format!(
+                    "invalid comment action t={other}, expected 0 (delete), 1 (add) or 2 (reply)"
+                )));
+            }
         };
         let resource_type = query.get_or("type", "0");
         let thread_id = crate::util::config::RESOURCE_TYPE_MAP

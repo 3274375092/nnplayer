@@ -48,6 +48,9 @@ function load(force = false) {
 // 监听 id 变化，路由复用时重新加载
 watch(() => props.id, () => void load());
 
+// 登录态变化会清空缓存，需重新拉取，否则页面停留在空态
+watch(() => userStore.userId, () => void load(true));
+
 onMounted(() => void load());
 </script>
 

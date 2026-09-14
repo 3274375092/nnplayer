@@ -19,7 +19,7 @@ impl ApiClient {
         self.request(
             "/api/voice/broadcast/channel/list",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

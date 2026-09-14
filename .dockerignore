@@ -8,3 +8,10 @@ src-tauri/gen
 !README.md
 screenshots
 .vscode
+.env
+.env.*
+.npmrc
+.cargo/credentials
+*.pem
+*.key
+.ssh

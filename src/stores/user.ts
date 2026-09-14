@@ -77,14 +77,15 @@ export const useUserStore = defineStore("user", () => {
       const s = await getAuthState();
       setAuthState({
         loggedIn: s.loggedIn,
-        nickname: s.nickname,
+        nickname: s.nickname ?? undefined,
         userId: s.userId,
         loginMethod: (s.loginMethod as LoginMethod) ?? "unknown",
-        avatarUrl: s.avatarUrl,
+        avatarUrl: s.avatarUrl ?? undefined,
       });
     } catch (e) {
       console.warn("[user] refresh 失败", e);
-      setAuthState({ loggedIn: false, loginMethod: "failed" });
+      // 保留既有会话状态，仅标记本次刷新失败，避免瞬时错误把有效登录态清空
+      loginMethod.value = "failed";
     }
   }
 

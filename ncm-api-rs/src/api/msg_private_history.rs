@@ -10,7 +10,7 @@ impl ApiClient {
     /// 对应 /msg/private/history
     pub async fn msg_private_history(&self, query: &Query) -> Result<ApiResponse> {
         let data = json!({
-            "userId": query.get_or("uid", "0"),
+            "userId": query.get_or("uid", ""),
             "limit": query.get_or("limit", "30").parse::<i64>().unwrap_or(30),
             "time": query.get_or("before", "0").parse::<i64>().unwrap_or(0),
             "total": "true"

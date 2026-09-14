@@ -18,13 +18,13 @@ impl ApiClient {
         let data = json!({
             "op": query.get_or("op", "add"),
             "pid": query.get_or("pid", "0"),
-            "trackIds": serde_json::to_string(&tracks).unwrap_or_default(),
+            "trackIds": serde_json::to_string(&tracks)?,
             "imme": "true"
         });
         self.request(
             "/api/playlist/manipulate/tracks",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

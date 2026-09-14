@@ -24,7 +24,7 @@ impl ApiClient {
         self.request(
             "/api/cloud/upload/check",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }
@@ -33,11 +33,13 @@ impl ApiClient {
     /// 对应 /cloud/upload/token（token 分配步骤）
     pub async fn cloud_upload_token_alloc(&self, query: &Query) -> Result<ApiResponse> {
         let filename = query.get_or("filename", "");
-        let ext = if filename.contains('.') {
-            filename.rsplit('.').next().unwrap_or("mp3").to_string()
-        } else {
-            "mp3".to_string()
-        };
+        // 结尾为 '.'、以 '.' 开头或没有扩展名时都必须回落到 mp3，避免发出空 ext
+        let ext = filename
+            .rsplit_once('.')
+            .map(|(_, ext)| ext)
+            .filter(|ext| !ext.is_empty())
+            .unwrap_or("mp3")
+            .to_string();
         let clean_name = filename
             .rsplit_once('.')
             .map(|(name, _)| name)

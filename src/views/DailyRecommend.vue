@@ -2,7 +2,7 @@
 // 每日推荐页：调用 get_daily_recommend，展示列表 + 歌词面板。
 // 鉴权接口：未登录会被路由守卫拦截。
 
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 import SongList from "@/components/SongList.vue";
 import LyricPanel from "@/components/LyricPanel.vue";
 import {
@@ -48,6 +48,7 @@ function load(force = false) {
   );
 }
 
+watch(() => userStore.userId, () => void load(true));
 onMounted(() => void load());
 </script>
 

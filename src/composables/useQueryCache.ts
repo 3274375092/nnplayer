@@ -346,8 +346,12 @@ export function useQueryCache<T, TError = unknown>() {
     try {
       const result = await fetchQuery(key, fetcher, options);
       if (executionAuthEpoch !== getAuthEpoch()) return undefined;
-      if (active && currentRevision === revision) data.value = result;
-      return result;
+      if (active && currentRevision === revision) {
+        data.value = result;
+        return result;
+      }
+      // Superseded by a newer revision (cancel/reset/new execute) or unmounted.
+      return undefined;
     } catch (cause) {
       if (
         active &&
@@ -358,11 +362,11 @@ export function useQueryCache<T, TError = unknown>() {
       }
       return undefined;
     } finally {
-      if (
-        active &&
-        currentRevision === revision &&
-        executionAuthEpoch === getAuthEpoch()
-      ) {
+      // 只需按 revision 判断：execute/cancel/reset/resetForAuthChange 全都会
+      // bump revision，因此本判断既能覆盖被取代的请求，也不会清掉更新的在飞
+      // 请求的 loading。这里刻意不再要求 auth epoch 相等 —— epoch 只用于决定
+      // 是否采纳结果，与"本次执行是否仍然是最新一次"是两件事。
+      if (active && currentRevision === revision) {
         loading.value = false;
       }
     }

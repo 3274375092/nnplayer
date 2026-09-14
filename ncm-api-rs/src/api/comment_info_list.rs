@@ -30,7 +30,7 @@ impl ApiClient {
             .collect();
         let data = json!({
             "resourceType": type_id,
-            "resourceIds": serde_json::to_string(&ids).unwrap()
+            "resourceIds": serde_json::to_string(&ids)?
         });
         self.request(
             "/api/resource/commentInfo/list",

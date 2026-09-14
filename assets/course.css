@@ -336,10 +336,14 @@ pre code {
   cursor: pointer;
 }
 
-.quiz button:hover,
+.quiz button:hover {
+  border-color: var(--blue);
+}
+
 .quiz button:focus-visible {
   border-color: var(--blue);
-  outline: 2px solid color-mix(in srgb, var(--blue) 18%, transparent);
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
 }
 
 .quiz button.is-correct {

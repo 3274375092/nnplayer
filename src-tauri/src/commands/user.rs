@@ -21,7 +21,7 @@ pub async fn get_user_playlists(state: State<'_, AppState>) -> AppResult<Vec<Pla
         .ok_or(AppError::Unauthorized)?;
     let cookie = state.cookie().await;
 
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     const PAGE_SIZE: usize = 100;
     const MAX_PAGES: usize = 100;
     let mut playlists = Vec::new();
@@ -96,7 +96,7 @@ pub async fn get_playlist_detail(
     state.check_login().await?;
 
     let cookie = state.cookie().await;
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .playlist_detail(
             &Query::new()
@@ -107,7 +107,6 @@ pub async fn get_playlist_detail(
         .map_err(crate::error::map_ncm_err)?;
 
     ensure_business_success(&resp, &[200], "读取歌单详情")?;
-    drop(api);
 
     let playlist = Playlist {
         id: resp

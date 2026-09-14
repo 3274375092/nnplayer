@@ -17,11 +17,7 @@ impl ApiClient {
             "kv": -1,
             "_nmclfl": 1
         });
-        self.request(
-            "/api/song/lyric",
-            data,
-            query.to_option(CryptoType::default()),
-        )
-        .await
+        self.request("/api/song/lyric", data, query.to_option(CryptoType::Eapi))
+            .await
     }
 }

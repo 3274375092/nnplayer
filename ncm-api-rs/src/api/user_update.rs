@@ -9,18 +9,26 @@ impl ApiClient {
     /// 更新用户资料
     /// 对应 /user/update
     pub async fn user_update(&self, query: &Query) -> Result<ApiResponse> {
-        let data = json!({
-            "birthday": query.get_or("birthday", ""),
-            "city": query.get_or("city", ""),
-            "gender": query.get_or("gender", ""),
-            "nickname": query.get_or("nickname", ""),
-            "province": query.get_or("province", ""),
-            "signature": query.get_or("signature", "")
-        });
+        // 上游只会提交调用方实际传入的字段（JSON.stringify 丢弃 undefined）；
+        // 这里若用 "" 兜底会清空服务端已有的资料。
+        let mut data = serde_json::Map::new();
+        for key in [
+            "birthday",
+            "city",
+            "gender",
+            "nickname",
+            "province",
+            "signature",
+        ] {
+            if let Some(value) = query.get(key) {
+                data.insert(key.to_string(), json!(value));
+            }
+        }
+        let data = serde_json::Value::Object(data);
         self.request(
             "/api/user/profile/update",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

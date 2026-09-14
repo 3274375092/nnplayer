@@ -26,7 +26,7 @@ pub async fn search_songs(
     let limit = limit.unwrap_or(30).min(100);
     let cookie = state.cookie().await;
 
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .cloudsearch(
             &Query::new()
@@ -40,7 +40,6 @@ pub async fn search_songs(
         .map_err(crate::error::map_ncm_err)?;
 
     ensure_business_success(&resp, &[200], "搜索")?;
-    drop(api);
 
     let songs: Vec<Song> = resp
         .body
@@ -68,14 +67,13 @@ pub async fn get_daily_recommend(state: State<'_, AppState>) -> AppResult<DailyR
     state.check_login().await?;
 
     let cookie = state.cookie().await;
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .recommend_songs(&Query::new().cookie(&cookie))
         .await
         .map_err(crate::error::map_ncm_err)?;
 
     ensure_business_success(&resp, &[200], "每日推荐")?;
-    drop(api);
 
     let songs: Vec<Song> = resp
         .body
@@ -96,7 +94,7 @@ pub async fn get_song_url(state: State<'_, AppState>, song_id: u64) -> AppResult
     state.check_login().await?;
 
     let cookie = state.cookie().await;
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .song_url_v1(
             &Query::new()
@@ -108,7 +106,6 @@ pub async fn get_song_url(state: State<'_, AppState>, song_id: u64) -> AppResult
         .map_err(crate::error::map_ncm_err)?;
 
     ensure_business_success(&resp, &[200], "获取播放地址")?;
-    drop(api);
 
     let url = resp
         .body
@@ -141,7 +138,7 @@ pub async fn search_suggest(
     }
 
     let cookie = state.cookie().await;
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .search_suggest(
             &Query::new()
@@ -157,7 +154,6 @@ pub async fn search_suggest(
     if let Err(e) = ensure_business_success(&resp, &[200], "搜索建议") {
         log::warn!("[search_suggest] 接口返回非预期状态，忽略: {e}");
     }
-    drop(api);
 
     let mut out: Vec<SearchSuggestion> = Vec::new();
 

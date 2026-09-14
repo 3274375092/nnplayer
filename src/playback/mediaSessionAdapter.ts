@@ -14,23 +14,33 @@ export function attachMediaSession(engine: PlaybackEngine): () => void {
 
   // =============== 入向：系统媒体键 → 引擎命令 ===============
 
-  ms.setActionHandler("play", () => {
+  const register = (
+    action: MediaSessionAction,
+    handler: MediaSessionActionHandler,
+  ) => {
+    try {
+      ms.setActionHandler(action, handler);
+    } catch {
+      // 该 action 在当前宿主不受支持，忽略
+    }
+  };
+  register("play", () => {
     const s = engine.getState();
     if (!s.playing && !s.loading) engine.togglePlay();
   });
-  ms.setActionHandler("pause", () => {
+  register("pause", () => {
     const s = engine.getState();
     if (s.playing || s.loading) engine.pause();
   });
-  ms.setActionHandler("seekto", (details) => {
+  register("seekto", (details) => {
     if (typeof details.seekTime === "number") {
       engine.seek(details.seekTime);
     }
   });
-  ms.setActionHandler("previoustrack", () => {
+  register("previoustrack", () => {
     void engine.prev();
   });
-  ms.setActionHandler("nexttrack", () => {
+  register("nexttrack", () => {
     void engine.next();
   });
 

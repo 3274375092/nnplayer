@@ -12,6 +12,6 @@ declare module "blueimp-md5" {
    * 计算字符串的 MD5 摘要（小写 hex 形式）。
    * 默认实现与 Node.js crypto / 浏览器 spark-md5 一致。
    */
-  function md5(input: string | ArrayBuffer | Uint8Array): string;
+  function md5(input: string, key?: string, raw?: boolean): string;
   export default md5;
 }

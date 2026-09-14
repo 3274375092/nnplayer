@@ -12,9 +12,9 @@ impl ApiClient {
         let id = query.get_or("id", "0");
         let data = json!({
             "rid": id,
-            "limit": query.get_or("limit", "20"),
-            "offset": query.get_or("offset", "0"),
-            "beforeTime": query.get_or("before", "0")
+            "limit": query.get_i64("limit", 20),
+            "offset": query.get_i64("offset", 0),
+            "beforeTime": query.get_i64("before", 0)
         });
         self.request(
             &format!("/api/v1/resource/comments/A_DJ_1_{}", id),

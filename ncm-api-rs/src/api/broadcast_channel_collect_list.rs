@@ -18,7 +18,7 @@ impl ApiClient {
         self.request(
             "/api/content/channel/collect/list",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

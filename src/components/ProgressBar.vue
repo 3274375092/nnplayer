@@ -18,6 +18,7 @@ const emit = defineEmits<{
 const dragging = ref(false);
 const localValue = ref(props.value);
 const hovering = ref(false);
+const KEYBOARD_STEP = 0.1;
 
 const ratio = computed(() => {
   if (!props.max || props.max <= 0) return 0;
@@ -42,13 +43,20 @@ function onChange(e: Event) {
   const v = Number((e.target as HTMLInputElement).value);
   dragging.value = false;
   emit("change", v);
+  // re-sync from the source of truth once the drag/commit is done
+  const max = Number.isFinite(props.max) ? props.max : 0;
+  localValue.value = Math.max(0, Math.min(max, props.value));
 }
 
 function onKey(e: KeyboardEvent) {
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
   e.preventDefault();
-  const step = e.key === "ArrowRight" ? 5 : -5;
-  const next = Math.max(0, Math.min(props.max, localValue.value + step));
+  const max = Number.isFinite(props.max) && props.max > 0 ? props.max : 0;
+  if (max === 0) return;
+  const step = e.key === "ArrowRight" ? KEYBOARD_STEP : -KEYBOARD_STEP;
+  const current = Number.isFinite(localValue.value) ? localValue.value : 0;
+  const next = Math.max(0, Math.min(max, current + step));
+  if (next === current) return;
   localValue.value = next;
   emit("update:value", next);
   emit("change", next);

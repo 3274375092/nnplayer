@@ -10,8 +10,8 @@ impl ApiClient {
     /// 对应 /user/dj
     pub async fn user_dj(&self, query: &Query) -> Result<ApiResponse> {
         let data = json!({
-            "limit": query.get_or("limit", "30"),
-            "offset": query.get_or("offset", "0")
+            "limit": query.get_i64("limit", 30),
+            "offset": query.get_i64("offset", 0)
         });
         self.request(
             &format!("/api/dj/program/{}", query.get_or("uid", "0")),

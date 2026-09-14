@@ -3,7 +3,6 @@ use crate::error::Result;
 /// 匿名注册
 /// 对应 Node.js module/register_anonimous.js
 use crate::request::{ApiClient, ApiResponse, CryptoType};
-use crate::util::device::generate_device_id;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use md5::{Digest, Md5};
 use serde_json::json;
@@ -27,7 +26,9 @@ impl ApiClient {
     /// 匿名注册
     /// 对应 /register/anonimous
     pub async fn register_anonimous(&self, query: &Query) -> Result<ApiResponse> {
-        let device_id = generate_device_id();
+        // username 中编码的设备 ID 必须与 request() 注入 Cookie 的 deviceId 一致，
+        // 否则匿名账号会绑定到一个与实际请求不同的设备。
+        let device_id = self.get_device_id().to_string();
         let id_with_hash = format!("{} {}", device_id, cloudmusic_dll_encode_id(&device_id));
         let encoded_id = STANDARD.encode(id_with_hash.as_bytes());
         let data = json!({

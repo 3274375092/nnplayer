@@ -13,7 +13,7 @@ impl ApiClient {
         self.request(
             "/api/lbs/countries/v1",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

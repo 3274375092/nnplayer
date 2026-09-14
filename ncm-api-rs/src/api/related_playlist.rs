@@ -12,7 +12,10 @@ impl ApiClient {
     /// 对应 /related/playlist
     pub async fn related_playlist(&self, query: &super::Query) -> Result<ApiResponse> {
         let id = query.get_or("id", "0");
-        let url = format!("https://music.163.com/playlist?id={}", id);
+        let url = format!(
+            "https://music.163.com/playlist?id={}",
+            urlencoding::encode(&id)
+        );
 
         let resp = self.client.get(&url).send().await?;
         let status = resp.status().as_u16() as i64;
@@ -53,7 +56,8 @@ impl ApiClient {
 
         Ok(ApiResponse {
             status,
-            body: json!({ "code": 200, "playlists": playlists }),
+            // 上游非 2xx（或反爬页面）时必须如实上报，不能固定成 200
+            body: json!({ "code": status, "playlists": playlists }),
             cookie: vec![],
         })
     }

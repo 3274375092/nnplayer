@@ -15,7 +15,7 @@ impl ApiClient {
         self.request(
             "/api/medal/user/page",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

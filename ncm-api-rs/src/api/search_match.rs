@@ -22,7 +22,7 @@ impl ApiClient {
         self.request(
             "/api/search/match/new",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

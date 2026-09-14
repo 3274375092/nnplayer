@@ -19,13 +19,14 @@ impl ApiClient {
             "phone": query.get("phone").unwrap_or(""),
             "password": md5_password,
             "nickname": query.get("nickname").unwrap_or(""),
-            "countrycode": query.get_or("countrycode", "86"),
-            "force": "false"
+            "countrycode": query.get_or("countrycode", "86")
         });
         self.request(
-            "/api/w/register/cellphone",
+            // 上游 module/register_cellphone.js 打的是 /api/register/cellphone；
+            // /api/w/ 前缀属于 login，不应出现在注册路径上。
+            "/api/register/cellphone",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

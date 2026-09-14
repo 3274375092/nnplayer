@@ -21,6 +21,9 @@ export const GEOM_KEY = "nnplayer.lyricWindow.geometry";
 export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
   const isOpen = ref<boolean>(false);
   const label = "desktop-lyrics";
+  // 进行中的开/关切换。查询窗口 + 创建窗口是 TOCTOU：两次快速切换会同时
+  // 观察到"窗口不存在"并各自 new WebviewWindow，第二次会以重复 label 失败。
+  let pending: Promise<void> | null = null;
 
   /**
    * 读取并校验持久化几何。损坏的条目就地清除，否则每次启动都会重新踩同一条
@@ -166,14 +169,22 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
    * 只会再失败一次，却可能把 isOpen 落成与真实窗口状态相反的值。
    * 调用方（useTauriBridge、Sidebar.openDesktopLyrics）负责记录错误。 */
   async function toggleWindow() {
-    const existing = await WebviewWindow.getByLabel(label);
-    if (existing) {
-      // 窗口确实存在 → 关闭。委托给 closeWindow（走 destroy 路径）。
-      await closeWindow();
-    } else {
-      // 窗口不存在 → 打开
-      isOpen.value = false;
-      await openWindow();
+    if (pending) return pending;
+    pending = (async () => {
+      const existing = await WebviewWindow.getByLabel(label);
+      if (existing) {
+        // 窗口确实存在 → 关闭。委托给 closeWindow（走 destroy 路径）。
+        await closeWindow();
+      } else {
+        // 窗口不存在 → 打开
+        isOpen.value = false;
+        await openWindow();
+      }
+    })();
+    try {
+      await pending;
+    } finally {
+      pending = null;
     }
   }
 

@@ -19,7 +19,7 @@ impl ApiClient {
         self.request(
             &format!("/api/user/getfolloweds/{}", query.get_or("uid", "0")),
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

@@ -71,10 +71,26 @@ impl ApiClient {
             .await?;
 
         let result = &token_res.body["result"];
-        let object_key_raw = result["objectKey"].as_str().unwrap_or_default();
+        let object_key_raw = result["objectKey"].as_str().ok_or_else(|| {
+            crate::error::NcmError::InvalidParam(
+                "NOS token alloc failed: missing objectKey".to_string(),
+            )
+        })?;
         let object_key = object_key_raw.replace('/', "%2F");
-        let token = result["token"].as_str().unwrap_or_default().to_string();
+        let token = result["token"]
+            .as_str()
+            .ok_or_else(|| {
+                crate::error::NcmError::InvalidParam(
+                    "NOS token alloc failed: missing token".to_string(),
+                )
+            })?
+            .to_string();
         let doc_id = result["docId"].clone();
+        if doc_id.is_null() {
+            return Err(crate::error::NcmError::InvalidParam(
+                "NOS token alloc failed: missing docId".to_string(),
+            ));
+        }
 
         // Step 2: 初始化 multipart upload
         let init_url = format!("https://ymusic.nos-hz.163yun.com/{}?uploads", object_key);
@@ -88,17 +104,30 @@ impl ApiClient {
             .await
             .map_err(crate::error::NcmError::Http)?;
 
+        // reqwest 只在传输层失败时返回 Err，NOS 的 4xx/5xx 必须显式检查
+        if !init_res.status().is_success() {
+            return Err(crate::error::NcmError::Unknown(format!(
+                "NOS init multipart upload failed with HTTP status {}",
+                init_res.status()
+            )));
+        }
+
         let init_xml = init_res
             .text()
             .await
             .map_err(crate::error::NcmError::Http)?;
 
-        // 简单解析 XML 获取 UploadId
+        // 简单解析 XML 获取 UploadId（缺失时后续分块上传必然失败）
         let upload_id = init_xml
             .split("<UploadId>")
             .nth(1)
             .and_then(|s| s.split("</UploadId>").next())
-            .unwrap_or_default()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                crate::error::NcmError::Unknown(
+                    "NOS init multipart upload response is missing UploadId".to_string(),
+                )
+            })?
             .to_string();
 
         // Step 3: 分块上传（每块 10MB）
@@ -127,9 +156,28 @@ impl ApiClient {
                 .await
                 .map_err(crate::error::NcmError::Http)?;
 
-            if let Some(etag) = part_res.headers().get("etag") {
-                etags.push(etag.to_str().unwrap_or_default().to_string());
+            if !part_res.status().is_success() {
+                return Err(crate::error::NcmError::Unknown(format!(
+                    "NOS part {} upload failed with HTTP status {}",
+                    block_index,
+                    part_res.status()
+                )));
             }
+
+            // 缺少 ETag 会让 CompleteMultipartUpload 拼出不完整的 XML
+            let etag = part_res
+                .headers()
+                .get("etag")
+                .ok_or_else(|| {
+                    crate::error::NcmError::Unknown(format!(
+                        "NOS part {} upload returned no ETag",
+                        block_index
+                    ))
+                })?
+                .to_str()
+                .map_err(|e| crate::error::NcmError::Unknown(e.to_string()))?
+                .to_string();
+            etags.push(etag);
 
             offset = end;
             block_index += 1;
@@ -151,7 +199,8 @@ impl ApiClient {
             object_key, upload_id
         );
 
-        self.client
+        let complete_res = self
+            .client
             .post(&complete_url)
             .header("Content-Type", "text/plain;charset=UTF-8")
             .header("X-Nos-Meta-Content-Type", mimetype)
@@ -160,6 +209,13 @@ impl ApiClient {
             .send()
             .await
             .map_err(crate::error::NcmError::Http)?;
+
+        if !complete_res.status().is_success() {
+            return Err(crate::error::NcmError::Unknown(format!(
+                "NOS complete multipart upload failed with HTTP status {}",
+                complete_res.status()
+            )));
+        }
 
         // Step 5: 生成 UUID 风格的 dupkey
         let dupkey = generate_dupkey();
@@ -187,17 +243,19 @@ impl ApiClient {
             "orderNo": query.get_or("orderNo", "1").parse::<i64>().unwrap_or(1),
         }]);
 
-        let voice_data_str = serde_json::to_string(&voice_data).unwrap_or_default();
+        let voice_data_str = serde_json::to_string(&voice_data)?;
 
         // Step 6: preCheck
         let _pre_check = self
             .request(
                 "/api/voice/workbench/voice/batch/upload/preCheck",
                 json!({
+                    // 上游两次请求各自生成 dupkey；共用会让服务端把真正的上传
+                    // 当成 preCheck 的重复提交而拒掉。
                     "dupkey": generate_dupkey(),
                     "voiceData": voice_data_str
                 }),
-                query.to_option(CryptoType::default()),
+                query.to_option(CryptoType::Eapi),
             )
             .await?;
 
@@ -209,7 +267,7 @@ impl ApiClient {
                     "dupkey": dupkey,
                     "voiceData": voice_data_str
                 }),
-                query.to_option(CryptoType::default()),
+                query.to_option(CryptoType::Eapi),
             )
             .await?;
 

@@ -10,7 +10,8 @@ impl ApiClient {
     /// 绑定手机号码
     /// 对应 /user/bindingcellphone
     ///
-    /// 注意: Node.js 版本会对密码做 MD5 处理，Rust 版本需要传入预先 MD5 后的 password
+    /// 注意: 与 Node.js 版本一致，这里对传入的 `password` 原文做 MD5，
+    /// 调用方应传原始密码，而不是已经 MD5 过的串。
     pub async fn user_bindingcellphone(&self, query: &Query) -> Result<ApiResponse> {
         let password = if let Some(pw) = query.get("password") {
             if !pw.is_empty() {

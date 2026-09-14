@@ -2,7 +2,7 @@
 // 我的歌单页：网格展示用户歌单封面，点击进入详情。
 // （阶段4）数据未到达时展示 SkeletonCard 骨架屏。
 
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import SongListItem from "@/components/SongListItem.vue";
 import SkeletonCard from "@/components/SkeletonCard.vue";
@@ -39,6 +39,8 @@ function openPlaylist(p: Playlist) {
 }
 
 onMounted(() => void load());
+// 登录/登出后自动按新的用户作用域重新拉取（authEpoch 变更会清空当前组件状态）
+watch(() => userStore.userId, () => void load(true));
 </script>
 
 <template>

@@ -19,7 +19,7 @@ impl ApiClient {
         self.request(
             "/api/cloudsearch/pc",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

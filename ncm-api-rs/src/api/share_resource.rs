@@ -17,7 +17,7 @@ impl ApiClient {
         self.request(
             "/api/share/friends/resource",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

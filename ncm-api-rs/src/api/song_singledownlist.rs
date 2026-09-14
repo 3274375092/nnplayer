@@ -17,7 +17,7 @@ impl ApiClient {
         self.request(
             "/api/member/song/singledownlist",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

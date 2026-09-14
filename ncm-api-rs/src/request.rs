@@ -132,7 +132,7 @@ impl ApiClient {
     }
 
     /// 获取当前设备 ID（自定义优先，否则使用全局默认）
-    fn get_device_id(&self) -> &str {
+    pub(crate) fn get_device_id(&self) -> &str {
         self.device_id.as_deref().unwrap_or(&DEVICE_ID)
     }
 
@@ -250,9 +250,17 @@ impl ApiClient {
                     .unwrap_or_else(|| choose_user_agent("weapi", "pc"));
                 headers.insert(USER_AGENT, header_value(ua));
 
+                if !data.is_object() {
+                    return Err(crate::error::NcmError::InvalidParam(
+                        "request data must be a JSON object".into(),
+                    ));
+                }
                 data["csrf_token"] = Value::String(csrf_token);
-                encrypt_data = crypto::weapi(&data);
-                url = format!("{}/weapi/{}", ref_domain, &uri[5..]);
+                encrypt_data = crypto::weapi(&data)?;
+                let path = uri.strip_prefix("/api/").ok_or_else(|| {
+                    crate::error::NcmError::InvalidParam("weapi URI must start with /api/".into())
+                })?;
+                url = format!("{}/weapi/{}", ref_domain, path);
             }
             CryptoType::Linuxapi => {
                 let ua = options
@@ -267,7 +275,7 @@ impl ApiClient {
                     "url": format!("{}{}", ref_domain, uri),
                     "params": data,
                 });
-                encrypt_data = crypto::linuxapi(&linux_data);
+                encrypt_data = crypto::linuxapi(&linux_data)?;
                 url = format!("{}/api/linux/forward", ref_domain);
             }
             CryptoType::Eapi | CryptoType::Api => {
@@ -361,14 +369,24 @@ impl ApiClient {
 
                 if crypto_type == CryptoType::Eapi {
                     // 注入 header 和 e_r
-                    let header_value = serde_json::to_value(&header_map).unwrap();
+                    let header_value = serde_json::to_value(&header_map)?;
+                    if !data.is_object() {
+                        return Err(crate::error::NcmError::InvalidParam(
+                            "request data must be a JSON object".into(),
+                        ));
+                    }
                     data["header"] = header_value;
 
                     let e_r = options.e_r.unwrap_or(ENCRYPT_RESPONSE);
                     data["e_r"] = Value::Bool(e_r);
 
-                    encrypt_data = crypto::eapi(uri, &data);
-                    url = format!("{}/eapi/{}", api_domain, &uri[5..]);
+                    encrypt_data = crypto::eapi(uri, &data)?;
+                    let path = uri.strip_prefix("/api/").ok_or_else(|| {
+                        crate::error::NcmError::InvalidParam(
+                            "eapi URI must start with /api/".into(),
+                        )
+                    })?;
+                    url = format!("{}/eapi/{}", api_domain, path);
                 } else {
                     // api 明文
                     encrypt_data = if let Value::Object(map) = &data {
@@ -427,14 +445,15 @@ impl ApiClient {
             })
             .collect();
 
-        // 解析响应体
-        let e_r = options.e_r.unwrap_or(false);
+        // 解析响应体：e_r 必须与请求侧使用同一默认值，否则会把明文当密文解析
+        let e_r = options.e_r.unwrap_or(ENCRYPT_RESPONSE);
         let status_code = response.status().as_u16() as i64;
 
         let body: Value = if crypto_type == CryptoType::Eapi && e_r {
             let bytes = response.bytes().await?;
             let hex_str = hex::encode_upper(&bytes);
-            crypto::eapi_res_decrypt(&hex_str).unwrap_or(Value::Null)
+            crypto::eapi_res_decrypt(&hex_str)
+                .ok_or_else(|| NcmError::Crypto("failed to decrypt eapi response".to_string()))?
         } else {
             let text = response.text().await?;
             serde_json::from_str(&text).unwrap_or(Value::String(text))
@@ -475,5 +494,28 @@ impl ApiClient {
                 .to_string();
             Err(NcmError::from_api(status, msg))
         }
+    }
+}
+
+#[cfg(test)]
+mod crypto_default_tests {
+    use super::*;
+
+    /// 上游 `util/request.js` 对未指定 crypto 的模块取配置默认值：
+    /// `APP_CONF.encrypt ? 'eapi' : 'api'`，而 `util/config.json` 是 `encrypt: true`。
+    /// 也就是说"不显式传 crypto"必须解析成 **Eapi**；只有上游显式写
+    /// `createOption(query, 'weapi')` 的模块才该用 Weapi。
+    ///
+    /// 这条断言是给 2026-09 那次批量修改立的护栏：当时把 123 处
+    /// `CryptoType::default()` 机械改成了 `Weapi`，导致这些接口整体换到了
+    /// weapi 通道（host、加密方式、header/e_r 注入全部不同）。
+    #[test]
+    fn unspecified_crypto_matches_upstream_default() {
+        assert_eq!(CryptoType::default(), CryptoType::Eapi);
+        assert_eq!(CryptoType::from(""), CryptoType::Eapi);
+        assert!(
+            ENCRYPT,
+            "APP_CONF.encrypt 为 true，未指定 crypto 时必须是 eapi"
+        );
     }
 }

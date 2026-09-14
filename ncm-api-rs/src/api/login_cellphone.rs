@@ -37,7 +37,9 @@ impl ApiClient {
         self.request(
             "/api/w/login/cellphone",
             data,
-            query.to_option(CryptoType::Weapi),
+            // 上游 module/login_cellphone.js 不显式指定 crypto（走 eapi 默认），
+            // 与同族的 login.rs 保持一致
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

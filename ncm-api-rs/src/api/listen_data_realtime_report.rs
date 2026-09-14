@@ -15,7 +15,7 @@ impl ApiClient {
         self.request(
             "/api/content/activity/listen/data/realtime/report",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

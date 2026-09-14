@@ -12,7 +12,7 @@
 FROM docker.m.daocloud.io/library/rust:slim-bookworm AS builder
 
 # ---- Tauri v2 wry Linux 系统依赖 ----
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources \
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources; fi \
     && apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -23,6 +23,7 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
     libgtk-3-dev \
     libayatana-appindicator3-dev \
     librsvg2-dev \
+    libxdo-dev \
     libjavascriptcoregtk-4.1-dev \
     libsoup-3.0-dev \
     libwebkit2gtk-4.1-dev \
@@ -45,16 +46,17 @@ RUN mkdir -p /usr/local/cargo/registry \
 WORKDIR /src
 
 # ---- 先装 npm 依赖（层缓存） ----
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
 
 # ---- 源码入镜像 ----
 COPY . .
 
 # ---- 编译前端 + Tauri ----
-RUN npm run build \
-    && cd src-tauri \
-    && cargo build --release
+# 镜像内没有更新签名私钥，而 tauri.conf.json 是 createUpdaterArtifacts: true，
+# 因此必须显式关掉 updater 产物（与 .github/workflows/linux.yml 一致）。
+RUN pnpm tauri build --bundles deb,appimage,rpm \
+    --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 # 产物路径（宿主机挂载时可直接取用）：
 #   二进制:  src-tauri/target/release/nnplayer

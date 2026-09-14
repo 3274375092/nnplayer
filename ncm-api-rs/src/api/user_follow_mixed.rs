@@ -26,7 +26,7 @@ impl ApiClient {
         self.request(
             "/api/user/follow/users/mixed/get/v2",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

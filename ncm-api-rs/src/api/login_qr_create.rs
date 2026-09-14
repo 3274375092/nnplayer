@@ -1,5 +1,5 @@
 use super::Query;
-use crate::error::Result;
+use crate::error::{NcmError, Result};
 /// 二维码生成
 /// 对应 Node.js module/login_qr_create.js
 ///
@@ -12,8 +12,14 @@ impl ApiClient {
     /// 二维码生成
     /// 对应 /login/qr/create
     pub async fn login_qr_create(&self, query: &Query) -> Result<ApiResponse> {
-        let key = query.get("key").unwrap_or("");
-        let url = format!("https://music.163.com/login?codekey={}", key);
+        let key = query
+            .get("key")
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| NcmError::InvalidParam("key is required".into()))?;
+        let url = format!(
+            "https://music.163.com/login?codekey={}",
+            urlencoding::encode(key)
+        );
         Ok(ApiResponse {
             status: 200,
             body: json!({

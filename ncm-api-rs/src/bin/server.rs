@@ -10,5 +10,8 @@ async fn main() {
         .init();
 
     let config = ServerConfig::from_env();
-    start_server(config).await;
+    if let Err(e) = start_server(config).await {
+        eprintln!("ncm-server 启动失败: {e}");
+        std::process::exit(1);
+    }
 }

@@ -1,5 +1,4 @@
 // 三种登录方式 + 会话管理。
-// 设计完全对齐 CNMPlayer 的 src/app/api.rs + src/app/mod.rs::mark_login_success 模式：
 //   1. 所有登录请求走 ncm_api::ApiClient（自动加密 + 自动捕获 Set-Cookie）
 //   2. 业务码 200 视为成功（QR 的 803 同样）
 //   3. 成功后调 user_account 拉取用户信息，合并 cookie，持久化到 session.toml
@@ -123,7 +122,7 @@ pub async fn login_qr_check(
     unikey: String,
 ) -> AppResult<QrCheckResponse> {
     let resp = {
-        let api = state.api.read().await;
+        let api = state.api_snapshot().await;
         api.login_qr_check(&Query::new().param("key", &unikey))
             .await
             .map_err(map_ncm_err)?
@@ -191,7 +190,7 @@ pub async fn login_with_account(
     }
 
     let resp = {
-        let api = state.api.read().await;
+        let api = state.api_snapshot().await;
         // 注意：ncm-api 的 login() 在 Query 中已传 md5_password 时不会再做 MD5
         api.login(
             &Query::new()
@@ -234,7 +233,7 @@ pub async fn login_send_captcha(
             "请输入有效的 11 位手机号".to_string(),
         ));
     }
-    let api = state.api.read().await;
+    let api = state.api_snapshot().await;
     let resp = api
         .captcha_sent(&Query::new().param("phone", phone))
         .await
@@ -255,7 +254,7 @@ pub async fn login_with_captcha(
     }
 
     let resp = {
-        let api = state.api.read().await;
+        let api = state.api_snapshot().await;
         api.login_cellphone(
             &Query::new()
                 .param("phone", payload.phone.trim())
@@ -288,7 +287,7 @@ async fn finalize_login(
 
     // 强制使用新 Cookie 拉取账户，并要求返回有效的非零用户 ID。
     let account_resp = {
-        let api = state.api.read().await;
+        let api = state.api_snapshot().await;
         api.user_account(&Query::new().cookie(&merged_cookie))
             .await
             .map_err(map_ncm_err)?
@@ -428,7 +427,7 @@ pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> AppResult<()>
     // 调用 NCM 退出（最好携带 cookie 以确保服务端失效）
     let cookie = state.auth.lock().await.cookie.clone();
     if let Some(c) = cookie {
-        let api = state.api.read().await;
+        let api = state.api_snapshot().await;
         if let Err(e) = api.logout(&Query::new().cookie(&c)).await {
             log::warn!("[logout] 调用 NCM 登出接口失败: {e}");
         }
@@ -471,7 +470,7 @@ pub async fn save_cookie(
         ));
     }
     let resp = {
-        let api = state.api.read().await;
+        let api = state.api_snapshot().await;
         api.user_account(&Query::new().cookie(&payload.cookie))
             .await
             .map_err(map_ncm_err)?
@@ -542,7 +541,37 @@ fn persist_session_meta(
     };
     let raw = toml::to_string_pretty(&record)
         .map_err(|e| AppError::Internal(format!("toml 序列化失败: {e}")))?;
-    std::fs::write(&path, raw).map_err(AppError::Io)?;
+    write_session_file(&path, &raw)?;
+    Ok(())
+}
+
+/// 原子写入 session 文件。
+///
+/// 会话 cookie 是长期有效的凭据：Unix 上限制为 0600，避免同机其他用户读取；
+/// 同时先写临时文件再 rename，防止中途崩溃留下被截断的 session。
+fn write_session_file(path: &std::path::Path, contents: &str) -> AppResult<()> {
+    let tmp = path.with_extension("toml.tmp");
+
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(AppError::Io)?;
+        file.write_all(contents.as_bytes()).map_err(AppError::Io)?;
+        file.sync_all().map_err(AppError::Io)?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&tmp, contents).map_err(AppError::Io)?;
+    }
+
+    std::fs::rename(&tmp, path).map_err(AppError::Io)?;
     Ok(())
 }
 

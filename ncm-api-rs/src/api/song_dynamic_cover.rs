@@ -15,7 +15,7 @@ impl ApiClient {
         self.request(
             "/api/songplay/dynamic-cover",
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }

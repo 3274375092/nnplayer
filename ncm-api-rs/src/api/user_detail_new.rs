@@ -17,7 +17,7 @@ impl ApiClient {
         self.request(
             &format!("/api/w/v1/user/detail/{}", uid),
             data,
-            query.to_option(CryptoType::default()),
+            query.to_option(CryptoType::Eapi),
         )
         .await
     }
