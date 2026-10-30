@@ -305,3 +305,285 @@ test("音量与静音应用到当前句柄，且传入新代际", async () => {
   assert.equal(fake.last().volume, 0.7);
   assert.equal(fake.last().muted, false);
 });
+
+test("invalidateSongUrlCache 后同一歌曲重新请求上游", async () => {
+  const { engine, resolver } = createEngine();
+  await engine.playList([song(1)], 0);
+  await flush();
+  assert.equal(resolver.callsFor(1), 1);
+
+  // 未失效时：单曲队列 next 走缓存，不再请求。
+  await engine.next();
+  await flush();
+  assert.equal(resolver.callsFor(1), 1);
+
+  // 失效后：同样的 next 重新请求上游（切音质场景）。
+  engine.invalidateSongUrlCache();
+  await engine.next();
+  await flush();
+  assert.equal(resolver.callsFor(1), 2);
+});
+
+test("invalidateSongUrlCache 后，在途旧请求的结果不得回写缓存或装载", async () => {
+  const { engine, resolver, fake } = createEngine();
+  let release;
+  const gate = new Promise((r) => (release = r));
+  resolver.set((id) => gate.then(() => `url-old://${id}`));
+
+  const firstLoad = engine.playList([song(1)], 0);
+  await flush();
+
+  // 切音质：清缓存 + 立即重载，新请求返回新档位 URL。
+  engine.invalidateSongUrlCache();
+  resolver.set((id) => Promise.resolve(`url-new://${id}`));
+  engine.reloadCurrent();
+  await flush();
+
+  release();
+  await firstLoad;
+  await flush();
+
+  assert.equal(resolver.callsFor(1), 2);
+  // 最终装载的是新代际的 URL，旧代际被丢弃。
+  assert.equal(fake.last().src, "url-new://1");
+  assert.equal(fake.last().destroyed, false);
+  assert.equal(engine.getState().currentSongId, 1);
+
+  // 缓存里是新档位 URL：再次 next 命中缓存、不再请求上游，
+  // 且装载的仍是新 URL —— 旧请求既没回写缓存也没被复用。
+  await engine.next();
+  await flush();
+  assert.equal(resolver.callsFor(1), 2);
+  assert.equal(fake.last().src, "url-new://1");
+});
+
+test("reloadCurrent 按当前索引从头重新装载当前歌曲", async () => {
+  const { engine, resolver, fake } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  const first = fake.handles[0];
+  first.emit("playing");
+  first.currentTime = 42;
+
+  engine.reloadCurrent();
+  await flush();
+
+  assert.equal(first.destroyed, true);
+  // 未失效缓存时重装载直接复用 URL，不打扰上游。
+  assert.equal(resolver.callsFor(1), 1);
+  assert.equal(fake.last().src, "url://1");
+  assert.equal(fake.last().playCalls, 1); // 播放中的重载按原意图继续播放
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(engine.getState().currentTime, 0);
+});
+
+test("reloadCurrent 在无当前歌曲时是 no-op", async () => {
+  const { engine, resolver, fake } = createEngine();
+  engine.reloadCurrent();
+  await flush();
+  assert.equal(resolver.calls.length, 0);
+  assert.equal(fake.handles.length, 0);
+  assert.equal(engine.getState().currentSongId, null);
+});
+
+test("reloadCurrent 在 auth epoch 清空已装载媒体后是 no-op", async () => {
+  const { engine, resolver, fake } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(engine.getState().currentSongId, 1);
+  const callsBefore = resolver.calls.length;
+  const handlesBefore = fake.handles.length;
+
+  // 登出/换号：auth epoch 旋转，引擎隔离旧会话但保留队列/index。
+  engine.notifyAuthEpochChanged(1);
+  assert.equal(engine.getState().currentSongId, null);
+  assert.deepEqual(engine.getState().queue.map((s) => s.id), [1, 2]);
+
+  engine.reloadCurrent();
+  await flush();
+
+  // 保留的队列不得因为一次取参变化被隐式重新播放。
+  assert.equal(resolver.calls.length, callsBefore);
+  assert.equal(fake.handles.length, handlesBefore);
+  assert.equal(engine.getState().currentSongId, null);
+  assert.equal(engine.getState().playing, false);
+  assert.equal(engine.getState().index, 0);
+});
+
+test("reloadCurrent 在暂停时保持暂停，之后 togglePlay 恢复新媒体", async () => {
+  const { engine, resolver, fake } = createEngine();
+  await engine.playList([song(1)], 0);
+  await flush();
+  const playing = fake.last();
+  playing.emit("playing");
+  assert.equal(engine.getState().playing, true);
+
+  engine.pause();
+  assert.equal(engine.getState().playing, false);
+
+  engine.reloadCurrent();
+  await flush();
+
+  const reloaded = fake.last();
+  assert.notEqual(reloaded, playing); // 重载仍是新的 Media Generation
+  assert.equal(reloaded.destroyed, false);
+  assert.equal(reloaded.playCalls, 0); // 暂停意图：重载不得调用 play()
+  assert.equal(engine.getState().playing, false);
+  assert.equal(engine.getState().currentTime, 0);
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(resolver.callsFor(1), 1); // URL 命中缓存，不打扰上游
+
+  // 新句柄已装载 source：togglePlay 应走 resume() 播放它。
+  engine.togglePlay();
+  await flush();
+  assert.equal(reloaded.playCalls, 1);
+  assert.equal(reloaded.paused, false);
+});
+
+test("reloadCurrent 失败时不自动切歌、不改队列/索引/历史", async () => {
+  const { engine, resolver, fake } = createEngine();
+  await engine.playList([song(1), song(2), song(3)], 0);
+  await flush();
+  const queueBefore = engine.getState().queue.map((s) => s.id);
+  const historyBefore = engine.getState().history.map((s) => s.id);
+  const callsBefore = resolver.calls.length;
+
+  // 切音质会先清 URL 缓存，因此重载必须重新请求上游；这里让请求失败。
+  engine.invalidateSongUrlCache();
+  resolver.set(async () => {
+    throw new Error("Network");
+  });
+  engine.reloadCurrent();
+  await flush();
+
+  // 重载失败不进入 recoverFromPlaybackFailure → next()：队列/索引/历史保持不变。
+  assert.equal(engine.getState().index, 0);
+  assert.deepEqual(engine.getState().queue.map((s) => s.id), queueBefore);
+  assert.deepEqual(engine.getState().history.map((s) => s.id), historyBefore);
+  assert.equal(engine.getState().playing, false);
+  assert.equal(engine.getState().loading, false);
+  // 只发起了一次重载请求，没有把失败当成播放失败而连锁切歌。
+  assert.equal(resolver.calls.length, callsBefore + 1);
+  assert.equal(fake.last().destroyed, true);
+});
+
+test("reloadCurrent 不重复写入播放历史", async () => {
+  const { engine } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.deepEqual(engine.getState().history.map((s) => s.id), [1]);
+
+  engine.reloadCurrent();
+  await flush();
+
+  // 切音质重载不是一次新的播放：历史保持 [1]，不出现相邻重复。
+  assert.deepEqual(engine.getState().history.map((s) => s.id), [1]);
+});
+
+test("暂停态连续两次切档：在途的暂停重载不得变成自动播放", async () => {
+  const { engine, fake, resolver } = createEngine();
+  await engine.playList([song(1)], 0);
+  await flush();
+  fake.last().emit("playing");
+  assert.equal(engine.getState().playing, true);
+
+  engine.pause();
+  assert.equal(engine.getState().playing, false);
+  assert.equal(engine.getState().loading, false);
+
+  // 第一次切档：暂停意图 → autoplay=false，但取 URL 期间 state.loading=true。
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  resolver.set(() => gate.then(() => "url://1-lossless"));
+  engine.invalidateSongUrlCache();
+  engine.reloadCurrent();
+  await flush();
+  assert.equal(engine.getState().loading, true);
+  assert.equal(engine.getState().playing, false);
+
+  // 第二次切档落在第一次取 URL 尚未返回的窗口内：
+  // 不得因为 loading=true 而把暂停态的意图误判成继续播放。
+  engine.invalidateSongUrlCache();
+  engine.reloadCurrent();
+  await flush();
+
+  release();
+  await flush();
+
+  assert.equal(fake.last().playCalls, 0);
+  assert.equal(engine.getState().playing, false);
+  assert.equal(engine.getState().loading, false);
+  assert.equal(engine.getState().currentSongId, 1);
+});
+
+test("暂停态切档重载期间点击播放：第一次点击即开始播放", async () => {
+  const { engine, fake, resolver } = createEngine();
+  await engine.playList([song(1)], 0);
+  await flush();
+  fake.last().emit("playing");
+  engine.pause();
+
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  resolver.set(() => gate.then(() => "url://1-hires"));
+  engine.invalidateSongUrlCache();
+  engine.reloadCurrent();
+  await flush();
+  assert.equal(engine.getState().loading, true);
+  assert.equal(engine.getState().playing, false);
+
+  // 用户在重载期间点击播放：应开始播放（复用在途 URL 请求），而不是取消装载。
+  const callsBefore = resolver.calls.length;
+  engine.togglePlay();
+  await flush();
+  assert.equal(resolver.calls.length, callsBefore); // 复用同一个在途请求
+
+  release();
+  await flush();
+
+  assert.equal(fake.last().playCalls, 1);
+  fake.last().emit("playing");
+  assert.equal(engine.getState().playing, true);
+  assert.equal(engine.getState().loading, false);
+  assert.equal(engine.getState().currentSongId, 1);
+  // 重载后的播放不是新的一轮播放：不重复写历史。
+  assert.deepEqual(engine.getState().history.map((s) => s.id), [1]);
+});
+
+test("invalidateSongUrlCache 保留当前媒体，仅让后续解析重新取 URL", async () => {
+  const { engine, fake, resolver } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  const active = fake.last();
+  active.currentTime = 42;
+  active.emit("playing");
+  await flush();
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(engine.getState().playing, true);
+  assert.equal(engine.getState().currentTime, 42);
+  assert.equal(resolver.callsFor(2), 1); // 下一首已被预取
+  const callsBefore = resolver.calls.length;
+
+  engine.invalidateSongUrlCache();
+  await flush();
+
+  // 契约：只清 URL 缓存与在途合并表，不动当前媒体与播放/时间状态。
+  assert.equal(active.destroyed, false);
+  assert.equal(fake.last(), active);
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(engine.getState().playing, true);
+  assert.equal(engine.getState().currentTime, 42);
+  assert.equal(engine.getState().loading, false);
+  assert.equal(resolver.calls.length, callsBefore); // 失效本身不发起请求
+
+  // 下一次解析（next 装载下一首）必须重新请求上游，而不是复用旧缓存。
+  await engine.next();
+  await flush();
+  assert.equal(resolver.callsFor(2), 2); // 1 次预取 + 1 次失效后重新请求
+  assert.equal(fake.last().src, "url://2");
+  assert.equal(engine.getState().currentSongId, 2);
+});

@@ -35,6 +35,15 @@ src-tauri/gen/
 .jcode/
 .qoder/
 
+# AI 工具本地配置与 vendored 技能（仅本地使用，不入库；含预编译二进制）
+# 这些目录会被 Codex/Zcode 的 hook 在每次编辑时执行，不能提交给其他贡献者。
+.agents/
+.codex/
+.zcode/
+
+# impeccable 技能的本地评审截图等工作产物
+.impeccable/
+
 # Rust 应用应提交 Cargo.lock 以保证可重现构建
 # (上面原本忽略了 src-tauri/Cargo.lock,这里不忽略 — 让它入库)
 !src-tauri/Cargo.lock

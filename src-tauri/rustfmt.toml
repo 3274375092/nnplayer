@@ -1,0 +1,5 @@
+# 与 docs/agents/rust-style.md 的格式目标一致（仅稳定选项；
+# imports_granularity 等 nightly 选项由人工审查保证）。
+edition = "2021"
+max_width = 100
+use_field_init_shorthand = true

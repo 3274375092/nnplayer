@@ -1,15 +1,17 @@
-// 全局错误类型。
-// 严格遵循规范：
-//   1. 严禁 unwrap()/expect()（本文件除外，本文件仅做类型定义）
-//   2. 业务逻辑必须返回 Result<T, AppError>
-//   3. 实现 From<X> 自动转换，避免上层反复 map_err
-//
-// 通过实现 serde::Serialize，将错误序列化到前端时直接展示 message 字段。
+//! 全局错误类型。
+//!
+//! 严格遵循规范：
+//!   1. 严禁 unwrap()/expect()（本文件除外，本文件仅做类型定义）
+//!   2. 业务逻辑必须返回 Result<T, AppError>
+//!   3. 实现 From<X> 自动转换，避免上层反复 map_err
+//!
+//! 通过实现 serde::Serialize，将错误序列化到前端时直接展示 message 字段。
 
 use serde::{Serialize, Serializer};
 
 /// 应用统一错误枚举。
 #[derive(Debug, thiserror::Error)]
+#[must_use]
 pub enum AppError {
     #[error("NCM API 错误: {0}")]
     Ncm(String),
@@ -89,12 +91,12 @@ pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
 mod tests {
     use super::*;
 
-    /// ── Helper: serialize an AppError and return the JSON value ──
+    // ── Helper: serialize an AppError and return the JSON value ──
     fn serialize_err(e: &AppError) -> serde_json::Value {
         serde_json::to_value(e).expect("AppError should serialize")
     }
 
-    /// ── The 8 canonical kind strings matching frontend APP_ERROR_KINDS ──
+    // ── The 8 canonical kind strings matching frontend APP_ERROR_KINDS ──
     const FRONTEND_KINDS: [&str; 8] = [
         "Unauthorized",
         "Ncm",
@@ -238,9 +240,9 @@ mod tests {
         );
     }
 
-    /// ── map_ncm_err mapping (6 explicit + 1 catch-all) ──
-    /// This tests the bridge: NcmError → AppError → JSON
-    /// AuthRequired → Unauthorized
+    // ── map_ncm_err mapping (6 explicit + 1 catch-all) ──
+    // This tests the bridge: NcmError → AppError → JSON
+    // AuthRequired → Unauthorized
     #[test]
     fn map_auth_required_is_unauthorized() {
         let e = map_ncm_err(ncm_api::NcmError::AuthRequired("需要登录".into()));
@@ -249,7 +251,7 @@ mod tests {
         assert!(v["message"].as_str().unwrap().contains("Cookie 已过期"));
     }
 
-    /// Timeout → Network
+    // Timeout → Network
     #[test]
     fn map_timeout_is_network() {
         let e = map_ncm_err(ncm_api::NcmError::Timeout("请求超时".into()));
@@ -258,7 +260,7 @@ mod tests {
         assert!(v["message"].as_str().unwrap().contains("请求超时"));
     }
 
-    /// Catch-all (Api / RateLimited / Unknown) → Ncm
+    // Catch-all (Api / RateLimited / Unknown) → Ncm
     #[test]
     fn map_catch_all_is_ncm() {
         let e = map_ncm_err(ncm_api::NcmError::RateLimited("限制".into()));

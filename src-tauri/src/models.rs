@@ -1,8 +1,11 @@
-// 精简后的 DTO（Data Transfer Object）。
-// 规范要求：NCM 接口字段繁杂，Rust 端仅向前端返回必要字段，降低前端解析负担。
-// 所有字段与前端 types/music.d.ts 严格保持一致。
+//! 精简后的 DTO（Data Transfer Object）。
+//!
+//! NCM 接口字段繁杂，Rust 端仅向前端返回必要字段，降低前端解析负担。
+//! 所有字段与前端 types/music.d.ts 严格保持一致。
 
 use serde::Serialize;
+
+use crate::audio_quality::AudioQuality;
 
 /// 歌曲（前端统一模型）。
 #[derive(Debug, Clone, Serialize)]
@@ -24,8 +27,12 @@ pub struct Song {
 pub struct SongUrl {
     pub id: u64,
     pub url: Option<String>,
-    /// 码率（bps），如 320000 表示 320kbps
+    /// 码率（bps），如 320000 表示 320kbps；0 表示上游未下发或超出
+    /// `u32` 可表示范围（未知），不得展示为 0kbps。
     pub bitrate: u32,
+    /// 服务端实际下发档位；`None` 表示上游未返回或无法识别。
+    /// 可能低于请求档位，展示时不得回填成请求档位。
+    pub actual_level: Option<AudioQuality>,
 }
 
 /// 歌单（列表项）。
@@ -127,6 +134,37 @@ pub fn parse_ncm_song(val: &serde_json::Value, duration_field: &str) -> Option<S
         duration,
         pic_url,
     })
+}
+
+/// 从 NCM `/song/url/v1` 响应体提取播放 URL、实际码率与实际下发档位。
+///
+/// `data[0].level` 是服务端按账号权益实际下发的档位（请求 lossless 时
+/// 可能返回 exhigh），必须原样保留；缺失或未知值解析为 `None`，由前端
+/// 展示实际码率并标注“档位未知”，不能回填请求档位。
+///
+/// `br` 缺失、非整数或超出 `u32` 可表示范围时一律收敛为 `0`（未知），
+/// 不用 `as` 截断成一个看似合理的错误码率。
+pub fn parse_song_url(song_id: u64, body: &serde_json::Value) -> SongUrl {
+    let item = body.pointer("/data/0");
+    let url = item
+        .and_then(|v| v.get("url"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let bitrate = item
+        .and_then(|v| v.get("br"))
+        .and_then(|v| v.as_u64())
+        .and_then(|br| u32::try_from(br).ok())
+        .unwrap_or(0);
+    let actual_level = item
+        .and_then(|v| v.get("level"))
+        .and_then(|v| v.as_str())
+        .and_then(|raw| raw.parse::<AudioQuality>().ok());
+    SongUrl {
+        id: song_id,
+        url,
+        bitrate,
+        actual_level,
+    }
 }
 
 #[cfg(test)]
@@ -312,12 +350,97 @@ mod tests {
             id: 1,
             url: Some("https://".into()),
             bitrate: 320000,
+            actual_level: Some(AudioQuality::ExHigh),
         };
         let v = serde_json::to_value(&su).expect("SongUrl must serialize");
         assert_eq!(v["id"], 1);
         assert_eq!(v["url"], "https://");
         // bitrate is already lowercase, verify it's correct
         assert_eq!(v["bitrate"], 320000);
+        assert_eq!(v["actualLevel"], "exhigh"); // snake → camel
+        assert!(v.get("actual_level").is_none());
+    }
+
+    #[test]
+    fn song_url_serializes_unknown_actual_level_as_null() {
+        let su = SongUrl {
+            id: 1,
+            url: None,
+            bitrate: 0,
+            actual_level: None,
+        };
+        let v = serde_json::to_value(&su).expect("SongUrl must serialize");
+        assert_eq!(v["actualLevel"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn parse_song_url_keeps_downgraded_actual_level() {
+        // 请求 lossless，但服务端按账号权益下发 exhigh/320k。
+        let body = serde_json::json!({
+            "data": [{
+                "url": "https://example.com/song.mp3",
+                "br": 320000,
+                "level": "exhigh",
+            }],
+        });
+        let su = parse_song_url(7, &body);
+        assert_eq!(su.id, 7);
+        assert_eq!(su.url.as_deref(), Some("https://example.com/song.mp3"));
+        assert_eq!(su.bitrate, 320000);
+        assert_eq!(su.actual_level, Some(AudioQuality::ExHigh));
+    }
+
+    #[test]
+    fn parse_song_url_parses_lossless_level() {
+        let body = serde_json::json!({
+            "data": [{ "url": "https://example.com/song.flac", "br": 999000, "level": "lossless" }],
+        });
+        let su = parse_song_url(8, &body);
+        assert_eq!(su.bitrate, 999000);
+        assert_eq!(su.actual_level, Some(AudioQuality::Lossless));
+    }
+
+    #[test]
+    fn parse_song_url_marks_missing_or_unknown_level_as_none() {
+        for body in [
+            serde_json::json!({ "data": [{ "url": "u", "br": 320000 }] }),
+            serde_json::json!({ "data": [{ "url": "u", "br": 320000, "level": null }] }),
+            // 特效档不属于常规六档，不能猜成某一档。
+            serde_json::json!({ "data": [{ "url": "u", "br": 320000, "level": "sky" }] }),
+        ] {
+            let su = parse_song_url(9, &body);
+            assert_eq!(su.actual_level, None, "未知档位必须解析为 None");
+            assert_eq!(su.bitrate, 320000);
+        }
+    }
+
+    #[test]
+    fn parse_song_url_tolerates_missing_data() {
+        let su = parse_song_url(10, &serde_json::json!({ "data": [] }));
+        assert_eq!(su.id, 10);
+        assert_eq!(su.url, None);
+        assert_eq!(su.bitrate, 0);
+        assert_eq!(su.actual_level, None);
+    }
+
+    #[test]
+    fn parse_song_url_degrades_out_of_range_bitrate_to_unknown() {
+        // 2^32 超出 u32：不得用 as 截断成 0 或残值，必须按“未知”(0) 处理。
+        let body = serde_json::json!({
+            "data": [{ "url": "u", "br": 4_294_967_296u64, "level": "exhigh" }],
+        });
+        let su = parse_song_url(11, &body);
+        assert_eq!(su.bitrate, 0, "超出 u32 的码率必须收敛为未知哨兵");
+        assert_eq!(su.actual_level, Some(AudioQuality::ExHigh));
+
+        // 范围内的码率（含 u32::MAX 边界）必须原样保留。
+        for (song_id, br) in [(12u64, 999_000u64), (13u64, u64::from(u32::MAX))] {
+            let body = serde_json::json!({
+                "data": [{ "url": "u", "br": br }],
+            });
+            let su = parse_song_url(song_id, &body);
+            assert_eq!(su.bitrate, u32::try_from(br).expect("测试值必须在 u32 内"));
+        }
     }
 
     #[test]
@@ -426,7 +549,7 @@ mod tests {
             duration: 0,
             pic_url: Some("".into()),
         };
-        let song_json = serde_json::to_string(&song).unwrap();
+        let song_json = serde_json::to_string(&song).expect("Song must serialize");
         assert!(!song_json.contains("pic_url"));
 
         let pl = Playlist {
@@ -436,7 +559,7 @@ mod tests {
             track_count: 0,
             creator: None,
         };
-        let pl_json = serde_json::to_string(&pl).unwrap();
+        let pl_json = serde_json::to_string(&pl).expect("Playlist must serialize");
         assert!(
             !pl_json.contains("cover_url"),
             "cover_url should be coverUrl"
@@ -451,7 +574,7 @@ mod tests {
             t_lrc: Some("".into()),
             y_lrc: None,
         };
-        let lr_json = serde_json::to_string(&lr).unwrap();
+        let lr_json = serde_json::to_string(&lr).expect("LyricResult must serialize");
         assert!(!lr_json.contains("t_lrc"), "t_lrc should be tLrc");
         assert!(!lr_json.contains("y_lrc"), "y_lrc should be yLrc");
     }

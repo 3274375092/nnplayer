@@ -1,12 +1,15 @@
-// 三种登录方式 + 会话管理。
-//   1. 所有登录请求走 ncm_api::ApiClient（自动加密 + 自动捕获 Set-Cookie）
-//   2. 业务码 200 视为成功（QR 的 803 同样）
-//   3. 成功后调 user_account 拉取用户信息，合并 cookie，持久化到 session.toml
-//   4. 启动时从 session.toml 读取 cookie，调 login_status 校验有效性
-//   5. cookie 由 AppState.auth.cookie 显式持有，每次请求通过 Query::cookie() 传入
+//! 三种登录方式 + 会话管理。
+//!
+//! 约定：
+//! 1. 所有登录请求走 `ncm_api::ApiClient`（自动加密 + 自动捕获 Set-Cookie）；
+//! 2. 业务码 200 视为成功（QR 的 803 同样）；
+//! 3. 成功后调 user_account 拉取用户信息，合并 cookie，持久化到 session.toml；
+//! 4. 启动时从 session.toml 读取 cookie，调 login_status 校验有效性；
+//! 5. cookie 由 `AppState.auth.cookie` 显式持有，每次请求通过 `Query::cookie()` 传入。
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use ncm_api::{ApiResponse, Query};
 use serde::{Deserialize, Serialize};
@@ -55,6 +58,7 @@ pub struct SessionRecord {
 // QR 登录
 // ============================================================
 
+/// QR 登录第一步结果：unikey、二维码内容 URL 与可展示的 PNG data URI。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QrKeyResult {
@@ -65,6 +69,7 @@ pub struct QrKeyResult {
     pub qr_image: Option<String>,
 }
 
+/// QR 登录轮询结果：前端按 `code`（800/801/802/803）驱动扫码界面。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QrCheckResponse {
@@ -135,7 +140,7 @@ pub async fn login_qr_check(
             user_id,
             nickname,
             avatar_url,
-        } = finalize_login(&app, &state, "qr", &resp).await?;
+        } = finalize_login(&app, &state, LoginMethod::Qr, &resp).await?;
         return Ok(QrCheckResponse {
             code: 803,
             message: "登录成功".to_string(),
@@ -165,6 +170,7 @@ pub async fn login_qr_check(
 // 账号密码登录（用户名 / 邮箱）
 // ============================================================
 
+/// 账号密码登录参数。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountLoginPayload {
@@ -176,6 +182,7 @@ pub struct AccountLoginPayload {
     pub md5_password: String,
 }
 
+/// 账号密码登录（邮箱 / 用户名；密码为前端 MD5 后的 hex，不再二次哈希）。
 #[tauri::command]
 pub async fn login_with_account(
     app: AppHandle,
@@ -201,19 +208,21 @@ pub async fn login_with_account(
         .map_err(map_ncm_err)?
     };
 
-    finalize_login(&app, &state, "account", &resp).await
+    finalize_login(&app, &state, LoginMethod::Account, &resp).await
 }
 
 // ============================================================
 // 手机验证码登录
 // ============================================================
 
+/// 发送短信验证码参数。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendCaptchaPayload {
     pub phone: String,
 }
 
+/// 验证码登录参数。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptchaLoginPayload {
@@ -264,17 +273,44 @@ pub async fn login_with_captcha(
         .map_err(map_ncm_err)?
     };
 
-    finalize_login(&app, &state, "phone", &resp).await
+    finalize_login(&app, &state, LoginMethod::Phone, &resp).await
 }
 
 // ============================================================
 // 通用：登录成功后的统一收尾
 // ============================================================
 
+/// 登录方式。字符串值是 session.toml 与前端展示共用的稳定标识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginMethod {
+    Qr,
+    Account,
+    Phone,
+    Cookie,
+}
+
+impl LoginMethod {
+    /// 持久化与前端展示使用的字符串。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Qr => "qr",
+            Self::Account => "account",
+            Self::Phone => "phone",
+            Self::Cookie => "cookie",
+        }
+    }
+}
+
+impl fmt::Display for LoginMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 async fn finalize_login(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    method: &str,
+    method: LoginMethod,
     resp: &ApiResponse,
 ) -> AppResult<LoginResult> {
     // 400/502 等业务码在 ncm-api 中可能以 Ok(ApiResponse) 返回，必须先校验。
@@ -327,6 +363,7 @@ async fn finalize_login(
     })
 }
 
+/// 校验 NCM 业务码属于 `accepted` 集合，否则返回带上下文的 [`AppError::Ncm`]。
 pub(crate) fn ensure_business_success(
     resp: &ApiResponse,
     accepted: &[i64],
@@ -409,6 +446,7 @@ fn merge_cookie(prev: Option<&str>, resp: &ApiResponse) -> Option<String> {
 // 通用：会话读写
 // ============================================================
 
+/// 读取当前登录态（等待启动会话校验完成后才返回）。
 #[tauri::command]
 pub async fn get_auth_state(state: State<'_, AppState>) -> AppResult<AuthStateDto> {
     state.wait_restore_complete().await;
@@ -422,13 +460,14 @@ pub async fn get_auth_state(state: State<'_, AppState>) -> AppResult<AuthStateDt
     })
 }
 
+/// 退出登录：失效远端会话，并清空持久化与内存中的登录态。
 #[tauri::command]
 pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     // 调用 NCM 退出（最好携带 cookie 以确保服务端失效）
-    let cookie = state.auth.lock().await.cookie.clone();
-    if let Some(c) = cookie {
+    let cookie = state.cookie().await;
+    if !cookie.trim().is_empty() {
         let api = state.api_snapshot().await;
-        if let Err(e) = api.logout(&Query::new().cookie(&c)).await {
+        if let Err(e) = api.logout(&Query::new().cookie(&cookie)).await {
             log::warn!("[logout] 调用 NCM 登出接口失败: {e}");
         }
     }
@@ -456,6 +495,7 @@ pub struct CookiePayload {
     pub cookie: String,
 }
 
+/// 旧接口保留：直接粘贴 Cookie 登录。
 #[tauri::command]
 pub async fn save_cookie(
     app: AppHandle,
@@ -482,7 +522,7 @@ pub async fn save_cookie(
         user_id,
         &nickname,
         avatar_url.as_deref(),
-        "cookie",
+        LoginMethod::Cookie,
         &payload.cookie,
     )?;
     if let Err(e) = persist_cookie(&app, &payload.cookie) {
@@ -495,7 +535,7 @@ pub async fn save_cookie(
         auth.user_id = Some(user_id);
         auth.nickname = Some(nickname.clone());
         auth.cookie = Some(payload.cookie);
-        auth.login_method = Some("cookie".to_string());
+        auth.login_method = Some(LoginMethod::Cookie.to_string());
         auth.avatar_url = avatar_url.clone().map(|c| c.into_owned());
     }
 
@@ -523,7 +563,7 @@ fn persist_session_meta(
     user_id: u64,
     nickname: &str,
     avatar_url: Option<&str>,
-    method: &str,
+    method: LoginMethod,
     cookie: &str,
 ) -> AppResult<()> {
     let path =
@@ -535,7 +575,7 @@ fn persist_session_meta(
         user_id,
         nickname: nickname.to_string(),
         avatar_url: avatar_url.map(|s| s.to_string()),
-        login_method: method.to_string(),
+        login_method: method.as_str().to_string(),
         cookie: cookie.to_string(),
         updated_at: now_unix(),
     };
@@ -549,7 +589,7 @@ fn persist_session_meta(
 ///
 /// 会话 cookie 是长期有效的凭据：Unix 上限制为 0600，避免同机其他用户读取；
 /// 同时先写临时文件再 rename，防止中途崩溃留下被截断的 session。
-fn write_session_file(path: &std::path::Path, contents: &str) -> AppResult<()> {
+fn write_session_file(path: &Path, contents: &str) -> AppResult<()> {
     let tmp = path.with_extension("toml.tmp");
 
     #[cfg(unix)]
@@ -575,6 +615,7 @@ fn write_session_file(path: &std::path::Path, contents: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// 删除持久化的 session.toml（登出或会话失效时调用；文件不存在视为成功）。
 pub fn clear_session_meta() -> AppResult<()> {
     let Some(path) = dirs_auth_session() else {
         return Ok(());
@@ -688,8 +729,8 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex;
 
-    /// 两个文件夹具测试共用真实配置目录里的 session.toml，
-    /// 必须串行执行，否则互相覆盖导致偶发失败。
+    // 两个具有真实文件测试共用配置目录里的 session.toml，
+    // 必须串行执行，否则互相覆盖导致偶发失败。
     static SESSION_FILE_LOCK: Mutex<()> = Mutex::new(());
 
     fn response(body: serde_json::Value, cookie: Vec<&str>) -> ApiResponse {
@@ -730,14 +771,14 @@ mod tests {
     // TOML corruption / graceful-degradation tests
     // ============================================================
 
-    /// Empty file: `toml::from_str("")` should fail (no tables) → `.ok()` → None.
+    // Empty file: `toml::from_str("")` should fail (no tables) → `.ok()` → None.
     #[test]
     fn toml_empty_string_returns_none() {
         let result: Option<SessionRecord> = toml::from_str("").ok();
         assert!(result.is_none(), "empty TOML should parse to None");
     }
 
-    /// Missing required field `cookie`: deserialization fails → `.ok()` → None.
+    // Missing required field `cookie`: deserialization fails → `.ok()` → None.
     #[test]
     fn toml_missing_cookie_returns_none() {
         let partial = r#"
@@ -753,7 +794,7 @@ updated_at = 1710000000
         );
     }
 
-    /// Missing required field `nickname`: deserialization fails → `.ok()` → None.
+    // Missing required field `nickname`: deserialization fails → `.ok()` → None.
     #[test]
     fn toml_missing_nickname_returns_none() {
         let partial = r#"
@@ -769,7 +810,7 @@ updated_at = 1710000000
         );
     }
 
-    /// Missing required field `login_method`: deserialization fails → `.ok()` → None.
+    // Missing required field `login_method`: deserialization fails → `.ok()` → None.
     #[test]
     fn toml_missing_login_method_returns_none() {
         let partial = r#"
@@ -785,7 +826,7 @@ updated_at = 1710000000
         );
     }
 
-    /// Malformed syntax (random junk text, not TOML): parse fails → `.ok()` → None.
+    // Malformed syntax (random junk text, not TOML): parse fails → `.ok()` → None.
     #[test]
     fn toml_malformed_syntax_returns_none() {
         let junk = "this is not TOML at all!!\n{key}=value???\n[invalid section";
@@ -793,7 +834,7 @@ updated_at = 1710000000
         assert!(result.is_none(), "malformed TOML should parse to None");
     }
 
-    /// `cookie` field with wrong type (integer instead of string): fails → None.
+    // `cookie` field with wrong type (integer instead of string): fails → None.
     #[test]
     fn toml_wrong_type_cookie_returns_none() {
         let wrong_type = r#"
@@ -810,7 +851,7 @@ updated_at = 1710000000
         );
     }
 
-    /// `user_id` with wrong type (string instead of integer): fails → None.
+    // `user_id` with wrong type (string instead of integer): fails → None.
     #[test]
     fn toml_wrong_type_user_id_returns_none() {
         let wrong_type = r#"
@@ -827,7 +868,7 @@ updated_at = 1710000000
         );
     }
 
-    /// Valid TOML with all required fields correctly typed parses successfully.
+    // Valid TOML with all required fields correctly typed parses successfully.
     #[test]
     fn toml_valid_record_parses_successfully() {
         let valid = r#"
@@ -839,8 +880,7 @@ updated_at = 1710000000
 avatar_url = "https://example.com/avatar.jpg"
 "#;
         let result: Option<SessionRecord> = toml::from_str(valid).ok();
-        assert!(result.is_some(), "valid TOML should parse successfully");
-        let record = result.unwrap();
+        let record = result.expect("valid TOML should parse successfully");
         assert_eq!(record.user_id, 123456);
         assert_eq!(record.nickname, "testuser");
         assert_eq!(record.login_method, "email");
@@ -851,7 +891,7 @@ avatar_url = "https://example.com/avatar.jpg"
         );
     }
 
-    /// Valid TOML without optional `avatar_url` parses correctly (Option field absent).
+    // Valid TOML without optional `avatar_url` parses correctly (Option field absent).
     #[test]
     fn toml_valid_record_without_optional_fields_parses() {
         let valid = r#"
@@ -862,17 +902,13 @@ cookie = "MUSIC_U=xyz"
 updated_at = 1710000000
 "#;
         let result: Option<SessionRecord> = toml::from_str(valid).ok();
-        assert!(
-            result.is_some(),
-            "valid TOML without optional fields should parse"
-        );
-        let record = result.unwrap();
+        let record = result.expect("valid TOML without optional fields should parse");
         assert_eq!(record.user_id, 999);
         assert_eq!(record.avatar_url, None);
     }
 
-    /// Test the full `load_session_meta()` end-to-end with corrupt file fixtures.
-    /// Creates actual files at the expected config path, testing every corrupt scenario.
+    // Test the full `load_session_meta()` end-to-end with corrupt file fixtures.
+    // Creates actual files at the expected config path, testing every corrupt scenario.
     #[test]
     fn load_session_meta_with_corrupt_files_returns_none() {
         let _guard = SESSION_FILE_LOCK.lock().unwrap();
@@ -913,8 +949,8 @@ updated_at = 1
         };
     }
 
-    /// `persist_session_meta()` overwrites a corrupt file with valid TOML,
-    /// then `load_session_meta()` can read it back successfully.
+    // `persist_session_meta()` overwrites a corrupt file with valid TOML,
+    // then `load_session_meta()` can read it back successfully.
     #[test]
     fn persist_overwrites_corrupt_file_and_load_recovers() {
         let _guard = SESSION_FILE_LOCK.lock().unwrap();
@@ -933,7 +969,7 @@ updated_at = 1
         );
 
         // Step 3: persist_session_meta() overwrites corrupt file
-        persist_session_meta(42, "recovery", None, "qr", "MUSIC_U=recovered")
+        persist_session_meta(42, "recovery", None, LoginMethod::Qr, "MUSIC_U=recovered")
             .expect("persist should overwrite corrupt file");
 
         // Step 4: load_session_meta() now returns valid record

@@ -1,4 +1,4 @@
-// 用户相关命令：我的歌单、歌单详情。
+//! 用户相关命令：我的歌单、歌单详情。
 
 use ncm_api::Query;
 use tauri::State;
@@ -47,14 +47,10 @@ pub async fn get_user_playlists(state: State<'_, AppState>) -> AppResult<Vec<Pla
             )));
         }
 
-        let raw = resp
-            .body
-            .get("playlist")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let raw_len = raw.len();
-        playlists.extend(raw.iter().filter_map(parse_playlist));
+        // 两个借用都是共享借用，无需克隆 JSON 数组即可同时读 raw 与 more。
+        let raw = resp.body.get("playlist").and_then(|v| v.as_array());
+        let raw_len = raw.map_or(0, Vec::len);
+        playlists.extend(raw.into_iter().flatten().filter_map(parse_playlist));
 
         let more = resp
             .body

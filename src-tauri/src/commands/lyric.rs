@@ -1,7 +1,6 @@
-// 歌词命令。
-// 接口来源：ncm-api-rs 的 lyric / lyric_new。
-//
-// 关键：只向前端返回精简的 { lrc, t_lrc, y_lrc }，绝不返回 NCM 原生的大 JSON。
+//! 歌词命令。接口来源：ncm-api-rs 的 lyric / lyric_new。
+//!
+//! 关键：只向前端返回精简的 `{ lrc, t_lrc, y_lrc }`，绝不返回 NCM 原生的大 JSON。
 
 use ncm_api::Query;
 use tauri::State;

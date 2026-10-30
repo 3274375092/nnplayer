@@ -74,6 +74,11 @@ export interface PlaybackEngine {
   getNextUp(limit?: number): Song[];
   /** auth epoch 变化输入口；装配层接 subscribeAuthEpoch，测试直接调用 */
   notifyAuthEpochChanged(epoch: number): void;
+  /** 取 URL 的上游参数（音质档位）变化输入口；清缓存，不影响当前媒体 */
+  invalidateSongUrlCache(): void;
+  /** 按当前队列索引重载当前已装载歌曲，保留播放/暂停意图；
+   *  无已装载媒体（currentSongId 为 null）时 no-op；失败不自动切歌。 */
+  reloadCurrent(): void;
   /** 销毁媒体、清空缓存与订阅 */
   destroy(): void;
 }
@@ -290,6 +295,8 @@ export function createPlaybackEngine(
   /** 同一歌曲的播放与预取共享一次 invoke。 */
   const songUrlRequests = new Map<number, Promise<string | null>>();
   let authEpoch = options.initialAuthEpoch ?? 0;
+  /** 音质等取 URL 上游参数变化时递增：在途旧请求的结果不得回写新缓存。 */
+  let urlEpoch = 0;
 
   function getCachedSongUrl(songId: number): string | null {
     const cached = songUrlCache.get(songId);
@@ -322,6 +329,7 @@ export function createPlaybackEngine(
 
   async function resolveSongUrl(songId: number): Promise<string | null> {
     const requestAuthEpoch = authEpoch;
+    const requestUrlEpoch = urlEpoch;
     const cached = getCachedSongUrl(songId);
     if (cached) return cached;
 
@@ -332,6 +340,8 @@ export function createPlaybackEngine(
       .then((url) => {
         // epoch 已切换时旧账号的结果不能回写当前缓存。
         if (requestAuthEpoch !== authEpoch) return null;
+        // 取参代际（音质等）已切换时，在途旧请求同样不能回写新缓存。
+        if (requestUrlEpoch !== urlEpoch) return null;
         if (url) cacheSongUrl(songId, url);
         return url;
       })
@@ -380,13 +390,53 @@ export function createPlaybackEngine(
     notify();
   }
 
+  /** 取 URL 的上游参数（音质档位）变化后调用：清空缓存与在途合并表，
+   *  之后的 resolveSongUrl 一律重新请求。不动当前媒体与 auth epoch。 */
+  function invalidateSongUrlCache() {
+    urlEpoch += 1;
+    songUrlCache.clear();
+    songUrlRequests.clear();
+  }
+
+  /** 按当前队列索引重载当前已装载歌曲（切音质等场景）。
+   *  保留播放/暂停意图：按切换前的意图决定是否 play()。
+   *  无已装载媒体时 no-op；失败只记录日志，不改队列/索引、不自动切歌。 */
+  function reloadCurrent() {
+    if (!getCurrentSong() || state.currentSongId === null) return;
+    // playbackRequested 已在 loadAndPlay 里于 await 之前记录本次装载的播放意图，
+    // 这里不能再把 state.loading 当作意图：暂停态切档重载在取 URL 期间同样会
+    // 置 loading=true，二次切档会被误判成“继续播放”而自动出声。
+    const autoplay = playbackRequested || state.playing;
+    void reloadCurrentSong(autoplay);
+  }
+
+  async function reloadCurrentSong(autoplay: boolean) {
+    const song = getCurrentSong();
+    if (!song) return;
+    try {
+      const started = await loadAndPlay(song.id, autoplay);
+      if (!started || getCurrentSong()?.id !== song.id) return;
+      playFailCount = 0;
+      prefetchNextSongUrl();
+      notify();
+    } catch (e) {
+      // 切音质等重载不是播放命令：失败不进入自动切歌，也不写播放历史。
+      // eslint-disable-next-line no-console
+      console.error("[playback] 重载当前歌曲失败，队列与当前索引保持不变", e);
+    }
+  }
+
   // =============== 装载与播放 ===============
 
   /**
-   * 加载并播放指定歌曲：解析 URL → 创建新 Media Generation → play()。
+   * 加载指定歌曲：解析 URL → 创建新 Media Generation →（autoplay 时）play()。
+   * autoplay=false 时只装载媒体并保持暂停，供切换音质等场景保留暂停意图。
    * 返回 false 表示请求已被更新的装载/epoch 切换取代。
    */
-  async function loadAndPlay(songId: number): Promise<boolean> {
+  async function loadAndPlay(
+    songId: number,
+    autoplay = true,
+  ): Promise<boolean> {
     const seq = ++playSeq;
     const requestAuthEpoch = authEpoch;
     try {
@@ -394,6 +444,11 @@ export function createPlaybackEngine(
       // 新代际要等 URL 请求成功后才创建。
       state.playing = false;
       destroyActiveMedia();
+      // destroyActiveMedia 会把 playbackRequested 清空；在 await 之前就记录
+      // 本次装载的播放意图，供 reloadCurrent / togglePlay 在取 URL 期间区分
+      // “有播放意图的装载”与“暂停态切档重载”。此时还没有媒体句柄，
+      // 不会产生任何事件，提前置位是安全的。
+      playbackRequested = autoplay;
       state.loading = true;
       state.currentSongId = songId;
       state.currentTime = 0;
@@ -413,6 +468,12 @@ export function createPlaybackEngine(
       }
 
       const handle = createActiveMedia(resolvedUrl);
+      if (!autoplay) {
+        if (seq !== playSeq || activeHandle !== handle) return false;
+        state.loading = false;
+        notify();
+        return true;
+      }
       initialPlayHandle = handle;
       playbackRequested = true;
       try {
@@ -600,6 +661,17 @@ export function createPlaybackEngine(
 
   /** 播放/暂停；待加载请求被取消后再次播放时会重新取当前歌曲 URL。 */
   function togglePlay() {
+    // loading 且无播放意图只出现在“暂停态切档重载”的取 URL 窗口：这时的
+    // 点击语义是开始播放，不能被当成暂停/取消装载。
+    if (state.loading && !playbackRequested) {
+      if (getCurrentSong()?.id === state.currentSongId) {
+        // 复用同一首歌在途的 URL 请求；不写播放历史、不改队列索引。
+        void reloadCurrentSong(true);
+      } else {
+        void loadAndPlayCurrent();
+      }
+      return;
+    }
     if (state.playing || state.loading) {
       pause();
       return;
@@ -757,6 +829,8 @@ export function createPlaybackEngine(
     clearQueue,
     getNextUp,
     notifyAuthEpochChanged,
+    invalidateSongUrlCache,
+    reloadCurrent,
     destroy,
   };
 }

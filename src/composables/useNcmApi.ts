@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppErrorPayload,
   AuthState,
+  AudioQuality,
   DailyRecommend,
   LyricResult,
   Playlist,
@@ -226,8 +227,8 @@ export function getDailyRecommend() {
   return call<DailyRecommend>(Commands.GetDailyRecommend);
 }
 
-export function getSongUrl(songId: number) {
-  return call<SongUrl>(Commands.GetSongUrl, { songId });
+export function getSongUrl(songId: number, level: AudioQuality) {
+  return call<SongUrl>(Commands.GetSongUrl, { songId, level });
 }
 
 export function getUserPlaylists() {

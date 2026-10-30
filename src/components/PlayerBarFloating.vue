@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
+  ArrowDown,
+  AudioLines,
+  Check,
   LoaderCircle,
   Music2,
   Pause,
@@ -18,6 +21,14 @@ import { fmtDuration } from "@/utils/format";
 import ScrollText from "@/components/ScrollText.vue";
 import { usePlayerStore } from "@/stores/player";
 import { coverImageUrl } from "@/utils/coverImage";
+import {
+  AUDIO_QUALITY_OPTIONS,
+  actualQualityShortLabel,
+  audioQualityOption,
+  formatActualQuality,
+  isQualityDowngraded,
+} from "@/utils/audioQuality";
+import type { AudioQuality } from "@/types/music";
 
 const player = usePlayerStore();
 const router = useRouter();
@@ -58,6 +69,214 @@ const modeLabel = computed(() => {
       return "列表循环";
   }
 });
+
+// =============== 音质选择 ===============
+
+const QUALITY_MENU_WIDTH = 240;
+
+const qualityMenuOpen = ref(false);
+const qualityButtonRef = ref<HTMLButtonElement | null>(null);
+const qualityMenuRef = ref<HTMLElement | null>(null);
+const qualityMenuStyle = ref<{
+  width: string;
+  bottom: string;
+  left: string;
+} | null>(null);
+
+// quality 是用户所选的请求档位；activeQuality/activeBitrate 是服务端
+// 实际下发的档位与码率。徽标与菜单的“当前”标记一律显示实际值。
+
+const requestedQuality = computed(() => audioQualityOption(player.quality));
+
+/** 已装载媒体（引擎已开始装载当前曲）才存在“当前实际音质”。 */
+const mediaLoaded = computed(() => player.audioState.currentSongId !== null);
+
+/** 实际音质短标签：优先档位短标签，档位未知时退化为实际码率。 */
+const activeQualityShort = computed(() =>
+  actualQualityShortLabel(player.activeQuality, player.activeBitrate),
+);
+
+/** 实际音质完整描述，如 "极高 · 320 kbps"。 */
+const activeQualitySummary = computed(() =>
+  formatActualQuality(player.activeQuality, player.activeBitrate),
+);
+
+/** 实际下发档位低于所选档位（仅在实际档位已知时判定）。 */
+const qualityDowngraded = computed(() =>
+  isQualityDowngraded(player.activeQuality, player.quality),
+);
+
+/** 当前媒体已装载、仍在加载且尚未拿到解析结果（显示解析中而不是旧值/所选值）。 */
+const qualityPending = computed(
+  () =>
+    mediaLoaded.value &&
+    !player.activeAudioResolved &&
+    player.audioState.loading,
+);
+
+/** 徽标只显示当前实际音质；未播放时显示所选档位作为待用选择。 */
+const qualityBadgeLabel = computed(() => {
+  if (!mediaLoaded.value) return requestedQuality.value.shortLabel;
+  if (activeQualityShort.value !== null) return activeQualityShort.value;
+  return qualityPending.value ? "…" : "—";
+});
+
+/** 按钮 title / aria-label：同时说明实际值与所选值，降级必须明说。 */
+const qualityButtonTitle = computed(() => {
+  const requested = requestedQuality.value;
+  if (!mediaLoaded.value) {
+    return `音质：所选 ${requested.label}（${requested.hint}），点击选择`;
+  }
+  if (!player.activeAudioResolved) {
+    return qualityPending.value
+      ? `音质：正在获取实际音质（所选 ${requested.label}）`
+      : `音质：当前实际音质未知（所选 ${requested.label}）`;
+  }
+  const summary = activeQualitySummary.value ?? "未知";
+  if (qualityDowngraded.value) {
+    return `音质：当前实际 ${summary}；所选 ${requested.label} 未生效，服务端下发较低档位`;
+  }
+  if (player.activeQuality === null) {
+    return `音质：当前实际 ${summary}（档位未知，所选 ${requested.label}）`;
+  }
+  return `音质：当前实际 ${summary}（所选 ${requested.label}）`;
+});
+
+/** 菜单底部实际状态行；所选档位由勾选表示，实际档位由这里说明。 */
+const qualityFooter = computed(() => {
+  const requested = requestedQuality.value;
+  if (!mediaLoaded.value) {
+    return `未播放；所选 ${requested.label}。`;
+  }
+  if (!player.activeAudioResolved) {
+    return qualityPending.value
+      ? "正在获取实际音质…"
+      : `当前实际音质未知（所选 ${requested.label}）。`;
+  }
+  const summary = activeQualitySummary.value;
+  if (summary === null) {
+    return "当前实际音质未知；上游未返回档位与码率。";
+  }
+  if (qualityDowngraded.value) {
+    return `当前实际：${summary}。所选 ${requested.label} 未生效，服务端按账号权益下发较低档位。`;
+  }
+  return `当前实际：${summary}。`;
+});
+
+function positionQualityMenu() {
+  const rect = qualityButtonRef.value?.getBoundingClientRect();
+  if (!rect) {
+    // 触发按钮不在 DOM 中（如组件卸载竞态）时直接收起，避免悬空坐标。
+    qualityMenuOpen.value = false;
+    return;
+  }
+  // footer 自带 overflow:hidden + transform，会裁剪子浮层，
+  // 菜单 Teleport 到 body 后按按钮位置向上弹出、右缘对齐。
+  qualityMenuStyle.value = {
+    // 宽度与定位使用同一常量，避免样式类与实际宽度漂移。
+    width: `${QUALITY_MENU_WIDTH}px`,
+    bottom: `${window.innerHeight - rect.top + 10}px`,
+    left: `${Math.max(8, rect.right - QUALITY_MENU_WIDTH)}px`,
+  };
+}
+
+function qualityMenuItems(): HTMLButtonElement[] {
+  const menu = qualityMenuRef.value;
+  if (!menu) return [];
+  return [...menu.querySelectorAll<HTMLButtonElement>("[role='menuitemradio']")];
+}
+
+function focusQualityMenuItem(index: number) {
+  const items = qualityMenuItems();
+  if (items.length === 0) return;
+  items[(index + items.length) % items.length].focus();
+}
+
+/** 菜单打开时挂在 document 上：焦点可能因点击非交互区域而离开菜单，
+ *  统一用 document 级 Escape 关闭并回到触发按钮（与 QueueDrawer 的约定一致）。 */
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  dismissQualityMenu();
+}
+
+/** ARIA menu 模式：方向键在菜单项间移动焦点（循环）；Escape 由 onDocumentKeydown 统一处理。 */
+function onQualityMenuKeydown(e: KeyboardEvent) {
+  const items = qualityMenuItems();
+  const currentIndex = items.findIndex((el) => el === document.activeElement);
+  switch (e.key) {
+    case "ArrowDown":
+      e.preventDefault();
+      focusQualityMenuItem(currentIndex + 1);
+      break;
+    case "ArrowUp":
+      e.preventDefault();
+      focusQualityMenuItem(currentIndex - 1);
+      break;
+    case "Home":
+      e.preventDefault();
+      focusQualityMenuItem(0);
+      break;
+    case "End":
+      e.preventDefault();
+      focusQualityMenuItem(items.length - 1);
+      break;
+    case "Tab":
+      // 先显式把焦点还给触发按钮，默认 Tab 才能从触发按钮继续按文档顺序移动。
+      dismissQualityMenu();
+      break;
+  }
+}
+
+watch(qualityMenuOpen, (open) => {
+  if (open) {
+    // 窗口缩放时按钮随布局移动，fixed 定位的菜单需重新取坐标。
+    window.addEventListener("resize", positionQualityMenu);
+    document.addEventListener("keydown", onDocumentKeydown);
+    void nextTick().then(() => {
+      // 打开时按 menu 模式把焦点移入菜单，初始定位到当前档位。
+      const items = qualityMenuItems();
+      const selected = items.findIndex(
+        (el) => el.getAttribute("aria-checked") === "true",
+      );
+      (selected >= 0 ? items[selected] : items[0])?.focus();
+    });
+  } else {
+    window.removeEventListener("resize", positionQualityMenu);
+    document.removeEventListener("keydown", onDocumentKeydown);
+  }
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", positionQualityMenu);
+  document.removeEventListener("keydown", onDocumentKeydown);
+});
+
+function toggleQualityMenu() {
+  if (qualityMenuOpen.value) {
+    dismissQualityMenu();
+    return;
+  }
+  positionQualityMenu();
+  qualityMenuOpen.value = true;
+}
+
+function closeQualityMenu() {
+  qualityMenuOpen.value = false;
+}
+
+/** 关闭菜单并把焦点还给触发按钮：backdrop 点击、Escape、Tab、选中共用，
+ *  否则菜单项卸载后焦点会落回 <body>。 */
+function dismissQualityMenu() {
+  closeQualityMenu();
+  qualityButtonRef.value?.focus();
+}
+
+function selectQuality(value: AudioQuality) {
+  // menu 模式：选中后菜单关闭，焦点回到触发按钮。
+  dismissQualityMenu();
+  if (value !== player.quality) player.setQuality(value);
+}
 
 function openNowPlaying() {
   void router.push("/now-playing");
@@ -170,10 +389,37 @@ function openNowPlaying() {
       </div>
     </div>
 
-    <!-- 右：volume -->
+    <!-- 右：quality + volume -->
     <div
-      class="player-volume w-full max-w-[140px] min-w-0 justify-self-end flex items-center gap-2 mobile-hide-on-small"
+      class="player-volume w-full max-w-[180px] min-w-0 justify-self-end flex items-center gap-1.5 mobile-hide-on-small"
     >
+      <button
+        ref="qualityButtonRef"
+        type="button"
+        class="player-quality-button"
+        :class="{
+          'is-open': qualityMenuOpen,
+          'is-downgraded': mediaLoaded && qualityDowngraded,
+          'is-unknown': mediaLoaded && activeQualityShort === null,
+        }"
+        :title="qualityButtonTitle"
+        :aria-label="qualityButtonTitle"
+        :aria-expanded="qualityMenuOpen"
+        aria-haspopup="menu"
+        @click="toggleQualityMenu"
+      >
+        <AudioLines :size="13" :stroke-width="1.75" aria-hidden="true" />
+        <span class="text-[11px] font-medium leading-none">
+          {{ qualityBadgeLabel }}
+        </span>
+        <ArrowDown
+          v-if="mediaLoaded && qualityDowngraded"
+          :size="10"
+          :stroke-width="2"
+          class="player-quality-downgraded"
+          aria-hidden="true"
+        />
+      </button>
       <Volume2
         :size="15"
         :stroke-width="1.5"
@@ -193,6 +439,63 @@ function openNowPlaying() {
       />
     </div>
   </footer>
+
+  <!-- 音质菜单：Teleport 到 body，避免被 footer 的 overflow:hidden 裁剪。 -->
+  <Teleport to="body">
+    <div v-if="qualityMenuOpen">
+      <div
+        class="fixed inset-0 z-40"
+        aria-hidden="true"
+        @click="dismissQualityMenu"
+      ></div>
+      <div
+        ref="qualityMenuRef"
+        class="glass fixed z-50 rounded-xl py-1.5 box-border"
+        :style="qualityMenuStyle"
+      >
+        <div
+          role="menu"
+          aria-label="播放音质"
+          @keydown="onQualityMenuKeydown"
+        >
+          <button
+            v-for="opt in AUDIO_QUALITY_OPTIONS"
+            :key="opt.value"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="opt.value === player.quality"
+            class="quality-menu-item"
+            @click="selectQuality(opt.value)"
+          >
+            <span class="w-4 shrink-0 flex items-center justify-center">
+              <Check
+                v-if="opt.value === player.quality"
+                :size="14"
+                :stroke-width="2"
+                class="text-accent"
+              />
+            </span>
+            <span class="min-w-0 flex-1 text-left">
+              <span class="block text-sm truncate">{{ opt.label }}</span>
+              <span class="block text-[11px] text-text-tertiary truncate">
+                {{ opt.hint }}
+              </span>
+            </span>
+            <span
+              v-if="mediaLoaded && opt.value === player.activeQuality"
+              class="quality-menu-current"
+            >
+              当前
+            </span>
+          </button>
+        </div>
+        <div class="quality-menu-footer">
+          <div>{{ qualityFooter }}</div>
+          <div>勾选为所选档位；高档位需 VIP/SVIP，当前实际以服务端下发为准。</div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -327,6 +630,97 @@ function openNowPlaying() {
   color: var(--color-text-secondary);
 }
 
+.player-quality-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-soft, var(--color-card-hover));
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease,
+    transform 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.player-quality-button:hover {
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+
+.player-quality-button.is-open {
+  color: var(--color-accent);
+}
+
+.player-quality-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 实际档位低于所选：徽标仍显示实际值，用向下的箭头与更深的文字提示降级。 */
+.player-quality-button.is-downgraded {
+  color: var(--color-text-primary);
+}
+
+.player-quality-downgraded {
+  color: var(--color-accent-secondary);
+}
+
+.player-quality-button.is-unknown {
+  color: var(--color-text-tertiary);
+}
+
+.quality-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  outline: none;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.quality-menu-item:hover,
+.quality-menu-item:focus-visible {
+  background: var(--color-card-hover);
+}
+
+/* 焦点指示不能只靠背景色：forced-colors 模式会覆盖背景色。 */
+.quality-menu-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* 菜单勾选表示“所选请求档位”；当前实际下发档位用独立胶囊标记。 */
+.quality-menu-current {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--color-accent);
+  background: var(--color-accent-subtle, var(--color-surface-soft));
+}
+
+.quality-menu-footer {
+  margin-top: 4px;
+  padding: 6px 12px 4px;
+  border-top: 1px solid var(--color-border, var(--color-border-strong));
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-tertiary);
+}
+
 .player-volume-range {
   height: 24px;
   margin: 0;
@@ -405,7 +799,8 @@ function openNowPlaying() {
   .player-cover-button,
   .player-icon-button,
   .player-play-button,
-  .player-volume {
+  .player-volume,
+  .player-quality-button {
     transition: none;
   }
 

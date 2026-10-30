@@ -18,8 +18,11 @@ export interface Song {
 export interface SongUrl {
   id: number;
   url: string | null;
-  /** bps */
+  /** bps；0 = 未知（上游未下发） */
   bitrate: number;
+  /** 服务端实际下发档位；null = 未知（上游未返回或无法识别），
+   *  不得回填成请求档位。 */
+  actualLevel: AudioQuality | null;
 }
 
 // 歌单（列表项）
@@ -88,3 +91,14 @@ export interface AppErrorPayload {
 
 // 播放模式
 export type PlayMode = "loop-one" | "loop-list" | "shuffle";
+
+// 播放音质档位（网易云 song/url/v1 的 level 参数，六档常规阶梯，
+// 不含环绕声/杜比等声场特效档）。用户选择的是“请求档位”；服务端会按
+// 账号 VIP/SVIP 权益下发，实际档位以 SongUrl.actualLevel 为准。
+export type AudioQuality =
+  | "standard"
+  | "higher"
+  | "exhigh"
+  | "lossless"
+  | "hires"
+  | "jymaster";

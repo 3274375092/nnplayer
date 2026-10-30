@@ -1,3 +1,9 @@
+//! nnplayer 桌面端的 Tauri 后端。
+//!
+//! 模块划分：`commands/*` 按领域拆分的 Tauri 命令、`models` 前端 DTO、
+//! `state` 全局状态、`error` 统一错误边界、`audio_quality` 音质档位。
+
+mod audio_quality;
 mod commands;
 mod error;
 mod models;
@@ -6,10 +12,15 @@ mod state;
 use std::borrow::Cow;
 
 use state::AppState;
-use tauri::Emitter;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{
+    Builder as ShortcutBuilder, Code, Modifiers, Shortcut, ShortcutState,
+};
 use tauri_plugin_store::StoreExt;
 
+/// 应用入口：装配插件、托盘与全局快捷键，注册全部命令并启动。
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -192,10 +203,6 @@ async fn clear_invalid_session(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
-
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let toggle_item = MenuItem::with_id(app, "toggle", "播放/暂停", true, None::<&str>)?;
     let prev_item = MenuItem::with_id(app, "prev", "上一首", true, None::<&str>)?;
@@ -264,7 +271,6 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn register_global_shortcuts(app: &tauri::AppHandle) -> tauri::Result<()> {
-    use tauri_plugin_global_shortcut::Builder as ShortcutBuilder;
     let shortcuts: Vec<Shortcut> = vec![
         Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyP),
         Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::ArrowLeft),
@@ -278,12 +284,11 @@ fn register_global_shortcuts(app: &tauri::AppHandle) -> tauri::Result<()> {
             if event.state() != ShortcutState::Pressed {
                 return;
             }
-            let id = format!("{:?}", shortcut.key);
-            let emit_name = match id.as_str() {
-                "KeyP" => "player:toggle",
-                "ArrowLeft" => "player:prev",
-                "ArrowRight" => "player:next",
-                "KeyL" => "desktop-lyrics:toggle",
+            let emit_name = match shortcut.key {
+                Code::KeyP => "player:toggle",
+                Code::ArrowLeft => "player:prev",
+                Code::ArrowRight => "player:next",
+                Code::KeyL => "desktop-lyrics:toggle",
                 _ => return,
             };
             let _ = app.emit(emit_name, ());

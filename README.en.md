@@ -24,6 +24,7 @@ A NetEase Cloud Music desktop player built with Tauri v2, Rust, Vue 3, and TypeS
 - Daily recommendations, song search, suggestions, playlists, and playlist details
 - QR-code, account/password, SMS verification, and advanced Cookie login
 - Queue management, seeking, volume control, repeat, single-track repeat, and shuffle
+- Selectable audio quality (Standard / Higher / Extreme / Lossless / Hi-Res / Master); switching reloads the current song immediately, and the player bar always shows the actually served level and bitrate, explicitly flagging server-side downgrades instead of presenting the requested level as current
 - System media keys, tray menu, global shortcuts, and background tray operation
 - LRC line lyrics, YRC word-level karaoke lyrics, translations, and audio-clock synchronization
 - Resizable desktop lyrics window with always-on-top, dragging, locking, font-size, and opacity controls

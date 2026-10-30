@@ -1,22 +1,21 @@
-// 全局应用状态。
-//
-// 与 CNMPlayer 保持一致的设计：
-//   - 持有 ncm_api::ApiClient（自带 Cookie 存储 + 设备指纹 + 加密层）
-//   - 同时维护一个轻量的 AuthState（用户 id、昵称），方便前端展示
-//   - ApiClient 用 RwLock：普通业务请求可以并发，登录/退出时才需要写锁
-//   - AuthState 用 Mutex，保证登录态更新原子化
-//
-// ApiClient 是 ncm-api-rs 提供的"开箱即用"客户端：
-//   - 自动注入 NCM 风控所需的 cookie 字段（os、deviceId、NMTID 等）
-//   - 自动捕获响应 Set-Cookie 到 response.cookie
-//   - 自动按 CryptoType 进行 weapi/eapi 加密
-// 调用方只需 login_status / login / login_cellphone 等接口即可。
+//! 全局应用状态。
+//!
+//! 与 CNMPlayer 保持一致的设计：
+//! - 持有 ncm_api::ApiClient（自带 Cookie 存储 + 设备指纹 + 加密层）
+//! - 同时维护一个轻量的 AuthState（用户 id、昵称），方便前端展示
+//! - ApiClient 用 RwLock：普通业务请求可以并发，登录/退出时才需要写锁
+//! - AuthState 用 Mutex，保证登录态更新原子化
+//!
+//! ApiClient 是 ncm-api-rs 提供的"开箱即用"客户端：
+//! - 自动注入 NCM 风控所需的 cookie 字段（os、deviceId、NMTID 等）
+//! - 自动捕获响应 Set-Cookie 到 response.cookie
+//! - 自动按 CryptoType 进行 weapi/eapi 加密
+//!
+//! 调用方只需 login_status / login / login_cellphone 等接口即可。
 
 use std::borrow::Cow;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ncm_api::{ApiClient, ApiResponse};
@@ -30,7 +29,7 @@ const USER_AGENT: &str = concat!(
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 );
 
-/// Build a shared reqwest Client with the standard UA, cookie store, and timeouts.
+/// 构建共享的 reqwest Client：标准 UA、cookie 存储与连接/总超时。
 pub(crate) fn build_http_client() -> anyhow::Result<Client> {
     Client::builder()
         .user_agent(USER_AGENT)
@@ -56,6 +55,7 @@ pub struct AuthState {
 }
 
 impl AuthState {
+    /// 同时具备非零 user_id 与非空 cookie 才视为已登录。
     pub fn is_logged_in(&self) -> bool {
         self.user_id.is_some_and(|id| id > 0)
             && self
@@ -64,6 +64,7 @@ impl AuthState {
                 .is_some_and(|cookie| !cookie.trim().is_empty())
     }
 
+    /// 未登录时返回 [`AppError::Unauthorized`]。
     pub fn require_login(&self) -> Result<(), AppError> {
         if self.is_logged_in() {
             Ok(())
@@ -173,7 +174,6 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ncm_api::ApiResponse;
     use serde_json::json;
 
     // The main binary installs the ring provider at startup; replicate that for tests.
