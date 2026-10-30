@@ -172,7 +172,27 @@ onMounted(async () => {
 
 onBeforeUnmount(unbindVirtualScroller);
 
+/**
+ * 单击播放与双击快捷共用同一个入口。双击在浏览器里会先派发两次 click 再派发
+ * dblclick，如果每次都重建队列并重新加载音频，会出现重复取 URL 与听感抖动；
+ * 因此同一首歌在双击窗口内的重复触发直接忽略。单击本身仍然立即播放。
+ */
+const REPEAT_ACTIVATION_MS = 400;
+let lastActivatedSongId: number | null = null;
+let lastActivatedAt = 0;
+
 function playAt(idx: number) {
+  const song = props.songs[idx];
+  if (!song) return;
+  const now = performance.now();
+  if (
+    song.id === lastActivatedSongId &&
+    now - lastActivatedAt < REPEAT_ACTIVATION_MS
+  ) {
+    return;
+  }
+  lastActivatedSongId = song.id;
+  lastActivatedAt = now;
   void player.playList(props.songs, idx);
 }
 
@@ -180,10 +200,15 @@ function playAll() {
   if (props.songs.length === 0) return;
   void player.playList(props.songs, 0);
 }
+
+/** 整行播放按钮的无障碍名称：动作 + 歌名 + 艺人。 */
+function playLabel(song: Song) {
+  return `播放歌曲 ${song.name}，艺人 ${song.artists}`;
+}
 </script>
 
 <template>
-  <div class="min-w-0">
+  <div class="song-list-root min-w-0">
     <div class="flex items-center justify-between gap-3 px-3 mb-4">
       <h2 class="text-base font-semibold text-text-primary">
         {{ title ?? "歌曲列表" }}
@@ -196,15 +221,15 @@ function playAll() {
         :disabled="songs.length === 0"
         @click="playAll"
       >
-        <Play :size="14" :stroke-width="1.5" class="mr-1.5" />播放全部
+        <Play :size="14" :stroke-width="1.5" class="mr-1.5" aria-hidden="true" />播放全部
       </button>
     </div>
 
     <div
       v-if="showIndex"
-      class="grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium mobile-song-grid-header"
+      class="song-list-header grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium mobile-song-grid-header"
     >
-      <div>#</div>
+      <div>序号</div>
       <div></div>
       <div>标题</div>
       <div v-if="showAlbum" class="song-list-album">专辑</div>
@@ -219,7 +244,7 @@ function playAll() {
       <li
         v-for="{ song, index: idx } in visibleSongs"
         :key="`${song.id}:${idx}`"
-        class="grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md hover:bg-surface-strong cursor-pointer transition-all duration-150 items-center group relative mobile-song-grid"
+        class="song-row song-list-row group relative grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md hover:bg-surface-strong transition-all duration-150 items-center mobile-song-grid"
         :class="{
           'bg-accent-subtle': currentId === song.id,
         }"
@@ -233,15 +258,10 @@ function playAll() {
             :size="12"
             :stroke-width="2"
             class="text-accent mx-auto animate-play-pulse"
+            aria-hidden="true"
           />
           <span v-else-if="currentId === song.id" class="text-text-primary font-semibold">{{ idx + 1 }}</span>
-          <span v-else class="group-hover:opacity-0 transition-opacity">{{ idx + 1 }}</span>
-          <Play
-            v-if="currentId !== song.id"
-            :size="12"
-            :stroke-width="1.75"
-            class="text-text-secondary absolute inset-0 m-auto opacity-0 group-hover:opacity-100 transition-opacity"
-          />
+          <span v-else class="song-row-index transition-opacity">{{ idx + 1 }}</span>
         </div>
 
         <!-- 封面缩略图 -->
@@ -256,7 +276,7 @@ function playAll() {
             alt=""
           />
           <div v-else class="w-full h-full flex items-center justify-center">
-            <Music2 :size="14" :stroke-width="1.25" class="text-text-tertiary" />
+            <Music2 :size="14" :stroke-width="1.25" class="text-text-tertiary" aria-hidden="true" />
           </div>
         </div>
 
@@ -279,11 +299,33 @@ function playAll() {
         <div class="text-xs text-text-tertiary text-right tabular-nums font-medium">
           {{ fmtDurationMs(song.duration) }}
         </div>
+
+        <!-- 整行覆盖的真实播放按钮：单击行内任意位置播放，Tab 可聚焦整行，
+             Enter/Space 触发；hover/focus 时在序号位列露出播放图标。 -->
+        <button
+          type="button"
+          class="song-row-play absolute inset-0 z-10 cursor-pointer rounded-md border-0 bg-transparent p-0"
+          :aria-label="playLabel(song)"
+          :aria-current="currentId === song.id ? 'true' : undefined"
+          @click="playAt(idx)"
+        >
+          <span
+            v-if="currentId !== song.id"
+            class="absolute inset-y-0 left-3 w-10 flex items-center justify-center"
+            aria-hidden="true"
+          >
+            <Play
+              :size="12"
+              :stroke-width="1.75"
+              class="song-row-play-icon text-text-secondary transition-opacity"
+            />
+          </span>
+        </button>
       </li>
     </ul>
 
     <div v-if="songs.length === 0" class="py-12 text-center text-text-tertiary text-sm">
-      暂无歌曲
+      这里还没有歌曲
     </div>
   </div>
 </template>
@@ -293,7 +335,51 @@ function playAll() {
   overflow-anchor: none;
 }
 
+/* 焦点指示只能靠焦点环：行内按钮铺满整行，聚焦即整行轮廓可见。 */
+.song-row-play {
+  outline: none;
+}
+
+.song-row-play:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* 序号在鼠标悬停或键盘聚焦时让位给播放图标。 */
+.song-row-play-icon {
+  opacity: 0;
+}
+
+.song-row:hover .song-row-index,
+.song-row:focus-within .song-row-index {
+  opacity: 0;
+}
+
+.song-row:hover .song-row-play-icon,
+.song-row:focus-within .song-row-play-icon {
+  opacity: 1;
+}
+
 @media (max-width: 768px) {
+  .song-list-album {
+    display: none;
+  }
+}
+
+/* 容器查询：列表自己的宽度（不是窗口宽度）决定列数。
+   固定列 40+44+160+72 + 4×12 间距 = 364px，容器窄于 34rem 时
+   标题列会被压到不可读，此时去掉专辑列，把宽度还给标题/艺人。 */
+.song-list-root {
+  container-name: song-list;
+  container-type: inline-size;
+}
+
+@container song-list (max-width: 34rem) {
+  .song-list-header,
+  .song-list-row {
+    grid-template-columns: 36px 40px minmax(0, 1fr) 52px;
+  }
+
   .song-list-album {
     display: none;
   }

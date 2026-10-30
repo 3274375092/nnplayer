@@ -3,12 +3,12 @@
 
 :root {
   color-scheme: light;
-  /* Gruvbox Light：无歌曲时的稳定结构色。 */
+  /* Gruvbox Light 血统：无歌曲时的稳定结构色；环境光只允许停留在暖色家族。 */
   --color-bg: #fbf1c7;
   --color-bg-from: #f9f5d7;
   --color-bg-to: #f2e5bc;
   --color-ambient-primary: #d79921;
-  --color-ambient-secondary: #458588;
+  --color-ambient-secondary: #a95823;
   --color-card: #f9f5d7;
   --color-card-hover: #ebdbb2;
   /* 内容平铺；播放器和弹层通过表面色与阴影表达层级。 */
@@ -19,6 +19,8 @@
   --color-on-accent: #fbf1c7;
   --color-accent-secondary: #d65d0e;
   --color-accent-subtle: rgba(175, 58, 3, 0.12);
+  /* accent-subtle 洗色上的强调色文字：同色相压暗一档，保证对洗色底 ≥4.6:1。 */
+  --color-accent-on-subtle: #a03503;
   --color-text-primary: #282828;
   --color-text-secondary: #504945;
   --color-text-tertiary: #665c54;
@@ -90,6 +92,14 @@ input[type="number"]::-webkit-outer-spin-button {
   .btn {
     @apply inline-flex items-center justify-center rounded-md px-4 py-2
            text-sm font-medium transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] select-none;
+  }
+  /* 文字按钮的禁用态必须可见：表单未填写完整时，按钮不能看起来仍可点击。 */
+  .btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  .btn:disabled:active {
+    transform: none;
   }
   .btn-primary {
     @apply bg-accent active:scale-[0.97];
@@ -201,8 +211,8 @@ input[type="number"]::-webkit-outer-spin-button {
   }
 
   .mobile-player-bar {
-    width: calc(100vw - 16px) !important;
-    max-width: calc(100vw - 16px) !important;
+    width: calc(100% - 16px) !important;
+    max-width: calc(100% - 16px) !important;
     height: 60px !important;
     padding-left: 12px !important;
     padding-right: 12px !important;
@@ -214,8 +224,10 @@ input[type="number"]::-webkit-outer-spin-button {
     display: none !important;
   }
 
+  /* 窄窗不再整体隐藏侧栏：Sidebar 会固定收成 64px 图标轨道（见 Sidebar.vue），
+     保留旧类名仅作为可见性兜底，避免历史样式把它藏掉。 */
   .mobile-sidebar-hidden {
-    display: none !important;
+    display: flex;
   }
 
   .mobile-content-padding {

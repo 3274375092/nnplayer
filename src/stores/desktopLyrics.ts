@@ -18,6 +18,21 @@ import { isPositionOnScreen } from "@/composables/useNcmApi";
 /** 主窗 localStorage 中存储的几何信息 key。子窗通过 control 事件写到同一 key。*/
 export const GEOM_KEY = "nnplayer.lyricWindow.geometry";
 
+/**
+ * 桌面歌词窗口的客户区尺寸口径（三处统一：本 store、DESIGN.md、运行实拍）。
+ *
+ * 两轮评审的实拍证据（xwininfo，800×200，125% 缩放下仍为 800×200：
+ * 窗口物理尺寸与逻辑尺寸一致，WebView 内部按 1.25 渲染，故 CSS 视口约
+ * 640×160）都显示实际客户区高度是 200，而旧代码创建/强制 120；GTK 在
+ * 不可缩放窗口上按内容最小高度把窗口撑到 200，形成「请求 120、实拍 200」
+ * 的第三方口径。这里显式请求 800×200，让请求值 = 实拍值 = DESIGN。
+ *
+ * 长行/垂直布局以窗口实测 CSS 视口为准（DesktopLyrics.vue 内 ResizeObserver
+ * 测量），不依赖这个常量；常量只决定窗口创建后的客户区大小。
+ */
+export const DESKTOP_LYRICS_WIDTH = 800;
+export const DESKTOP_LYRICS_HEIGHT = 200;
+
 export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
   const isOpen = ref<boolean>(false);
   const label = "desktop-lyrics";
@@ -93,8 +108,8 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
     const win = new WebviewWindow(label, {
       url: "#/desktop-lyrics",
       title: "桌面歌词",
-      width: 800,
-      height: 120,
+      width: DESKTOP_LYRICS_WIDTH,
+      height: DESKTOP_LYRICS_HEIGHT,
       decorations: false,
       transparent: true,
       shadow: false, // 去掉 Windows 无边框窗口的默认投影，避免"框"感
@@ -110,9 +125,12 @@ export const useDesktopLyricsStore = defineStore("desktopLyrics", () => {
     // 创建失败（IPC 拒绝、权限缺失等）经 error 事件回退状态。
     win.once("tauri://created", async () => {
       isOpen.value = true;
-      // 强制设置正确尺寸，覆盖 window-state 插件可能恢复的旧值
+      // 强制设置正确尺寸，覆盖 window-state 插件可能恢复的旧值。
+      // 800×200 = DESIGN/实拍/本 store 的统一口径（见上方常量注释）。
       try {
-        await win.setSize(new LogicalSize(800, 120));
+        await win.setSize(
+          new LogicalSize(DESKTOP_LYRICS_WIDTH, DESKTOP_LYRICS_HEIGHT),
+        );
       } catch {
         // setSize 失败不阻塞（权限不足等边缘情况）
       }

@@ -17,6 +17,9 @@ import type { LyricLine } from "@/utils/lrcParser";
 const DESKTOP_LYRICS_LABEL = "desktop-lyrics";
 const CLOCK_REANCHOR_INTERVAL_MS = 1000;
 const SESSION_GENERATION_STORAGE_KEY = "nnplayer.lyricSessionGeneration";
+/** 歌词时间轴未就绪（切歌/加载中）时，快照握手的最长自愈间隔与次数。 */
+const SNAPSHOT_RETRY_INTERVAL_MS = 400;
+const SNAPSHOT_RETRY_MAX_ATTEMPTS = 25;
 
 interface DesktopLyricsPublisherSource {
   currentSong: () => Song | null;
@@ -82,6 +85,8 @@ export function useDesktopLyricsPublisher(
   let sequence = 0;
   let timelineRevision = 0;
   let reanchorTimer: ReturnType<typeof setInterval> | undefined;
+  let snapshotRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let snapshotRetryAttempts = 0;
   let subscribed = false;
   let subscriptionEpoch = 0;
 
@@ -120,11 +125,33 @@ export function useDesktopLyricsPublisher(
     reanchorTimer = undefined;
   }
 
+  function clearSnapshotRetry() {
+    if (snapshotRetryTimer) clearTimeout(snapshotRetryTimer);
+    snapshotRetryTimer = undefined;
+    snapshotRetryAttempts = 0;
+  }
+
+  function scheduleSnapshotRetry() {
+    if (snapshotRetryTimer || !subscribed || !isTauri()) return;
+    if (snapshotRetryAttempts >= SNAPSHOT_RETRY_MAX_ATTEMPTS) {
+      console.warn(
+        "[desktop-lyrics] 快照握手重试耗尽：歌词时间轴仍未就绪",
+      );
+      return;
+    }
+    snapshotRetryAttempts += 1;
+    snapshotRetryTimer = setTimeout(() => {
+      snapshotRetryTimer = undefined;
+      sendSnapshot();
+    }, SNAPSHOT_RETRY_INTERVAL_MS);
+  }
+
   function onTransportFailed(epoch: number) {
     if (epoch !== subscriptionEpoch) return;
     subscribed = false;
     subscriptionEpoch += 1;
     stopReanchorTimer();
+    clearSnapshotRetry();
   }
 
   function sendClock() {
@@ -140,13 +167,22 @@ export function useDesktopLyricsPublisher(
   function sendSnapshot() {
     if (!isTauri() || !subscribed) return;
     const snapshot = buildTimelineSnapshot();
-    if (!snapshot) return;
+    if (!snapshot) {
+      // 已订阅但时间轴尚未就绪（刚切歌、歌词还在加载）：不能静默丢弃，
+      // 否则桌面歌词窗只能等下一次请求，出现数秒的「等待播放」。
+      scheduleSnapshotRetry();
+      return;
+    }
+    clearSnapshotRetry();
     const epoch = subscriptionEpoch;
     void emitTo(
       DESKTOP_LYRICS_LABEL,
       "desktop-lyrics:snapshot",
       snapshot,
-    ).catch(() => onTransportFailed(epoch));
+    ).catch((e) => {
+      console.warn("[desktop-lyrics] 快照发送失败，标记传输失效待重连", e);
+      onTransportFailed(epoch);
+    });
   }
 
   function sendAppearance() {
@@ -171,6 +207,8 @@ export function useDesktopLyricsPublisher(
     if (!isTauri()) return;
     subscribed = true;
     subscriptionEpoch += 1;
+    // 每次握手请求都视为一次新的订阅机会：清掉上一轮的重试计数。
+    clearSnapshotRetry();
     sendSnapshot();
     sendAppearance();
     updateReanchorTimer();
@@ -211,6 +249,7 @@ export function useDesktopLyricsPublisher(
     subscribed = false;
     subscriptionEpoch += 1;
     stopReanchorTimer();
+    clearSnapshotRetry();
   });
 
   return { activate };

@@ -1,10 +1,13 @@
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import { usePlayerStore } from "@/stores/player";
 import { useDesktopLyricsStore, GEOM_KEY } from "@/stores/desktopLyrics";
+import { useNoticeStore } from "@/stores/notice";
+import { describeAppError } from "@/utils/appErrors";
 
 export function useTauriBridge() {
   const playerStore = usePlayerStore();
   const desktopLyricsStore = useDesktopLyricsStore();
+  const noticeStore = useNoticeStore();
   const unlistens: UnlistenFn[] = [];
   let tornDown = false;
 
@@ -31,10 +34,21 @@ export function useTauriBridge() {
       register("player:prev", () => void playerStore.prev()),
       register("player:next", () => void playerStore.next()),
       register("desktop-lyrics:toggle", async () => {
+        const opening = !desktopLyricsStore.isOpen;
         try {
           await desktopLyricsStore.toggleWindow();
         } catch (e) {
+          // 全局快捷键/托盘触发的开关失败也要可见，不能只留 console。
           console.warn("[desktop-lyrics] toggle 失败", e);
+          noticeStore.push({
+            id: "desktop-lyrics-toggle-failed",
+            tone: "error",
+            title: opening ? "无法打开桌面歌词" : "无法关闭桌面歌词",
+            hint: opening
+              ? "请重试；如果仍然失败，可重启 nnplayer 后再试。"
+              : "请重试；如果窗口仍然显示，可重启 nnplayer 后再关闭。",
+            detail: describeAppError(e).detail,
+          });
         }
       }),
       register<{ action: string; value?: unknown }>("desktop-lyrics:control", async (e) => {

@@ -15,6 +15,7 @@ import {
 } from "vue";
 
 import { createPlaybackEngine } from "@/playback/playbackEngine";
+import type { PlaybackFailure } from "@/playback/playbackEngine";
 import { createHtmlAudioRuntime } from "@/playback/htmlAudioRuntime";
 import { attachMediaSession } from "@/playback/mediaSessionAdapter";
 import { getAuthEpoch, subscribeAuthEpoch } from "@/services/authEpoch";
@@ -121,6 +122,11 @@ export const usePlayerStore = defineStore("player", () => {
     muted: initial.muted,
   });
 
+  /** 引擎最近一次播放失败的事实通报；GlobalNotice 经 App.vue 消费。 */
+  const lastPlaybackFailure = shallowRef<PlaybackFailure | null>(
+    initial.lastPlaybackFailure,
+  );
+
   let persistedVolume = initial.volume;
 
   function syncFromEngine() {
@@ -129,6 +135,7 @@ export const usePlayerStore = defineStore("player", () => {
     if (history.value !== s.history) history.value = s.history;
     index.value = s.index;
     playMode.value = s.playMode;
+    lastPlaybackFailure.value = s.lastPlaybackFailure;
     audioState.currentSongId = s.currentSongId;
     audioState.playing = s.playing;
     audioState.loading = s.loading;
@@ -227,6 +234,10 @@ export const usePlayerStore = defineStore("player", () => {
     activeBitrate,
     activeAudioResolved,
     setQuality,
+    // 播放失败可见性：事实来自引擎，人话映射由 utils/appErrors 完成
+    lastPlaybackFailure,
+    retryFailedPlayback: engine.retryFailedPlayback,
+    dismissPlaybackFailure: engine.dismissPlaybackFailure,
     // 转发引擎
     audioState: readonly(audioState),
     getMediaClockSample: engine.getMediaClockSample,

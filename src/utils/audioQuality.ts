@@ -20,7 +20,7 @@ export const AUDIO_QUALITY_OPTIONS: readonly AudioQualityOption[] = [
   { value: "exhigh", label: "极高", shortLabel: "320K", hint: "320kbps MP3" },
   { value: "lossless", label: "无损", shortLabel: "无损", hint: "FLAC 无损压缩" },
   { value: "hires", label: "Hi-Res", shortLabel: "Hi-Res", hint: "高解析度 FLAC" },
-  { value: "jymaster", label: "超清母带", shortLabel: "母带", hint: "鲸云母带，最高档" },
+  { value: "jymaster", label: "超清母带", shortLabel: "母带", hint: "母带级音质，最高档" },
 ];
 
 export const DEFAULT_AUDIO_QUALITY: AudioQuality = "exhigh";

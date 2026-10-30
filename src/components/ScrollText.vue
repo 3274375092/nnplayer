@@ -95,6 +95,7 @@ onBeforeUnmount(() => {
   <div
     ref="containerRef"
     class="overflow-hidden whitespace-nowrap"
+    :title="needScroll ? text : undefined"
     @mouseenter="onEnter"
     @mouseleave="onLeave"
   >

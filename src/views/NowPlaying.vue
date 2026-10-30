@@ -13,7 +13,17 @@ const currentCover = computed(() =>
 );
 
 function close() {
+  // 播放条监听该事件，把焦点还给封面入口（关闭后焦点不应掉到 body）。
+  window.dispatchEvent(new Event("nnplayer:now-playing-closed"));
   void router.back();
+}
+
+function goDaily() {
+  void router.push({ name: "DailyRecommend" });
+}
+
+function goSearch() {
+  void router.push({ name: "Search" });
 }
 
 function onKey(e: KeyboardEvent) {
@@ -33,14 +43,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="now-playing" aria-label="正在播放">
+  <section
+    class="now-playing"
+    :aria-label="player.currentSong ? '正在播放' : '播放器'"
+  >
     <header class="now-playing__header">
       <div class="now-playing__eyebrow">
-        <span>正在播放</span>
+        <span v-if="player.currentSong">正在播放</span>
       </div>
       <button
         type="button"
         class="now-playing__close"
+        title="关闭正在播放"
         aria-label="关闭正在播放"
         @click="close"
       >
@@ -48,7 +62,10 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <section class="now-playing__content" aria-label="当前歌曲">
+    <section
+      class="now-playing__content"
+      :aria-label="player.currentSong ? '当前歌曲' : '播放器'"
+    >
       <div class="now-playing__artwork-wrap">
         <div class="now-playing__artwork">
           <img
@@ -65,24 +82,43 @@ onBeforeUnmount(() => {
             :size="72"
             :stroke-width="1.25"
             class="now-playing__placeholder"
+            aria-hidden="true"
           />
         </div>
       </div>
 
       <div class="now-playing__details">
-        <div class="now-playing__metadata">
-          <h1 class="now-playing__title">
-            {{ player.currentSong?.name ?? "尚未播放" }}
-          </h1>
-          <p class="now-playing__artist">
-            {{ player.currentSong?.artists ?? "—" }}
-            <span v-if="player.currentSong?.album" class="now-playing__separator">·</span>
-            <span v-if="player.currentSong?.album">{{ player.currentSong.album }}</span>
-          </p>
-        </div>
+        <template v-if="player.currentSong">
+          <div class="now-playing__metadata">
+            <h1 class="now-playing__title">
+              {{ player.currentSong.name }}
+            </h1>
+            <p class="now-playing__artist">
+              {{ player.currentSong.artists || "—" }}
+              <span v-if="player.currentSong.album" class="now-playing__separator">·</span>
+              <span v-if="player.currentSong.album">{{ player.currentSong.album }}</span>
+            </p>
+          </div>
 
-        <div class="now-playing__lyrics">
-          <LyricPanel :panel-height="360" :line-height="40" />
+          <div class="now-playing__lyrics">
+            <LyricPanel :panel-height="360" :line-height="40" />
+          </div>
+        </template>
+
+        <!-- 空态：说明为什么没有内容，并给出下一步可做的事。 -->
+        <div v-else class="now-playing__empty">
+          <h1 class="now-playing__title">还没有播放歌曲</h1>
+          <p class="now-playing__empty-hint">
+            从每日推荐或搜索里选一首歌，开始播放。
+          </p>
+          <div class="now-playing__empty-actions">
+            <button type="button" class="btn btn-primary" @click="goDaily">
+              浏览每日推荐
+            </button>
+            <button type="button" class="btn btn-ghost" @click="goSearch">
+              搜索歌曲
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -239,6 +275,28 @@ onBeforeUnmount(() => {
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.now-playing__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.now-playing__empty-hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+  font-weight: 450;
+  line-height: 1.5;
+}
+
+.now-playing__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .now-playing__separator {

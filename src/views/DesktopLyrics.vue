@@ -16,9 +16,14 @@ import { useDesktopLyricsBridge } from "@/composables/useDesktopLyricsBridge";
 import { useLyricWindowPrefs } from "@/composables/useLyricWindowPrefs";
 import { useWindowGeometry } from "@/composables/useWindowGeometry";
 import { createKaraokeFrameProjector } from "@/lyrics/lyricFrame";
-import { DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
+import { contrastRatio, DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
 
-const { state, frame: lyricFrame } = useDesktopLyricsBridge();
+const {
+  state,
+  frame: lyricFrame,
+  connectionStatus,
+  connectionError,
+} = useDesktopLyricsBridge();
 const { prefs, apply: applyPrefs } = useLyricWindowPrefs();
 useWindowGeometry(); // 防抖保存窗口位置/大小
 
@@ -47,9 +52,14 @@ const hasSong = computed(() => !!state.value.songName);
 const hasLyric = computed(() => state.value.lines.length > 0);
 
 const placeholderText = computed(() => {
-  if (state.value.status === "syncing") return "同步中…";
+  // 首开握手：先明确「正在连接」，2.5s 未收到主窗快照升级为可见的重试提示。
+  // 不能一上来就显示「等待播放…」——那只应在「已就绪且确实没有歌曲」时出现。
+  if (connectionStatus.value === "connecting") return "正在连接桌面歌词…";
+  if (connectionStatus.value === "retrying") {
+    return connectionError.value || "歌词连接较慢，正在重试…";
+  }
   if (!hasSong.value) return "等待播放…";
-  if (!hasLyric.value) return "暂无歌词";
+  if (!hasLyric.value) return "这首歌没有提供歌词";
   return "♪";
 });
 
@@ -95,70 +105,131 @@ const accentColor = computed(() =>
   state.value.accentColor || DEFAULT_DESKTOP_ACCENT,
 );
 
+// =============== 桌面歌词可读性兜底（浅色桌面上白字只有约 1.1:1） ===============
+//
+// 透明窗口直接浮在任意壁纸上，白字 + 黑描边的老方案只在深色桌面成立。
+// 这里给歌词文本加一块半透明深色底板（.lyric-plate，仍随窗口不透明度淡出），
+// 并按"底板叠在最亮桌面（纯白）"这一最差样本反推已唱强调色的最低亮度：
+//   - 底板 rgba(0,0,0,0.88) 叠在纯白桌面上 = #1F1F1F；
+//   - 白字 95% 对底板 15.0:1 起，上下文 62–74% 白 7.1–9.7:1（全窗口不透明度）；
+//   - 已唱强调色只向白色提亮、不换色相，保证 ≥5:1（默认不透明度 0.95 下仍 ≥4.6）。
+const LYRIC_PLATE_ALPHA = 0.88;
+const LYRIC_ACCENT_MIN_CONTRAST = 5;
+/** 底板叠在纯白桌面上时最亮，是强调色对比度的最差样本。 */
+const LIGHTEST_PLATE_CHANNEL = Math.round(255 * (1 - LYRIC_PLATE_ALPHA));
+const LIGHTEST_PLATE_HEX = `#${LIGHTEST_PLATE_CHANNEL.toString(16)
+  .padStart(2, "0")
+  .repeat(3)}`;
+
+function parseHexChannels(value: string): [number, number, number] | null {
+  const match = /^#([\da-f]{6})$/i.exec(value.trim());
+  if (!match) return null;
+  const int = Number.parseInt(match[1], 16);
+  return [(int >> 16) & 0xff, (int >> 8) & 0xff, int & 0xff];
+}
+
+/** 保持色相，只把强调色按比例推向白色，直到它在底板上达到对比度下限。 */
+function ensureReadableAccent(value: string): string {
+  const channels = parseHexChannels(value);
+  // 桥接状态始终是 deriveCoverTheme 产出的 hex；非 hex 输入保持原值。
+  if (!channels) return value;
+  for (let step = 0; step <= 100; step += 1) {
+    const amount = step / 100;
+    const hex = `#${channels
+      .map((channel) => {
+        const mixed = Math.round(channel + (255 - channel) * amount);
+        return mixed.toString(16).padStart(2, "0");
+      })
+      .join("")}`;
+    if (contrastRatio(hex, LIGHTEST_PLATE_HEX) >= LYRIC_ACCENT_MIN_CONTRAST) {
+      return hex;
+    }
+  }
+  return "#ffffff";
+}
+
+const readableAccent = computed(() => ensureReadableAccent(accentColor.value));
+
 const cssVars = computed(() => ({
   "--lyric-font-size": `${prefs.value.fontSize}px`,
   "--lyric-opacity": String(prefs.value.opacity),
   "--lyric-text-color": prefs.value.textColor,
   "--color-accent": accentColor.value,
+  // 深色半透明底板与可读强调色：见上方对比度说明。
+  "--lyric-plate": `rgba(0, 0, 0, ${LYRIC_PLATE_ALPHA})`,
+  "--lyric-accent": readableAccent.value,
 }));
 
 // =============== 超长当前行自适应 ===============
+//
+// 测量容器 = `.current-line-frame`：宽度被限制在窗口可用宽度内
+// （width/max-width:100% + box-sizing:border-box + 左右 padding）。
+// 文本不参与布局宽度测量之外的任何“撑开”——长行只做 transform 整体缩放，
+// 且用 left:50% + translateX(-50%) 保证缩放前后都以容器中心对齐，
+// 这样即使文本比容器宽也不会再向右溢出窗口被裁掉（旧实现只 scale 不居中，
+// 长行在 800px 窗口右侧被直接裁切）。
 
-const currentWrapRef = ref<HTMLElement | null>(null);
+const currentLineFrameRef = ref<HTMLElement | null>(null);
 const currentTextRef = ref<HTMLElement | null>(null);
 const translationTextRef = ref<HTMLElement | null>(null);
 const currentLineScale = ref(1);
 const translationLineScale = ref(1);
 let lyricResizeObserver: ResizeObserver | null = null;
-const TEXT_EFFECT_SAFE_WIDTH_PX = 40;
 
 /**
- * 桌面歌词保持单行展示。文本超过窗口可用宽度时只缩放当前行的视觉尺寸，
- * 不改变用户保存的字号，也不会让页面的布局宽度被长文本撑开。
+ * 读取测量容器的真实内容宽度：clientWidth 含左右 padding，
+ * 而 padding 正是长行两侧的安全区（描边/阴影/圆角），必须扣除。
  */
+function measurementContentWidth(frame: HTMLElement | null): number {
+  if (!frame) return 0;
+  const style = getComputedStyle(frame);
+  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+  const paddingRight = Number.parseFloat(style.paddingRight) || 0;
+  return Math.max(0, frame.clientWidth - paddingLeft - paddingRight);
+}
+
 function fitCurrentLine() {
-  const wrapper = currentWrapRef.value;
+  const frame = currentLineFrameRef.value;
   const text = currentTextRef.value;
-  if (!wrapper || !text) {
+  if (!frame || !text) {
     currentLineScale.value = 1;
-    return;
-  }
-
-  // 同时扣除容器 padding、描边和 6px 阴影的两侧安全区。
-  const availableWidth = Math.max(
-    0,
-    wrapper.clientWidth - TEXT_EFFECT_SAFE_WIDTH_PX,
-  );
-  const naturalWidth = text.scrollWidth;
-  if (availableWidth <= 0 || naturalWidth <= 0) {
-    currentLineScale.value = 1;
-    return;
-  }
-
-  currentLineScale.value = Math.min(1, availableWidth / naturalWidth);
-
-  const translation = translationTextRef.value;
-  if (!translation) {
     translationLineScale.value = 1;
     return;
   }
-  const translationWidth = translation.scrollWidth;
-  translationLineScale.value = translationWidth > 0
-    ? Math.min(1, availableWidth / translationWidth)
-    : 1;
+
+  const availableWidth = measurementContentWidth(frame);
+  const naturalWidth = text.scrollWidth;
+  currentLineScale.value =
+    availableWidth > 0 && naturalWidth > 0
+      ? Math.min(1, availableWidth / naturalWidth)
+      : 1;
+
+  // 翻译行与当前行共用同一个测量容器宽度；长翻译同样整体缩放不裁切。
+  const translation = translationTextRef.value;
+  const translationWidth = translation?.scrollWidth ?? 0;
+  translationLineScale.value =
+    availableWidth > 0 && translationWidth > 0
+      ? Math.min(1, availableWidth / translationWidth)
+      : 1;
 }
 
+// 文本的居中 + 缩放：translateX(-50%) 让元素中心落在 left:50% 处，
+// 之后再以 transform-origin:center 缩放，中心不动、两侧对称收缩。
 const currentTextStyle = computed(() => ({
-  transform: `scale(${currentLineScale.value})`,
+  transform: `translateX(-50%) scale(${currentLineScale.value})`,
 }));
 const translationTextStyle = computed(() => ({
-  transform: `scale(${translationLineScale.value})`,
+  transform: `translateX(-50%) scale(${translationLineScale.value})`,
 }));
 
 watch(
   () => [
     visible.value.current?.text,
     visible.value.current?.translation,
+    // 同一行从「无逐字」切到「有逐字」时渲染树的字形宽度会变，需要重测。
+    projectedKaraokeFrame.value.tokens.length,
+    // 连接/等待/空态文案也会变化长度，同样需要重新缩放。
+    placeholderText.value,
     prefs.value.fontSize,
     toolbarVisible.value,
   ],
@@ -171,7 +242,9 @@ watch(
 onMounted(async () => {
   disposed = false;
   lyricResizeObserver = new ResizeObserver(() => fitCurrentLine());
-  if (currentWrapRef.value) lyricResizeObserver.observe(currentWrapRef.value);
+  if (currentLineFrameRef.value) {
+    lyricResizeObserver.observe(currentLineFrameRef.value);
+  }
   void nextTick(fitCurrentLine);
 
   // 监听主窗配置推送
@@ -326,78 +399,89 @@ function onFontSizeChange(delta: number) {
   >
     <!-- 歌词内容层（受 --lyric-opacity 影响；工具栏在同层但在外） -->
     <div class="lyric-content flex flex-col items-center justify-center">
-      <!-- 上一行（小字号、半透明） -->
+      <!-- 上一行（小字号、半透明，叠深色底板保证浅色桌面可读） -->
       <p
         v-if="visible.prev && prefs.showPrevNext"
-        class="context-line prev-line truncate"
+        class="context-line prev-line lyric-plate truncate"
       >
         {{ visible.prev.text }}
       </p>
 
       <!-- 当前行（卡拉OK 逐字） -->
-      <div ref="currentWrapRef" class="current-wrap">
-        <h1
-          v-if="visible.current && projectedKaraokeFrame.tokens.length > 0"
-          class="current-lyric text-transparent font-semibold leading-tight text-center"
-          :aria-label="visible.current.text"
-        >
-          <span
-            ref="currentTextRef"
-            class="lyric-karaoke"
-            :style="currentTextStyle"
-            dir="auto"
-            aria-hidden="true"
+      <div class="current-wrap lyric-plate">
+        <!-- 测量容器：宽度限制在窗口可用宽度内；当前行/翻译在其中整体缩放，
+             永不横向裁切或滚动（见 fitCurrentLine）。 -->
+        <div ref="currentLineFrameRef" class="current-line-frame">
+          <h1
+            v-if="visible.current && projectedKaraokeFrame.tokens.length > 0"
+            class="current-lyric current-line-scaled text-transparent font-semibold leading-tight"
+            :aria-label="visible.current.text"
           >
-            <!-- 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除
-                 （曾改为单 span background-clip:text + 容器 drop-shadow，
-                  与 Chromium 渲染冲突导致文字看不清，回退双层方案） -->
             <span
-              v-for="(c, i) in projectedKaraokeFrame.tokens"
-              :key="i"
-              class="lyric-char"
-              :style="{ '--char-pct': `${(c.progress * 100).toFixed(2)}%` }"
+              ref="currentTextRef"
+              class="lyric-karaoke"
+              :style="currentTextStyle"
+              dir="auto"
+              aria-hidden="true"
             >
-              <span class="lyric-char__sung">{{ c.char }}</span>
-              <span class="lyric-char__pending">{{ c.char }}</span>
+              <!-- 逐字：每个字独立双层 span，靠 --char-pct 控制字内擦除
+                   （曾改为单 span background-clip:text + 容器 drop-shadow，
+                    与 Chromium 渲染冲突导致文字看不清，回退双层方案） -->
+              <span
+                v-for="(c, i) in projectedKaraokeFrame.tokens"
+                :key="i"
+                class="lyric-char"
+                :style="{ '--char-pct': `${(c.progress * 100).toFixed(2)}%` }"
+              >
+                <span class="lyric-char__sung">{{ c.char }}</span>
+                <span class="lyric-char__pending">{{ c.char }}</span>
+              </span>
             </span>
-          </span>
-        </h1>
-        <h1
-          v-else-if="visible.current && visible.current.text"
-          class="current-lyric font-semibold leading-tight text-center"
-        >
-          <!-- 无精确时间戳时展示稳定文本，不伪造逐字进度。 -->
-          <span
-            ref="currentTextRef"
-            class="plain-current-text"
-            :style="currentTextStyle"
+          </h1>
+          <h1
+            v-else-if="visible.current && visible.current.text"
+            class="current-lyric current-line-scaled font-semibold leading-tight"
           >
-            {{ visible.current.text }}
-          </span>
-        </h1>
-        <h1
-          v-else
-          class="current-lyric placeholder-lyric font-semibold leading-tight text-center"
-        >
-          {{ placeholderText }}
-        </h1>
-        <!-- 翻译行（外文歌双语显示） -->
-        <p
-          v-if="visible.current && visible.current.translation"
-          class="translation-line text-center"
-        >
-          <span
-            ref="translationTextRef"
-            class="translation-text"
-            :style="translationTextStyle"
-          >{{ visible.current.translation }}</span>
-        </p>
+            <!-- 无精确时间戳时展示稳定文本，不伪造逐字进度。 -->
+            <span
+              ref="currentTextRef"
+              class="plain-current-text"
+              :style="currentTextStyle"
+            >
+              {{ visible.current.text }}
+            </span>
+          </h1>
+          <h1
+            v-else
+            class="current-lyric current-line-scaled placeholder-lyric font-semibold leading-tight"
+            role="status"
+            aria-live="polite"
+          >
+            <!-- 连接/等待/空态文案同样走测量容器整体缩放，长提示不会被裁掉。 -->
+            <span
+              ref="currentTextRef"
+              class="plain-current-text placeholder-text"
+              :style="currentTextStyle"
+            >{{ placeholderText }}</span>
+          </h1>
+          <!-- 翻译行（外文歌双语显示） -->
+          <p
+            v-if="visible.current && visible.current.translation"
+            class="translation-line"
+          >
+            <span
+              ref="translationTextRef"
+              class="translation-text"
+              :style="translationTextStyle"
+            >{{ visible.current.translation }}</span>
+          </p>
+        </div>
       </div>
 
-      <!-- 下一行（中字号、半透明） -->
+      <!-- 下一行（中字号、半透明，叠深色底板保证浅色桌面可读） -->
       <p
         v-if="visible.next && prefs.showPrevNext"
-        class="context-line next-line truncate"
+        class="context-line next-line lyric-plate truncate"
       >
         {{ visible.next.text }}
       </p>
@@ -405,7 +489,7 @@ function onFontSizeChange(delta: number) {
       <!-- 歌曲信息 -->
       <p
         v-if="hasSong"
-        class="song-info truncate"
+        class="song-info lyric-plate truncate"
         :class="{ 'song-info--visible': toolbarVisible }"
       >
         {{ state.songName }}<span v-if="state.artists" class="ml-2">— {{ state.artists }}</span>
@@ -416,7 +500,7 @@ function onFontSizeChange(delta: number) {
     <div
       v-show="toolbarVisible"
       data-toolbar
-      class="toolbar absolute top-2 right-2 flex items-center rounded-lg bg-black/60 text-white/80 text-xs"
+      class="toolbar absolute top-2 right-2 flex items-center rounded-lg bg-black/60 text-white/90 text-xs"
       role="toolbar"
       aria-label="桌面歌词显示设置"
     >
@@ -432,7 +516,7 @@ function onFontSizeChange(delta: number) {
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
 
-      <span class="w-6 text-center tabular-nums">{{ prefs.fontSize }}</span>
+      <span class="w-8 text-center tabular-nums">{{ prefs.fontSize }}px</span>
 
       <!-- 字号 + -->
       <button
@@ -471,8 +555,8 @@ function onFontSizeChange(delta: number) {
         class="toolbar-btn"
         :class="{ 'is-active': prefs.showPrevNext }"
         :aria-pressed="prefs.showPrevNext"
-        :title="prefs.showPrevNext ? '隐藏上下行' : '显示上下行'"
-        :aria-label="prefs.showPrevNext ? '隐藏上下行' : '显示上下行'"
+        aria-label="显示上下行歌词"
+        :title="prefs.showPrevNext ? '隐藏上一行和下一行' : '显示上一行和下一行'"
         @click="prefs.showPrevNext = !prefs.showPrevNext"
         @mousedown.stop
       >
@@ -485,9 +569,9 @@ function onFontSizeChange(delta: number) {
       <button
         type="button"
         class="toolbar-btn"
-        :title="prefs.locked ? '已锁定，双击解锁' : '已解锁，可拖动'"
-        :aria-label="prefs.locked ? '解锁桌面歌词' : '锁定桌面歌词'"
         :aria-pressed="prefs.locked"
+        aria-label="锁定桌面歌词"
+        :title="prefs.locked ? '已锁定；双击歌词可解锁' : '未锁定；双击歌词可锁定'"
         @click="prefs.locked = !prefs.locked"
         @mousedown.stop
       >
@@ -521,10 +605,26 @@ body,
   overflow: hidden;
 }
 
-/* 核弹级透明：歌词内容区内所有元素强制透明，确保文字直接浮在桌面 */
-.lyric-content,
-.lyric-content * {
+/* 透明底：除深色底板 .lyric-plate 外，歌词内容区内所有元素强制透明，
+   让文字（与底板）直接浮在桌面上。底板是为了浅色桌面上的可读性，
+   是透明窗里唯一的不透明层，见下方 .lyric-plate。 */
+.lyric-content {
   background: transparent !important;
+}
+
+.lyric-content *:not(.lyric-plate) {
+  background: transparent !important;
+}
+
+/* 深色半透明底板：透明窗内唯一的不透明层。
+   白字在浅色壁纸上只有约 1.1:1，底板把文字局部背景压到近黑后达到
+   15:1 起；12% 透出桌面保留透明感。1px 内嵌白色描边 + 浮影让底板在
+   深色桌面上也有明确边界（不依赖任何主题 token，见 --lyric-plate）。 */
+.lyric-plate {
+  background: var(--lyric-plate, rgb(0 0 0 / 88%));
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 22%),
+    0 2px 10px rgb(0 0 0 / 32%);
 }
 
 * {
@@ -545,7 +645,7 @@ body,
   outline: none;
 }
 
-/* 工具条出现时为其让出水平安全区，避免在 800×120 窗口内盖住长歌词。 */
+/* 工具条出现时为其让出水平安全区，避免在 800×200 窗口内盖住长歌词。 */
 .lyric-root.toolbar-visible .lyric-content {
   padding-right: 300px;
 }
@@ -553,9 +653,12 @@ body,
 .context-line {
   position: absolute;
   z-index: 1;
+  box-sizing: border-box;
   max-width: 42%;
   margin: 0;
+  padding: 2px 8px;
   overflow: hidden;
+  border-radius: 6px;
   color: rgba(255, 255, 255, 0.62);
   font-size: clamp(11px, calc(var(--lyric-font-size, 28px) * 0.42), 16px);
   font-weight: 500;
@@ -585,33 +688,63 @@ body,
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  padding: 8px 10px;
+  /* 底板的内边距：给文字留出呼吸区，也覆盖文本描边/阴影的安全区。 */
+  padding: 8px 16px;
   overflow: visible;
   box-sizing: border-box;
+  border-radius: 12px;
   gap: 2px;
 }
 
+/* 当前行/翻译的测量容器：宽度永远不超过窗口可用宽度。
+   fitCurrentLine 用它的内容宽度（扣掉左右 padding）作为缩放基准；
+   文本超出时只做 transform 缩放，布局宽度不会被长行撑开。 */
+.current-line-frame {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  /* 长行缩放后的横向安全区（描边 0.55px + 6px 阴影 + 圆角余量）。 */
+  padding-inline: 12px;
+}
+
 .current-lyric {
+  position: relative;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   margin: 0;
   padding: 4px 0;
   overflow: visible;
+  box-sizing: border-box;
   font-size: var(--lyric-font-size, 28px);
   color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
   line-height: 1.06;
 }
 
+/* 只有带缩放文本的行需要左对齐的静态位置：
+   left:50% + translateX(-50%) 的居中依赖静态位置从容器左缘开始。 */
+.current-line-scaled {
+  text-align: left;
+}
+
 .song-info {
   position: absolute;
   z-index: 3;
+  box-sizing: border-box;
   bottom: 8px;
   left: 18px;
   max-width: 38%;
   margin: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
   color: rgba(255, 255, 255, 0.64);
-  font-size: clamp(10px, calc(var(--lyric-font-size, 28px) * 0.3), 12px);
+  font-size: clamp(11px, calc(var(--lyric-font-size, 28px) * 0.3), 12px);
   line-height: 1.15;
   text-align: left;
   opacity: 0;
@@ -629,10 +762,14 @@ body,
 
 /* 翻译行（外文歌双语）：小字号、半透，位于当前行与歌曲信息之间 */
 .translation-line {
+  position: relative;
   width: 100%;
   max-width: 100%;
   margin: 0;
   overflow: visible;
+  box-sizing: border-box;
+  /* 静态位置从容器左缘开始，配合 translateX(-50%) 做确定性居中。 */
+  text-align: left;
   color: rgba(255, 255, 255, 0.72);
   font-size: clamp(11px, calc(var(--lyric-font-size, 28px) * 0.38), 16px);
   font-weight: 500;
@@ -641,6 +778,8 @@ body,
 
 .translation-text {
   display: inline-block;
+  position: relative;
+  left: 50%;
   white-space: nowrap;
   transform-origin: center center;
   transition: transform 0.15s ease-out;
@@ -670,10 +809,13 @@ body,
   transition: opacity 0.15s linear;
 }
 
-/* 卡拉OK 容器：inline-block + relative，子层 absolute 才能对齐 */
+/* 卡拉OK 容器：inline-block + relative，子层 absolute 才能对齐。
+   left:50% + translateX(-50%) 让缩放中心恒为测量容器中心：
+   文本比容器宽时向两侧对称溢出（而不是只向右溢出窗口被裁掉）。 */
 .lyric-karaoke {
   display: inline-block;
   position: relative;
+  left: 50%;
   white-space: nowrap;
   transform-origin: center center;
   transition: transform 0.15s ease-out;
@@ -681,6 +823,8 @@ body,
 
 .plain-current-text {
   display: inline-block;
+  position: relative;
+  left: 50%;
   white-space: nowrap;
   color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
   transform-origin: center center;
@@ -688,6 +832,11 @@ body,
 }
 
 .placeholder-lyric {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+/* 连接/等待/空态文案使用与占位符一致的白 78%，并同样参与整体缩放。 */
+.placeholder-text {
   color: rgba(255, 255, 255, 0.78);
 }
 
@@ -701,7 +850,9 @@ body,
 
 .lyric-char__sung {
   display: inline-block;
-  color: var(--color-accent, #d65d0e);
+  /* 已唱字：强调色按底板对比度派生（只提亮、不换色相），保证浅色桌面上
+     底板内的已唱字仍 ≥4.5:1；--color-accent 仍用于工具条等黑底控件。 */
+  color: var(--lyric-accent, var(--color-accent, #d65d0e));
   clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
 }
 

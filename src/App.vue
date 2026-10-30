@@ -1,17 +1,31 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import Sidebar from "@/components/Sidebar.vue";
 import PlayerBarFloating from "@/components/PlayerBarFloating.vue";
+import GlobalNotice from "@/components/GlobalNotice.vue";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
+import { usePlayerStore } from "@/stores/player";
+import { useNoticeStore, type NoticeAction } from "@/stores/notice";
+import { useUserStore } from "@/stores/user";
+import { subscribeAuthEpoch } from "@/services/authEpoch";
 import { useLyric } from "@/composables/useLyric";
 import { useTauriBridge } from "@/composables/useTauriBridge";
 import { useCoverTheme } from "@/composables/useCoverTheme";
+import { describePlaybackFailure } from "@/utils/appErrors";
+import {
+  audioQualityOption,
+  formatActualQuality,
+  isQualityDowngraded,
+} from "@/utils/audioQuality";
+import type { AudioQuality } from "@/types/music";
 
 const desktopLyricsStore = useDesktopLyricsStore();
 const route = useRoute();
+const router = useRouter();
+const noticeStore = useNoticeStore();
 
 const isLoginRoute = computed(() => route.name === "Login");
 const isNowPlayingRoute = computed(() => route.name === "NowPlaying");
@@ -28,6 +42,113 @@ const isDesktopLyrics = computed(() => {
     console.warn("[app] 无法读取当前窗口 label，按桌面歌词窗处理", e);
     return true;
   }
+});
+
+// 桌面歌词窗只渲染 DesktopLyrics.vue，不能实例化主窗的 player/audio runtime；
+// 主窗的 player store 由这里显式持有，用于把播放失败与音质降级转成全局提示。
+const playerStore = isDesktopLyrics.value ? null : usePlayerStore();
+const userStore = playerStore ? useUserStore() : null;
+/** auth epoch 订阅的注销函数（主窗才订阅）。 */
+let stopAuthEpochSubscription: (() => void) | null = null;
+
+/** 全局播放失败提示固定用一个 id：连续失败时原地更新而不是堆叠成列。 */
+const PLAYBACK_NOTICE_ID = "playback-failure";
+
+/** 音质降级「同一组合只播报一次」的记录；登出/切号/进登录页后重置。 */
+const announcedQualityDowngrades = new Set<string>();
+
+/** 首次驻留托盘提示的 id：应用级、只出现一次，会话清理不应把它吞掉。 */
+const TRAY_HINT_NOTICE_ID = "tray-residence-hint";
+
+/** 会话切换或进入登录页时，旧会话的全局提示与降级播报记录都不再适用。 */
+function resetSessionNotices() {
+  announcedQualityDowngrades.clear();
+  // 驻留托盘提示与账号无关，且由用户手动关闭；会话清理只清其余提示。
+  for (const notice of [...noticeStore.notices]) {
+    if (notice.id !== TRAY_HINT_NOTICE_ID) noticeStore.dismiss(notice.id);
+  }
+}
+
+/** 重新登录：先清本地登录态再进登录页，否则路由守卫会把已登录用户弹回原页。 */
+function reloginFromNotice() {
+  if (!userStore) return;
+  void userStore.logout().then(() => {
+    void router.push({
+      name: "Login",
+      query: { redirect: route.fullPath },
+    });
+  });
+}
+
+if (playerStore) {
+  // 播放失败 → 全局状态条（人话标题 + 恢复动作 + 可折叠技术详情）。
+  watch(
+    () => playerStore.lastPlaybackFailure,
+    (failure) => {
+      if (!failure) {
+        noticeStore.dismiss(PLAYBACK_NOTICE_ID);
+        return;
+      }
+      const described = describePlaybackFailure(failure);
+      let action: NoticeAction | undefined;
+      if (described.relogin) {
+        action = { label: "重新登录", run: reloginFromNotice };
+      } else if (described.retryable) {
+        action = {
+          label: "重试",
+          run: () => {
+            void playerStore.retryFailedPlayback();
+          },
+        };
+      }
+      noticeStore.push({
+        id: PLAYBACK_NOTICE_ID,
+        tone: "error",
+        title: described.title,
+        hint: described.hint,
+        detail: described.detail,
+        action,
+        onDismiss: () => playerStore.dismissPlaybackFailure(),
+      });
+    },
+  );
+
+  // 音质降级：服务端实际档位低于所选时播报一次（状态诚实原则）。
+  // 同一「所选 → 实际」组合只提示一次，避免每首歌重复打扰。
+  const qualityDowngrade = computed<{
+    requested: AudioQuality;
+    actual: AudioQuality;
+  } | null>(() => {
+    const actual = playerStore.activeQuality;
+    if (actual === null || !playerStore.activeAudioResolved) return null;
+    if (!isQualityDowngraded(actual, playerStore.quality)) return null;
+    return { requested: playerStore.quality, actual };
+  });
+
+  watch(qualityDowngrade, (downgrade) => {
+    if (!downgrade) return;
+    const key = `${downgrade.requested}>${downgrade.actual}`;
+    if (announcedQualityDowngrades.has(key)) return;
+    announcedQualityDowngrades.add(key);
+    const requestedLabel = audioQualityOption(downgrade.requested).label;
+    const actualSummary =
+      formatActualQuality(downgrade.actual, playerStore.activeBitrate) ??
+      audioQualityOption(downgrade.actual).label;
+    noticeStore.push({
+      id: "quality-downgrade",
+      tone: "info",
+      title: `音质已降级：所选 ${requestedLabel}，实际 ${actualSummary}`,
+      hint: "服务端按账号权益与歌曲版权下发较低档位；可在播放条的音质菜单重新选择。",
+    });
+  });
+
+  // 登出/切号会整体换会话：旧账号的音质降级提示与去重记录不能带到新账号。
+  stopAuthEpochSubscription = subscribeAuthEpoch(resetSessionNotices);
+}
+
+// 进入登录页（未登录/会话过期）时清掉上一会话残留的全局提示。
+watch(isLoginRoute, (login) => {
+  if (login) resetSessionNotices();
 });
 
 // 桌面歌词 WebView 不能实例化主窗口 player/audio/MediaSession runtime。
@@ -53,6 +174,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  stopAuthEpochSubscription?.();
+  stopAuthEpochSubscription = null;
   tauriBridge?.teardown();
 });
 </script>
@@ -77,7 +200,7 @@ onBeforeUnmount(() => {
         'app-content-shell--no-player': isLoginRoute,
       }"
     >
-      <main class="app-main overflow-y-auto">
+      <main class="app-main overflow-y-auto" tabindex="-1">
         <div class="route-stage">
           <router-view v-slot="{ Component }">
             <transition name="fade-slide">
@@ -88,6 +211,9 @@ onBeforeUnmount(() => {
       </main>
 
       <PlayerBarFloating v-if="!isLoginRoute" />
+
+      <!-- 全局非阻塞状态条：内容区底部、播放条上方；登录页无播放条时贴底。 -->
+      <GlobalNotice :above-player-bar="!isLoginRoute" />
     </div>
   </div>
 </template>
@@ -109,6 +235,12 @@ onBeforeUnmount(() => {
 .app-main {
   height: calc(100% - var(--player-reserved-space));
   scroll-padding-bottom: 1rem;
+}
+
+/* 全局提示关闭后的焦点兜底目标是内容区（tabindex=-1）：不显示焦点环，
+   但读屏与键盘用户不会掉回 <body>。 */
+.app-main:focus {
+  outline: none;
 }
 
 /* 正在播放页自行保留悬浮栏安全区；登录页不显示播放栏。 */

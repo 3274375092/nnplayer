@@ -22,6 +22,7 @@ export interface LyricWindowPrefs {
 const STORAGE_KEY = "nnplayer.lyricWindow.prefs";
 const PREFS_SCHEMA_VERSION = 2;
 const DEFAULTS: LyricWindowPrefs = {
+  // 首次打开的产品口径：32px / 0.95（DESIGN.md 的桌面歌词默认值同步记录）。
   fontSize: 32,
   opacity: 0.95,
   textColor: "rgba(255,255,255,0.95)",

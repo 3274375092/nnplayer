@@ -58,3 +58,12 @@ test("fmtDuration large values", () => {
   assert.equal(format.fmtDuration(3661), "61:01");
   assert.equal(format.fmtDuration(9999), "166:39");
 });
+
+test("fmtLongDuration formats totals for humans", () => {
+  assert.equal(format.fmtLongDuration(0), "0 分");
+  assert.equal(format.fmtLongDuration(45_000), "45 秒");
+  assert.equal(format.fmtLongDuration(800_000), "13 分 20 秒");
+  assert.equal(format.fmtLongDuration(7_291_000), "2 小时 1 分");
+  assert.equal(format.fmtLongDuration(7_200_000), "2 小时");
+  assert.equal(format.fmtLongDuration(Number.NaN), "0 分");
+});

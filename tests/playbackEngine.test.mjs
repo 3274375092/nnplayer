@@ -192,6 +192,16 @@ test("错误重试：连续 3 次装载失败后停止自动切换", async () =>
   assert.equal(engine.getState().index, 2);
   assert.equal(engine.getState().loading, false);
   assert.equal(engine.getState().playing, false);
+
+  // 停止自动切换时必须留下可见汇总：失败歌曲、连续次数与停止标记。
+  const failure = engine.getState().lastPlaybackFailure;
+  assert.ok(failure, "停止自动切换后必须有失败通报");
+  assert.equal(failure.stage, "load");
+  assert.equal(failure.stopped, true);
+  assert.equal(failure.failCount, 3);
+  assert.equal(failure.songId, 3);
+  assert.deepEqual(failure.recentSongNames, ["S1", "S2", "S3"]);
+  assert.equal(failure.kind, null); // 普通 Error 不带后端 kind，由映射层按未知处理
 });
 
 test("暂停后的媒体错误不触发自动切歌", async () => {
@@ -585,5 +595,157 @@ test("invalidateSongUrlCache 保留当前媒体，仅让后续解析重新取 UR
   await flush();
   assert.equal(resolver.callsFor(2), 2); // 1 次预取 + 1 次失效后重新请求
   assert.equal(fake.last().src, "url://2");
+  assert.equal(engine.getState().currentSongId, 2);
+});
+
+// =============== 播放失败通报生命周期（task-6 复核修复） ===============
+
+test("reload 失败后切歌成功：清除旧失败通报，retry 不作用于新歌", async () => {
+  const { engine, fake, resolver } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  engine.invalidateSongUrlCache();
+  resolver.set(async () => {
+    throw new Error("Network 断网");
+  });
+  engine.reloadCurrent();
+  await flush();
+  assert.equal(engine.getState().lastPlaybackFailure?.stage, "reload");
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
+
+  // 网络恢复后用户切到下一首并成功开始播放：旧通报不应跨歌存活。
+  resolver.set(async (id) => `url://${id}`);
+  await engine.next();
+  await flush();
+  assert.equal(engine.getState().currentSongId, 2);
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+
+  // 没有通报可重试时，retry 不得把当前装载的 S2 当成失败歌曲重载。
+  await engine.retryFailedPlayback();
+  await flush();
+  assert.equal(engine.getState().currentSongId, 2);
+  assert.equal(engine.getState().index, 1);
+  assert.equal(fake.last().src, "url://2");
+});
+
+test("reload 失败后切歌尚未成功时 retry：重试目标仍是失败歌曲", async () => {
+  const { engine, fake, resolver } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  engine.invalidateSongUrlCache();
+  resolver.set(async () => {
+    throw new Error("Network 断网");
+  });
+  engine.reloadCurrent();
+  await flush();
+  assert.equal(engine.getState().lastPlaybackFailure?.stage, "reload");
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
+
+  // 让下一首的 URL 请求悬挂：currentSongId 已切到 2，但尚未成功开始播放。
+  let releasePendingNext = () => {};
+  resolver.set(
+    (id) =>
+      new Promise((resolve) => {
+        releasePendingNext = () => resolve(`url://${id}`);
+      }),
+  );
+  const pendingNext = engine.next();
+  await flush();
+  assert.equal(engine.getState().currentSongId, 2);
+  // 用户意图播放尚未成功，因此 S1 的失败通报仍在。
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
+
+  // 网络恢复后点重试：必须重试失败歌曲 S1，而不是重载当前已装载的 S2。
+  resolver.set(async (id) => `url://${id}`);
+  const retry = engine.retryFailedPlayback();
+  await flush();
+  releasePendingNext();
+  await Promise.allSettled([pendingNext, retry]);
+  await flush();
+
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(engine.getState().index, 0);
+  assert.equal(fake.last().src, "url://1");
+});
+
+test("自动跳歌恢复链的成功不清失败通报；用户点播成功后清除", async () => {
+  const { engine, resolver } = createEngine();
+  resolver.set(async (id) => {
+    if (id === 1) throw new Error("Network");
+    return `url://${id}`;
+  });
+  await engine.playList([song(1), song(2), song(3)], 0);
+  await flush();
+
+  // S1 装载失败 → 自动跳到 S2 成功；失败链内的成功不得吞掉 S1 的通报。
+  const failure = engine.getState().lastPlaybackFailure;
+  assert.ok(failure, "自动跳到下一首后失败通报必须保留");
+  assert.equal(failure.songId, 1);
+  assert.equal(failure.failCount, 1);
+  assert.equal(engine.getState().currentSongId, 2);
+
+  // 用户显式下一次：S3 成功开始播放后清除旧通报。
+  await engine.next();
+  await flush();
+  assert.equal(engine.getState().currentSongId, 3);
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+});
+
+test("dismiss 清除失败通报；retry 重播失败歌曲并清通报", async () => {
+  const { engine, fake, resolver } = createEngine();
+  resolver.set(async (id) => {
+    if (id === 1) throw new Error("Network");
+    return `url://${id}`;
+  });
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
+
+  engine.dismissPlaybackFailure();
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+
+  // 再次失败后点重试：网络恢复，应重播失败歌曲 S1。
+  resolver.set(async (id) => {
+    if (id === 1) throw new Error("Network");
+    return `url://${id}`;
+  });
+  await engine.playSong(song(1));
+  await flush();
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
+  assert.equal(engine.getState().currentSongId, 2); // 已自动跳到 S2
+
+  resolver.set(async (id) => `url://${id}`);
+  await engine.retryFailedPlayback();
+  await flush();
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(engine.getState().index, 0);
+  assert.equal(fake.last().src, "url://1");
+  assert.equal(fake.last().playCalls, 1);
+});
+
+test("失败歌曲已被移出队列：retry 明确 no-op 并保留通报", async () => {
+  const { engine, resolver } = createEngine();
+  resolver.set(async (id) => {
+    if (id === 1) throw new Error("Network");
+    return `url://${id}`;
+  });
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(engine.getState().currentSongId, 2);
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
+
+  // 用户把失败的 S1 从队列移除（当前播放的是 S2）。
+  engine.removeFromQueue(0);
+  await flush();
+  assert.equal(engine.getState().queue.length, 1);
+  assert.equal(engine.getState().queue[0]?.id, 2);
+
+  await engine.retryFailedPlayback();
+  await flush();
+
+  // 不擅自播放别的歌，也不静默吞掉通报（用户仍可手动关闭）。
+  assert.equal(engine.getState().lastPlaybackFailure?.songId, 1);
   assert.equal(engine.getState().currentSongId, 2);
 });

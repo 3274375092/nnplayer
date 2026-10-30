@@ -1,6 +1,28 @@
 export const DEFAULT_THEME_SEED = "#af3a03";
 export const DEFAULT_DESKTOP_ACCENT = "#d65d0e";
 
+/**
+ * 封面换肤只允许改变「光」，不允许夺走品牌身份：UI 强调色的色相必须收敛在
+ * 暖色窗口内（陶土≈20°、琥珀≈40°），绿/蓝/紫封面只影响背景与环境光的暖度。
+ */
+export const COVER_ACCENT_HUE_MIN = 10;
+export const COVER_ACCENT_HUE_MAX = 55;
+/** 十六进制量化会让测量 hue 偏移近 0.5°，映射窗口内留 1° 余量。 */
+const ACCENT_HUE_MAPPED_MIN = COVER_ACCENT_HUE_MIN + 1;
+const ACCENT_HUE_MAPPED_MAX = COVER_ACCENT_HUE_MAX - 1;
+const TERRACOTTA_HUE = 20;
+/** 背景/环境光色相向陶土靠拢的比例，保留封面差异但纸面始终暖。 */
+const AMBIENT_HUE_PULL = 0.68;
+/** 与 styles.css 派生面一致的合成参数：把 accent-subtle 洗色复算成浏览器实色。 */
+const CANVAS_NEUTRAL = "#f6f7f6";
+const CANVAS_BACKGROUND_WEIGHT = 0.36;
+const RAISED_NEUTRAL = "#ffffff";
+const RAISED_CARD_WEIGHT = 0.42;
+const SURFACE_SOFT_ALPHA = 0.05;
+const ACCENT_SUBTLE_ALPHA = 0.12;
+/** 强调色文字叠在 accent-subtle 洗色上的下限（比纸面强调色再留一点渲染余量）。 */
+const ACCENT_ON_SUBTLE_MIN_CONTRAST = 4.65;
+
 export const GRUVBOX_LIGHT_THEME = {
   background: "#fbf1c7",
   backgroundHard: "#f9f5d7",
@@ -25,6 +47,7 @@ export const DYNAMIC_THEME_CSS_VARIABLES = [
   "--color-on-accent",
   "--color-accent-secondary",
   "--color-accent-subtle",
+  "--color-accent-on-subtle",
   "--color-glow",
 ] as const;
 
@@ -234,9 +257,37 @@ function hueDistance(a: number, b: number): number {
   return Math.min(distance, 360 - distance);
 }
 
+function normalizeHue(hue: number): number {
+  return ((hue % 360) + 360) % 360;
+}
+
+/**
+ * 把封面色相连续折叠进暖色窗口：窗口内的暖色原样保留（陶土≈20°、琥珀≈40°），
+ * 窗口外的冷色圆弧线性压缩到窗口边界之间。映射在两端都连续，且不同冷色仍落
+ * 到不同的暖色上，所以切歌有变化、品牌色相却不被取代。
+ */
+function warmHue(rawHue: number): number {
+  const hue = normalizeHue(rawHue);
+  const span = ACCENT_HUE_MAPPED_MAX - ACCENT_HUE_MAPPED_MIN;
+  if (hue >= ACCENT_HUE_MAPPED_MIN && hue <= ACCENT_HUE_MAPPED_MAX) {
+    return hue;
+  }
+  const coldArc = 360 - span;
+  const position = hue > ACCENT_HUE_MAPPED_MAX
+    ? hue - ACCENT_HUE_MAPPED_MAX
+    : hue + 360 - ACCENT_HUE_MAPPED_MAX;
+  return ACCENT_HUE_MAPPED_MAX - (span * position) / coldArc;
+}
+
+/** 背景/环境光色相：先折叠进暖色窗口，再向陶土色相拉近，纸面永远带暖。 */
+function ambientHue(rawHue: number): number {
+  const hue = warmHue(rawHue);
+  return hue + (TERRACOTTA_HUE - hue) * AMBIENT_HUE_PULL;
+}
+
 function ambientTint(color: HSL): string {
   return hslToHex(
-    color.h,
+    ambientHue(color.h),
     clamp(color.s * 0.72 + 0.12, 0.2, 0.58),
     0.55,
   );
@@ -247,7 +298,7 @@ function ambientStrength(color: HSL, offset = 0): number {
 }
 
 /**
- * 背景端点预留高于 4.5:1 的安全余量，覆盖 CSS 渐变在 sRGB 中插值时的
+ * 背景端点预留高于 4.65:1 的安全余量，覆盖 CSS 渐变在 sRGB 中插值时的
  * 小幅亮度波动，避免三级正文落到可读阈值以下。
  */
 function accessibleTintedSurface(
@@ -273,8 +324,73 @@ function accessibleTintedSurface(
 }
 
 /**
+ * accent-subtle 是 12% 的透明洗色，真实底色由它叠在下面的派生面上决定：
+ * 侧栏 = surface-soft 叠 canvas，窄窗侧栏浮层 = --color-bg，队列徽标 = 叠两次的
+ * raised 纸面。这里按 styles.css 的公式复算这几种合成色，供下限推导逐个校验。
+ */
+function accentSubtleBackdrops(
+  background: string,
+  accent: string,
+): string[] {
+  const wash = (base: string, layers = 1): string => {
+    let color = base;
+    for (let layer = 0; layer < layers; layer += 1) {
+      color = mixHex(color, accent, ACCENT_SUBTLE_ALPHA);
+    }
+    return color;
+  };
+  const canvas = mixHex(
+    CANVAS_NEUTRAL,
+    background,
+    CANVAS_BACKGROUND_WEIGHT,
+  );
+  const surfaceSoft = mixHex(
+    canvas,
+    GRUVBOX_LIGHT_THEME.foreground,
+    SURFACE_SOFT_ALPHA,
+  );
+  const raised = mixHex(
+    RAISED_NEUTRAL,
+    GRUVBOX_LIGHT_THEME.card,
+    RAISED_CARD_WEIGHT,
+  );
+
+  return [
+    wash(surfaceSoft),
+    wash(background),
+    wash(raised, 2),
+  ];
+}
+
+/**
+ * 叠在 accent-subtle 洗色上的强调色文字：沿用强调色的色相与饱和度，只压暗
+ * 明度直到对所有真实洗色底都满足下限，保住“深陶土”的品牌声线，不换成正文墨色。
+ */
+function accessibleAccentOnSubtle(
+  h: number,
+  s: number,
+  initialLightness: number,
+  backdrops: string[],
+): string {
+  let lightness = clamp(initialLightness, 0.16, 0.44);
+  let color = hslToHex(h, s, lightness);
+  while (
+    backdrops.some(
+      (backdrop) =>
+        contrastRatio(color, backdrop) < ACCENT_ON_SUBTLE_MIN_CONTRAST,
+    ) &&
+    lightness > 0.16
+  ) {
+    lightness = Math.max(0.16, lightness - 0.01);
+    color = hslToHex(h, s, lightness);
+  }
+  return color;
+}
+
+/**
  * 将封面原色映射到浅色主题：结构色保持 Gruvbox Light，只让背景色温和
- * 强调色随封面变化。这样切歌时有明显反馈，又不会出现暗底或低对比文字。
+ * 强调色随封面变化。背景/环境光的 hue 向陶土拉近，强调色 hue 折叠进暖色
+ * 窗口（10°–55°），因此切歌仍有可见反馈，品牌却始终是暖陶土而不是封面主色。
  */
 export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
   const palette = normalizePalette(input);
@@ -291,12 +407,12 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
   const backgroundFromSource = companions[0] ?? analogousColor(24);
   const backgroundToSource = companions[1] ?? analogousColor(-24);
   const ambientPrimary = hslToHex(
-    backgroundFromSource.h,
+    ambientHue(backgroundFromSource.h),
     clamp(backgroundFromSource.s * 0.94 + 0.14, 0.42, 0.74),
     0.5,
   );
   const ambientSecondary = hslToHex(
-    backgroundToSource.h,
+    ambientHue(backgroundToSource.h),
     clamp(backgroundToSource.s * 0.94 + 0.14, 0.42, 0.74),
     0.5,
   );
@@ -318,6 +434,7 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
   );
 
   const { h, s, l } = primary;
+  const accentHue = warmHue(h);
   const accentSaturation = clamp(s * 1.08 + 0.18, 0.48, 0.76);
   const accentSurfaces = [
     background,
@@ -327,19 +444,25 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
     GRUVBOX_LIGHT_THEME.cardHover,
   ];
   const { color: accent, lightness: accentLightness } = accessibleDarkAccent(
-    h,
+    accentHue,
     accentSaturation,
     clamp(l * 0.72, 0.32, 0.42),
     accentSurfaces,
   );
   const { color: accentSecondary } = accessibleDarkAccent(
-    (h + 8) % 360,
+    warmHue(h + 8),
     clamp(accentSaturation * 0.9, 0.44, 0.68),
     Math.min(0.44, accentLightness + 0.08),
     accentSurfaces,
   );
+  const accentOnSubtle = accessibleAccentOnSubtle(
+    accentHue,
+    accentSaturation,
+    accentLightness,
+    accentSubtleBackdrops(background, accent),
+  );
   const desktopAccent = hslToHex(
-    h,
+    accentHue,
     clamp(s * 1.06 + 0.2, 0.58, 0.82),
     0.58,
   );
@@ -355,7 +478,8 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
       "--color-accent": accent,
       "--color-on-accent": foregroundFor(accent),
       "--color-accent-secondary": accentSecondary,
-      "--color-accent-subtle": hexToRgba(accent, 0.12),
+      "--color-accent-subtle": hexToRgba(accent, ACCENT_SUBTLE_ALPHA),
+      "--color-accent-on-subtle": accentOnSubtle,
       "--color-glow": hexToRgba(accent, 0.22),
     },
     uiAccent: accent,

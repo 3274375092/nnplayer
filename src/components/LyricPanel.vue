@@ -286,35 +286,43 @@ const hasSong = computed(() => player.currentSong !== null);
       class="flex items-center justify-center text-text-secondary text-sm"
       :style="{ height: `${lyricViewportHeight}px` }"
     >
-      暂未播放歌曲
+      还没有播放歌曲
     </div>
     <div
       v-else-if="loading"
       class="flex items-center justify-center text-text-secondary text-sm"
       :style="{ height: `${lyricViewportHeight}px` }"
+      role="status"
     >
-      歌词加载中…
+      正在加载歌词…
     </div>
     <div
       v-else-if="error"
-      class="flex flex-col gap-2 items-center justify-center text-accent text-sm"
+      class="lyric-error flex flex-col gap-2 items-center justify-center text-sm"
       :style="{ height: `${lyricViewportHeight}px` }"
+      role="alert"
     >
-      <span>{{ error }}</span>
+      <p class="lyric-error-title">{{ error.title }}</p>
+      <p v-if="error.hint" class="lyric-error-hint">{{ error.hint }}</p>
       <button
+        v-if="error.retryable"
         type="button"
         class="px-3 py-1 rounded-md bg-surface-soft hover:bg-surface-strong"
         @click="retry"
       >
         重试
       </button>
+      <details v-if="error.detail" class="lyric-error-detail">
+        <summary>技术详情</summary>
+        <code>{{ error.detail }}</code>
+      </details>
     </div>
     <div
       v-else-if="!hasLyric"
       class="flex items-center justify-center text-text-secondary text-sm"
       :style="{ height: `${lyricViewportHeight}px` }"
     >
-      暂无歌词
+      这首歌没有提供歌词
     </div>
 
     <!-- 歌词内容（视口 + 弹簧平移） -->
@@ -373,7 +381,7 @@ const hasSong = computed(() => player.currentSong !== null);
             <span class="sr-only">{{ line.text }}</span>
           </template>
           <span v-else-if="line.text">{{ line.text }}</span>
-          <span v-else class="opacity-50">·</span>
+          <span v-else>·</span>
           <!-- 翻译：当前行及邻近行显示，小字号半透明 -->
           <span
             v-if="line.translation"
@@ -414,13 +422,67 @@ const hasSong = computed(() => player.currentSong !== null);
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  color: color-mix(in srgb, var(--color-text-primary) 74%, transparent);
+  /* 面板标题：peat，对四个纸面 7.78:1 起（旧 74% mix 仅 5.88:1）。 */
+  color: var(--color-text-secondary);
   letter-spacing: 0;
 }
 
 .lyric-panel__song {
   max-width: 62%;
-  color: color-mix(in srgb, var(--color-text-primary) 48%, transparent);
+  /* 右上元信息 12px：ash，对四个纸面 5.74:1 起（旧 48% mix 实测 2.79:1）。 */
+  color: var(--color-text-tertiary);
+}
+
+/* 歌词失败态：标题说明原因、提示恢复方式，后端原文只在展开后出现。 */
+.lyric-error {
+  padding: 0 1rem;
+  overflow-y: auto;
+  text-align: center;
+}
+
+.lyric-error-title {
+  margin: 0;
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.lyric-error-hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.lyric-error-detail {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.lyric-error-detail summary {
+  cursor: pointer;
+}
+
+.lyric-error-detail summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.lyric-error-detail code {
+  display: block;
+  max-height: 80px;
+  margin-top: 4px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: left;
 }
 
 .lyric-viewport {
@@ -446,7 +508,12 @@ const hasSong = computed(() => player.currentSong !== null);
   pointer-events: none;
 }
 
-/* 行基础样式：允许长歌词换行，真实高度由 ResizeObserver 参与居中计算。 */
+/* 行基础样式：允许长歌词换行，真实高度由 ResizeObserver 参与居中计算。
+   色阶必须同时满足"阅读层级"和"4.5:1 正文下限"：
+   旧 46% / 58% mix 在纸上只有 2.67 / 3.67:1，是评审判定的低对比来源。
+   现在用 charcoal 墨色的 70% → 90% → 实底三档，动态染色纸最暗端点
+   （#f2e5bc）最差值 4.95 / 6.64 / 8.93:1，raised 卡上 5.4 / 7.5 / 10.4:1；
+   当前行再叠加 600 字重与 accent 洗色。 */
 .lyric-line {
   display: block;
   width: 100%;
@@ -459,7 +526,8 @@ const hasSong = computed(() => player.currentSong !== null);
   overflow-wrap: anywhere;
   word-break: break-word;
   border-radius: 6px;
-  color: color-mix(in srgb, var(--color-text-primary) 46%, transparent);
+  /* 远行（距离 ≥3）：最低一档，最暗染色纸 4.95:1（≥ DESIGN 4.65 正文下限）。 */
+  color: color-mix(in srgb, var(--color-text-primary) 70%, transparent);
   font-family: inherit;
   font-size: 0.975rem;
   font-weight: 500;
@@ -471,20 +539,21 @@ const hasSong = computed(() => player.currentSong !== null);
 }
 
 .lyric-line.distance-2 {
-  color: color-mix(in srgb, var(--color-text-primary) 58%, transparent);
+  color: color-mix(in srgb, var(--color-text-primary) 80%, transparent);
 }
 
 .lyric-line.distance-1 {
-  color: color-mix(in srgb, var(--color-text-primary) 74%, transparent);
+  color: color-mix(in srgb, var(--color-text-primary) 90%, transparent);
 }
 
 .lyric-line:not(.is-active):hover {
-  color: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
+  color: var(--color-text-primary);
   background-color: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
 
 .lyric-line.is-active {
-  color: color-mix(in srgb, var(--color-text-primary) 96%, transparent);
+  /* 当前行：实底炭墨 + 600 字重 + accent 洗色，保持最强层级（12.99:1 起）。 */
+  color: var(--color-text-primary);
   background: linear-gradient(
     90deg,
     color-mix(in srgb, var(--color-accent) 8%, transparent),
@@ -510,7 +579,9 @@ const hasSong = computed(() => player.currentSong !== null);
    相比旧的"双层 span + clip-path"：节点减半、去掉绝对定位层，
    渐变擦色与 clip-path 视觉一致。不打 per-char 阴影（逐字光栅大头），
    当前行本身已有 accent 高亮 + 背景渐变，视觉层级足够。
-   不加 transition：rAF 每帧更新 pct，CSS 补间反而会引入延迟让逐字失同步。 */
+   不加 transition：rAF 每帧更新 pct，CSS 补间反而会引入延迟让逐字失同步。
+   未唱部分用实底 charcoal：旧 62% mix 只有 4.11:1，是当前行待唱文字
+   在纸上的低对比来源；实底后对染色纸仍有 11.56:1。 */
 .lyric-char {
   display: inline-block;
   white-space: pre;
@@ -519,7 +590,7 @@ const hasSong = computed(() => player.currentSong !== null);
   background-image: linear-gradient(
     90deg,
     var(--color-accent) var(--char-pct, 0%),
-    color-mix(in srgb, var(--color-text-primary) 62%, transparent) var(--char-pct, 0%)
+    var(--color-text-primary) var(--char-pct, 0%)
   );
   -webkit-background-clip: text;
   background-clip: text;
@@ -529,7 +600,7 @@ const hasSong = computed(() => player.currentSong !== null);
   background-image: linear-gradient(
     270deg,
     var(--color-accent) var(--char-pct, 0%),
-    color-mix(in srgb, var(--color-text-primary) 62%, transparent) var(--char-pct, 0%)
+    var(--color-text-primary) var(--char-pct, 0%)
   );
 }
 
@@ -537,28 +608,22 @@ const hasSong = computed(() => player.currentSong !== null);
   will-change: transform;
 }
 
-/* 翻译行：小字号、半透明，当前行更亮。必须显式设 color 覆盖 .is-active 的 transparent */
+/* 翻译行：小字号、次级但不低于正文下限。旧实现是 0.3–0.68 的 opacity
+   （1.82–4.90:1），现在统一用 70% 墨色（最暗染色纸 4.95:1），当前行翻译
+   回到实底 charcoal，保持"当前行更亮"的层级。必须显式设 color 覆盖
+   .is-active 的 transparent。 */
 .lyric-translation {
   display: block;
   font-size: 0.78rem;
   font-style: normal;
   line-height: 1.5;
-  color: var(--color-text-primary);
-  opacity: 0.3;
+  color: color-mix(in srgb, var(--color-text-primary) 70%, transparent);
   margin-top: 3px;
-  transition: opacity 0.3s;
-}
-
-.distance-2 .lyric-translation {
-  opacity: 0.38;
-}
-
-.distance-1 .lyric-translation {
-  opacity: 0.52;
+  transition: color 0.3s;
 }
 
 .lyric-translation.is-active-translation {
-  opacity: 0.68;
+  color: var(--color-text-primary);
 }
 
 @media (prefers-reduced-motion: reduce) {

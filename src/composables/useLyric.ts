@@ -26,6 +26,7 @@ import {
   type Ref,
 } from "vue";
 import { getLyric } from "@/composables/useNcmApi";
+import { describeAppError, type UserFacingError } from "@/utils/appErrors";
 import { useDesktopLyricsPublisher } from "@/composables/useDesktopLyricsPublisher";
 import {
   getYrcLineStartMs,
@@ -79,8 +80,8 @@ export interface UseLyricReturn {
   progressMs: Ref<number>;
   /** 加载中 */
   loading: Ref<boolean>;
-  /** 加载/解析错误 */
-  error: Ref<string>;
+  /** 加载/解析错误（已映射成「发生了什么 + 怎么恢复」，面板不展示后端原文） */
+  error: Ref<UserFacingError | null>;
   /** 是否存在原文歌词 */
   hasLyric: ComputedRef<boolean>;
   /** 重新拉取当前歌曲歌词（错误态手动重试） */
@@ -103,7 +104,7 @@ function createLyricEngine(): UseLyricReturn {
   const activeLineIndex = ref<number>(-1);
   const progressMs = ref<number>(0);
   const loading = ref<boolean>(false);
-  const error = ref<string>("");
+  const error = ref<UserFacingError | null>(null);
   const currentSongId = ref<number | null>(null);
 
   const hasLyric = computed(() => lines.value.length > 0);
@@ -344,7 +345,7 @@ function createLyricEngine(): UseLyricReturn {
       activeLineIndex.value = -1;
       progressMs.value = 0;
       loading.value = false;
-      error.value = "";
+      error.value = null;
       cancelRetryTimer();
       return;
     }
@@ -352,7 +353,7 @@ function createLyricEngine(): UseLyricReturn {
     preciseTokensByLine.value = [];
     activeLineIndex.value = -1;
     progressMs.value = 0;
-    error.value = "";
+    error.value = null;
     loading.value = true;
     try {
       const timeline = await resolveTimeline(songId);
@@ -362,10 +363,10 @@ function createLyricEngine(): UseLyricReturn {
       cancelRetryTimer();
     } catch (e) {
       if (seq !== lyricSeq) return;
-      // 保留原始错误对象：AppError 的 kind/original 是后端诊断的关键，
-      // 只把 message 写进 UI 会让失败原因不可追溯。
+      // 原始错误对象交给 appErrors 映射：kind/original 是后端诊断的关键，
+      // 面板只展示用户语言，后端原文收在可折叠技术详情里。
       console.warn("[lyric] 歌词加载失败", e);
-      error.value = e instanceof Error ? e.message : "歌词加载失败";
+      error.value = describeAppError(e);
       // Timeline 身份必须继续匹配当前媒体，这样桌面窗口能收到“已同步但
       // 暂无歌词”的空快照；显式 force 参数负责绕过同歌短路并继续重试。
       if (player.currentSong?.id === songId) {
@@ -388,7 +389,7 @@ function createLyricEngine(): UseLyricReturn {
         activeLineIndex.value = -1;
         progressMs.value = 0;
         loading.value = false;
-        error.value = "";
+        error.value = null;
         currentSongId.value = null;
         return;
       }
@@ -401,7 +402,7 @@ function createLyricEngine(): UseLyricReturn {
     const songId = player.currentSong?.id ?? null;
     if (songId === null) return;
     resetRetryState(songId);
-    error.value = "";
+    error.value = null;
     void loadFor(songId, true);
   }
 

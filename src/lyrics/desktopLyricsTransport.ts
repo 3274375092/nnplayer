@@ -20,6 +20,11 @@ export interface DesktopLyricsSnapshotRecoveryRuntime<TimerHandle> {
 export interface DesktopLyricsSnapshotRecoveryOptions
   extends DesktopLyricsTransportWatchdogOptions {
   burstRetryDelaysMs?: readonly number[];
+  /**
+   * 传输静默被判定为 stale、触发新一轮请求前调用。
+   * 桌面歌词窗口用它把"连接较慢/连接中断"变成可见状态，而不是只留在日志里。
+   */
+  onRetry?: () => void;
 }
 
 /**
@@ -126,7 +131,10 @@ export function createDesktopLyricsSnapshotRecovery<TimerHandle>(
       now: runtime.now,
       schedule: runtime.schedule,
       cancel: runtime.cancel,
-      onStale: () => ensure(currentSongId),
+      onStale: () => {
+        options.onRetry?.();
+        ensure(currentSongId);
+      },
     },
     options,
   );

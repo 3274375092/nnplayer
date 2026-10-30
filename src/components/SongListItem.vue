@@ -33,7 +33,7 @@ defineEmits<{
     class="playlist-tile group block w-full border-0 bg-transparent p-0 pb-0.5 text-left outline-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 focus-visible:-translate-y-0.5 active:translate-y-0 active:scale-[0.985]"
     @click="$emit('click')"
   >
-    <span class="playlist-cover relative block aspect-square w-full overflow-hidden rounded-[18px] bg-surface-soft ring-1 ring-ring transition-shadow duration-300 group-hover:shadow-[0_18px_38px_rgba(0,0,0,0.38)] group-focus-visible:shadow-[0_18px_38px_rgba(0,0,0,0.38)]">
+    <span class="playlist-cover relative block aspect-square w-full overflow-hidden rounded-[18px] bg-surface-soft transition-shadow duration-300">
       <img
         v-if="playlist.coverUrl"
         :src="playlistCover"
@@ -116,9 +116,14 @@ defineEmits<{
   transition-delay: 0s;
 }
 
+.playlist-tile:hover .playlist-cover {
+  box-shadow: var(--shadow-floating);
+}
+
 .playlist-tile:focus-visible .playlist-cover {
   box-shadow:
     0 0 0 2px var(--color-bg),
-    0 0 0 4px var(--color-accent);
+    0 0 0 4px var(--color-accent),
+    var(--shadow-floating);
 }
 </style>

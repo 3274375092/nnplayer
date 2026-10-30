@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   ArrowDown,
@@ -15,6 +15,7 @@ import {
   SkipBack,
   SkipForward,
   Volume2,
+  VolumeX,
 } from "@lucide/vue";
 import ProgressBar from "@/components/ProgressBar.vue";
 import { fmtDuration } from "@/utils/format";
@@ -23,7 +24,6 @@ import { usePlayerStore } from "@/stores/player";
 import { coverImageUrl } from "@/utils/coverImage";
 import {
   AUDIO_QUALITY_OPTIONS,
-  actualQualityShortLabel,
   audioQualityOption,
   formatActualQuality,
   isQualityDowngraded,
@@ -33,8 +33,14 @@ import type { AudioQuality } from "@/types/music";
 const player = usePlayerStore();
 const router = useRouter();
 
-const cur = computed(() => fmtDuration(player.audioState.currentTime));
-const dur = computed(() => fmtDuration(player.audioState.duration));
+const cur = computed(() =>
+  player.currentSong ? fmtDuration(player.audioState.currentTime) : "--:--",
+);
+const dur = computed(() =>
+  player.currentSong && player.audioState.duration > 0
+    ? fmtDuration(player.audioState.duration)
+    : "--:--",
+);
 const currentCover = computed(() =>
   coverImageUrl(player.currentSong?.picUrl, 48),
 );
@@ -77,6 +83,7 @@ const QUALITY_MENU_WIDTH = 240;
 const qualityMenuOpen = ref(false);
 const qualityButtonRef = ref<HTMLButtonElement | null>(null);
 const qualityMenuRef = ref<HTMLElement | null>(null);
+const coverButtonRef = ref<HTMLButtonElement | null>(null);
 const qualityMenuStyle = ref<{
   width: string;
   bottom: string;
@@ -84,17 +91,12 @@ const qualityMenuStyle = ref<{
 } | null>(null);
 
 // quality 是用户所选的请求档位；activeQuality/activeBitrate 是服务端
-// 实际下发的档位与码率。徽标与菜单的“当前”标记一律显示实际值。
+// 实际下发的档位与码率。徽标与菜单的“实际”标记一律显示实际值。
 
 const requestedQuality = computed(() => audioQualityOption(player.quality));
 
 /** 已装载媒体（引擎已开始装载当前曲）才存在“当前实际音质”。 */
 const mediaLoaded = computed(() => player.audioState.currentSongId !== null);
-
-/** 实际音质短标签：优先档位短标签，档位未知时退化为实际码率。 */
-const activeQualityShort = computed(() =>
-  actualQualityShortLabel(player.activeQuality, player.activeBitrate),
-);
 
 /** 实际音质完整描述，如 "极高 · 320 kbps"。 */
 const activeQualitySummary = computed(() =>
@@ -114,11 +116,14 @@ const qualityPending = computed(
     player.audioState.loading,
 );
 
-/** 徽标只显示当前实际音质；未播放时显示所选档位作为待用选择。 */
+/** 徽标只显示当前实际音质；未播放时显示所选档位作为待用选择。
+ *  档位未知时明确写「未知」，不把裸码率（如 3338K）当成档位短标签。 */
 const qualityBadgeLabel = computed(() => {
   if (!mediaLoaded.value) return requestedQuality.value.shortLabel;
-  if (activeQualityShort.value !== null) return activeQualityShort.value;
-  return qualityPending.value ? "…" : "—";
+  if (player.activeQuality !== null) {
+    return audioQualityOption(player.activeQuality).shortLabel;
+  }
+  return qualityPending.value ? "…" : "未知";
 });
 
 /** 按钮 title / aria-label：同时说明实际值与所选值，降级必须明说。 */
@@ -146,7 +151,7 @@ const qualityButtonTitle = computed(() => {
 const qualityFooter = computed(() => {
   const requested = requestedQuality.value;
   if (!mediaLoaded.value) {
-    return `未播放；所选 ${requested.label}。`;
+    return `尚未播放；所选 ${requested.label}。`;
   }
   if (!player.activeAudioResolved) {
     return qualityPending.value
@@ -155,7 +160,7 @@ const qualityFooter = computed(() => {
   }
   const summary = activeQualitySummary.value;
   if (summary === null) {
-    return "当前实际音质未知；上游未返回档位与码率。";
+    return "当前实际音质未知；服务端未返回档位与码率。";
   }
   if (qualityDowngraded.value) {
     return `当前实际：${summary}。所选 ${requested.label} 未生效，服务端按账号权益下发较低档位。`;
@@ -250,6 +255,16 @@ watch(qualityMenuOpen, (open) => {
 onUnmounted(() => {
   window.removeEventListener("resize", positionQualityMenu);
   document.removeEventListener("keydown", onDocumentKeydown);
+  window.removeEventListener("nnplayer:now-playing-closed", focusCoverEntry);
+});
+
+/** 正在播放页关闭后把焦点还给封面入口：X 只是视觉出口，焦点不应掉到 body。 */
+function focusCoverEntry() {
+  void nextTick(() => coverButtonRef.value?.focus());
+}
+
+onMounted(() => {
+  window.addEventListener("nnplayer:now-playing-closed", focusCoverEntry);
 });
 
 function toggleQualityMenu() {
@@ -292,9 +307,13 @@ function openNowPlaying() {
     <!-- 左：cover + info -->
     <div class="mobile-song-section flex items-center gap-4 w-full min-w-0">
       <button
+        ref="coverButtonRef"
         type="button"
         class="player-cover-button mobile-player-cover relative w-12 h-12 shrink-0"
-        :title="player.currentSong ? '进入正在播放' : '尚未播放'"
+        :title="player.currentSong ? '打开正在播放页' : '打开正在播放页（尚未播放）'"
+        :aria-label="
+          player.currentSong ? '打开正在播放页' : '打开正在播放页（尚未播放）'
+        "
         @click="openNowPlaying"
       >
         <img
@@ -331,8 +350,8 @@ function openNowPlaying() {
         <button
           type="button"
           class="player-icon-button"
-          :title="`播放模式：${modeLabel}`"
-          :aria-label="`播放模式：${modeLabel}`"
+          :title="`切换播放模式（当前：${modeLabel}）`"
+          :aria-label="`切换播放模式（当前：${modeLabel}）`"
           @click="player.togglePlayMode"
         >
           <component :is="modeIcon" :size="16" :stroke-width="1.6" />
@@ -372,6 +391,8 @@ function openNowPlaying() {
         >
           <SkipForward :size="17" :stroke-width="1.6" />
         </button>
+        <!-- 与左侧「播放模式」等宽的不可见占位：让 40px 播放键保持在内容壳中线。 -->
+        <span class="player-icon-spacer" aria-hidden="true"></span>
       </div>
       <div class="w-full flex items-center gap-2">
         <span class="player-time text-[11px] tabular-nums w-9 text-right font-medium">
@@ -391,8 +412,9 @@ function openNowPlaying() {
 
     <!-- 右：quality + volume -->
     <div
-      class="player-volume w-full max-w-[180px] min-w-0 justify-self-end flex items-center gap-1.5 mobile-hide-on-small"
+      class="player-extras w-full max-w-[180px] min-w-0 justify-self-end flex items-center gap-1.5"
     >
+      <!-- 音质入口在窄窗必须保留：≤768px 只隐藏音量，胶囊始终可达。 -->
       <button
         ref="qualityButtonRef"
         type="button"
@@ -400,7 +422,7 @@ function openNowPlaying() {
         :class="{
           'is-open': qualityMenuOpen,
           'is-downgraded': mediaLoaded && qualityDowngraded,
-          'is-unknown': mediaLoaded && activeQualityShort === null,
+          'is-unknown': mediaLoaded && player.activeQuality === null,
         }"
         :title="qualityButtonTitle"
         :aria-label="qualityButtonTitle"
@@ -409,7 +431,7 @@ function openNowPlaying() {
         @click="toggleQualityMenu"
       >
         <AudioLines :size="13" :stroke-width="1.75" aria-hidden="true" />
-        <span class="text-[11px] font-medium leading-none">
+        <span class="player-quality-label text-[11px] font-medium leading-none">
           {{ qualityBadgeLabel }}
         </span>
         <ArrowDown
@@ -420,23 +442,35 @@ function openNowPlaying() {
           aria-hidden="true"
         />
       </button>
-      <Volume2
-        :size="15"
-        :stroke-width="1.5"
-        class="player-volume-icon shrink-0"
-        aria-hidden="true"
-      />
-      <input
-        type="range"
-        min="0"
-        max="1"
-        step="0.01"
-        :value="player.audioState.volume"
-        class="player-volume-range flex-1 min-w-0 appearance-none cursor-pointer"
-        :aria-label="`音量 ${Math.round(player.audioState.volume * 100)}%`"
-        @input="onVolume"
-        style="accent-color: var(--color-accent);"
-      />
+      <div class="player-volume min-w-0 flex-1 flex items-center gap-1.5 mobile-hide-on-small">
+        <button
+          type="button"
+          class="player-mute-button"
+          :title="player.audioState.muted ? '取消静音' : '静音'"
+          :aria-label="player.audioState.muted ? '取消静音' : '静音'"
+          :aria-pressed="player.audioState.muted"
+          @click="player.toggleMute"
+        >
+          <VolumeX
+            v-if="player.audioState.muted"
+            :size="15"
+            :stroke-width="1.6"
+            aria-hidden="true"
+          />
+          <Volume2 v-else :size="15" :stroke-width="1.5" aria-hidden="true" />
+        </button>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          :value="player.audioState.volume"
+          class="player-volume-range flex-1 min-w-0 appearance-none cursor-pointer"
+          :aria-label="`音量 ${Math.round(player.audioState.volume * 100)}%`"
+          @input="onVolume"
+          style="accent-color: var(--color-accent);"
+        />
+      </div>
     </div>
   </footer>
 
@@ -485,13 +519,14 @@ function openNowPlaying() {
               v-if="mediaLoaded && opt.value === player.activeQuality"
               class="quality-menu-current"
             >
-              当前
+              实际
             </span>
           </button>
         </div>
         <div class="quality-menu-footer">
           <div>{{ qualityFooter }}</div>
-          <div>勾选为所选档位；高档位需 VIP/SVIP，当前实际以服务端下发为准。</div>
+          <div>勾选的是所选档位，实际以服务端下发为准。</div>
+          <div>无损及以上需要网易云 VIP/SVIP 权益。</div>
         </div>
       </div>
     </div>
@@ -598,6 +633,13 @@ function openNowPlaying() {
   transform: scale(0.94);
 }
 
+/* 与左侧模式键同宽的空占位，保持播放键几何居中；不可见、不参与交互。 */
+.player-icon-spacer {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+}
+
 .player-icon-button:disabled,
 .player-play-button:disabled {
   cursor: default;
@@ -607,6 +649,7 @@ function openNowPlaying() {
 .player-cover-button:focus-visible,
 .player-icon-button:focus-visible,
 .player-play-button:focus-visible,
+.player-mute-button:focus-visible,
 .player-volume-range:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
@@ -626,8 +669,26 @@ function openNowPlaying() {
   opacity: 1;
 }
 
-.player-volume-icon {
+.player-mute-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.player-mute-button:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-soft, var(--color-card-hover));
 }
 
 .player-quality-button {
@@ -701,7 +762,7 @@ function openNowPlaying() {
   outline-offset: -2px;
 }
 
-/* 菜单勾选表示“所选请求档位”；当前实际下发档位用独立胶囊标记。 */
+/* 菜单勾选表示“所选请求档位”；实际下发档位用独立胶囊标记。 */
 .quality-menu-current {
   flex: 0 0 auto;
   padding: 1px 6px;
@@ -759,6 +820,19 @@ function openNowPlaying() {
   box-shadow: none;
 }
 
+/* 窄窗只隐藏音量，音质胶囊必须保留：右列按胶囊实际宽度计入网格，
+   避免 521–768px 区间把胶囊挤出内容盒被裁切。 */
+@media (max-width: 768px) {
+  .player-bar-grid {
+    grid-template-columns: minmax(0, 1fr) clamp(200px, 42%, 280px) max-content;
+  }
+
+  .player-extras {
+    width: auto;
+    max-width: none;
+  }
+}
+
 /* 极窄窗口只保留封面，左右各占同样宽度，中间控制区仍严格居中。 */
 @media (max-width: 520px) {
   .player-bar-grid {
@@ -792,6 +866,19 @@ function openNowPlaying() {
 
   .player-transport {
     gap: 1px;
+  }
+
+  /* 胶囊图标化：文字收起，图标 + 降级箭头仍保留，点击仍展开音质菜单。 */
+  .player-quality-button {
+    width: 40px;
+    height: 28px;
+    padding: 0;
+    gap: 3px;
+    justify-content: center;
+  }
+
+  .player-quality-label {
+    display: none;
   }
 }
 
