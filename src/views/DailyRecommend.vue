@@ -5,7 +5,7 @@
 import { computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
-import LyricPanel from "@/components/LyricPanel.vue";
+import LyricAside from "@/components/LyricAside.vue";
 import InlineError from "@/components/InlineError.vue";
 import {
   getDailyRecommend,
@@ -111,16 +111,15 @@ onMounted(() => void load());
       class="daily-layout grid mobile-stack"
       :class="{ 'daily-layout--solo': !player.currentSong }"
     >
-      <SongList :songs="data.songs" title="今日推荐" />
+      <SongList
+        :songs="data.songs"
+        title="今日推荐"
+        empty-title="今天还没有推荐歌曲"
+        empty-hint="稍后再打开看看，或去搜索想听的歌"
+      />
       <!-- 无当前歌曲时不渲染空歌词卡：空态不值得占首屏，单列堆叠时
            歌词卡也始终排在歌曲列表之后（容器查询里不再用 order 提前）。 -->
-      <aside
-        v-if="player.currentSong"
-        class="daily-lyric"
-        aria-label="当前歌词"
-      >
-        <LyricPanel :panel-height="320" />
-      </aside>
+      <LyricAside v-if="player.currentSong" :panel-height="320" />
     </div>
   </div>
 </template>
@@ -172,7 +171,9 @@ onMounted(() => void load());
 }
 
 .daily-layout {
-  grid-template-columns: minmax(0, 1.65fr) minmax(18.75rem, 0.9fr);
+  /* 歌词列 clamp(280px, 34%, 320px)：宽容器触顶 320px（DESIGN 理想卡宽），
+     窄到 34% 不足 280px 时守 DESIGN 的下限，剩余宽度全部留给列表。 */
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 34%, 320px);
   align-items: start;
   gap: 2rem;
 }
@@ -182,37 +183,23 @@ onMounted(() => void load());
   grid-template-columns: minmax(0, 1fr);
 }
 
-.daily-lyric {
-  position: sticky;
-  top: 1rem;
-  align-self: start;
-  min-width: 0;
-}
-
-.daily-lyric :deep(.lyric-panel) {
-  border-radius: 8px;
-  background: var(--color-raised);
-  box-shadow: var(--shadow-raised);
-}
-
 .daily-state {
   min-height: 9rem;
 }
 
-/* 两栏在容器 ≥44rem 时保留；更窄时单列。标题列由 SongList 的容器查询
-   （<34rem 隐藏专辑列）兜底，不会在两栏区间被压成 0。 */
+/* 两栏在容器 ≥44rem 时保留；更窄时单列（每日列表只有 32 首，单列代价小）。
+   标题列由 SongList 的容器查询（<34rem 隐藏专辑列）兜底，不会在两栏区间被压成 0。 */
 @container daily-content (max-width: 44rem) {
   .daily-layout {
     grid-template-columns: 1fr;
   }
 
-  /* 单列堆叠时歌词卡保持在歌曲列表之后：先让用户看到歌单，
-     歌词卡不再用 order 提到列表前面。 */
-  .daily-lyric {
-    position: relative;
-    top: auto;
-    justify-self: center;
+  /* 单列态：歌词卡回到普通流、居中并限宽 34rem。
+     卡片本体只负责纸面与两栏时的 sticky，布局归页面。 */
+  .daily-layout :deep(.lyric-aside) {
+    position: static;
     width: min(100%, 34rem);
+    justify-self: center;
   }
 }
 

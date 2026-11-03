@@ -21,6 +21,20 @@ const SESSION_GENERATION_STORAGE_KEY = "nnplayer.lyricSessionGeneration";
 const SNAPSHOT_RETRY_INTERVAL_MS = 400;
 const SNAPSHOT_RETRY_MAX_ATTEMPTS = 25;
 
+/**
+ * 上一次成功发出的时间轴内容（不含时钟字段）。
+ * 用途：切歌/媒体 id 变化会让 watcher 反复触发，但歌词时间轴可能还是同一份
+ * 已发送的数组（例如握手重试计时器在快照刚发完后才触发）——完整快照的
+ * lines + tokensByLine 序列化后 40–75 KB，重复发送只是把同一份数组再拷一遍。
+ */
+interface SentTimelineIdentity {
+  songId: number | null;
+  songName: string;
+  artists: string;
+  lines: DesktopLyricsTimelineSnapshot["lines"];
+  tokensByLine: DesktopLyricsTimelineSnapshot["tokensByLine"];
+}
+
 interface DesktopLyricsPublisherSource {
   currentSong: () => Song | null;
   timelineSongId: () => number | null;
@@ -89,6 +103,7 @@ export function useDesktopLyricsPublisher(
   let snapshotRetryAttempts = 0;
   let subscribed = false;
   let subscriptionEpoch = 0;
+  let lastSentTimeline: SentTimelineIdentity | null = null;
 
   function buildClockAnchor(): DesktopLyricsClockAnchor {
     const sample = source.clockSample();
@@ -107,16 +122,38 @@ export function useDesktopLyricsPublisher(
     };
   }
 
-  function buildTimelineSnapshot(): DesktopLyricsTimelineSnapshot | null {
-    const clock = buildClockAnchor();
+  function currentTimelineIdentity(): SentTimelineIdentity {
     const song = source.currentSong();
-    return buildDesktopLyricsTimelineSnapshot(clock, {
+    return {
       songId: song?.id ?? null,
-      timelineSongId: source.timelineSongId(),
       songName: song?.name ?? "",
       artists: song?.artists ?? "",
       lines: source.lines(),
       tokensByLine: source.tokensByLine(),
+    };
+  }
+
+  /** 时间轴整表替换时引用才会变；引用相同即快照内容与上次发送完全一致。 */
+  function isDuplicateTimeline(identity: SentTimelineIdentity): boolean {
+    const previous = lastSentTimeline;
+    return previous !== null &&
+      previous.songId === identity.songId &&
+      previous.songName === identity.songName &&
+      previous.artists === identity.artists &&
+      previous.lines === identity.lines &&
+      previous.tokensByLine === identity.tokensByLine;
+  }
+
+  function buildTimelineSnapshot(): DesktopLyricsTimelineSnapshot | null {
+    const clock = buildClockAnchor();
+    const timeline = currentTimelineIdentity();
+    return buildDesktopLyricsTimelineSnapshot(clock, {
+      songId: timeline.songId,
+      timelineSongId: source.timelineSongId(),
+      songName: timeline.songName,
+      artists: timeline.artists,
+      lines: timeline.lines,
+      tokensByLine: timeline.tokensByLine,
     });
   }
 
@@ -150,6 +187,8 @@ export function useDesktopLyricsPublisher(
     if (epoch !== subscriptionEpoch) return;
     subscribed = false;
     subscriptionEpoch += 1;
+    // 发送失败后不能把这份内容当成“子窗已收到”：下次重试必须真的重发。
+    lastSentTimeline = null;
     stopReanchorTimer();
     clearSnapshotRetry();
   }
@@ -164,8 +203,21 @@ export function useDesktopLyricsPublisher(
     ).catch(() => onTransportFailed(epoch));
   }
 
-  function sendSnapshot() {
+  /**
+   * 发送完整时间轴快照。
+   * force=false 时若时间轴内容与上次成功发送的完全相同，直接视为已满足：
+   * 这是 watcher 因歌曲/媒体 id 变化、或握手重试计时器在快照刚发完后触发造成
+   * 的重复发送，再发一次只会把同一份 40–75 KB 数组重新序列化。
+   * 桌面歌词窗的 burst 重试 / 快照请求走 activate(force=true)——那是真的没收到，
+   * 必须重发。
+   */
+  function sendSnapshot(options: { force?: boolean } = {}) {
     if (!isTauri() || !subscribed) return;
+    const identity = currentTimelineIdentity();
+    if (!options.force && isDuplicateTimeline(identity)) {
+      clearSnapshotRetry();
+      return;
+    }
     const snapshot = buildTimelineSnapshot();
     if (!snapshot) {
       // 已订阅但时间轴尚未就绪（刚切歌、歌词还在加载）：不能静默丢弃，
@@ -175,6 +227,8 @@ export function useDesktopLyricsPublisher(
     }
     clearSnapshotRetry();
     const epoch = subscriptionEpoch;
+    // 先按“已发送”记录；发送失败时 onTransportFailed 会清空，避免误跳过重发。
+    lastSentTimeline = identity;
     void emitTo(
       DESKTOP_LYRICS_LABEL,
       "desktop-lyrics:snapshot",
@@ -209,7 +263,8 @@ export function useDesktopLyricsPublisher(
     subscriptionEpoch += 1;
     // 每次握手请求都视为一次新的订阅机会：清掉上一轮的重试计数。
     clearSnapshotRetry();
-    sendSnapshot();
+    // 握手是显式请求：即使内容与上次相同也必须重发（子窗可能刚重载/丢包）。
+    sendSnapshot({ force: true });
     sendAppearance();
     updateReanchorTimer();
   }
@@ -238,6 +293,10 @@ export function useDesktopLyricsPublisher(
       source.tokensByLine,
     ],
     () => {
+      // 只在歌词时间轴本身变化时推进 revision：仅歌曲/媒体 id 变化而歌词行
+      // 仍是同一份已发送数组时，完整快照是重复的，跳过（否则子窗的 clock
+      // 锚点 revision 与快照失配，会白清空一次歌词）。
+      if (isDuplicateTimeline(currentTimelineIdentity())) return;
       timelineRevision += 1;
       sendSnapshot();
     },

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRoute, useRouter } from "vue-router";
@@ -15,12 +15,6 @@ import { useLyric } from "@/composables/useLyric";
 import { useTauriBridge } from "@/composables/useTauriBridge";
 import { useCoverTheme } from "@/composables/useCoverTheme";
 import { describePlaybackFailure } from "@/utils/appErrors";
-import {
-  audioQualityOption,
-  formatActualQuality,
-  isQualityDowngraded,
-} from "@/utils/audioQuality";
-import type { AudioQuality } from "@/types/music";
 
 const desktopLyricsStore = useDesktopLyricsStore();
 const route = useRoute();
@@ -29,6 +23,27 @@ const noticeStore = useNoticeStore();
 
 const isLoginRoute = computed(() => route.name === "Login");
 const isNowPlayingRoute = computed(() => route.name === "NowPlaying");
+
+/**
+ * 侧栏宽度过渡（220ms）的共享状态：Sidebar 在实际宽度变化时发出
+ * width-transition-start/end，这里维护 ref 并 provide 给页面组件。
+ * SongList 注入同一状态，在过渡期间冻结自己的容器查询结果，避免 220ms 里
+ * 逐帧翻转「专辑列显隐 / 列宽」；过渡结束解除，只按最终宽度重排一次。
+ *
+ * 键是跨文件契约（字符串键避免为一个小状态新增共享模块）：
+ * App.vue provide ↔ SongList.vue inject 必须保持一致。
+ */
+const SIDEBAR_TRANSITION_KEY = "nnplayer.sidebarTransitioning";
+const sidebarTransitioning = ref(false);
+provide(SIDEBAR_TRANSITION_KEY, sidebarTransitioning);
+
+function onSidebarWidthTransitionStart() {
+  sidebarTransitioning.value = true;
+}
+
+function onSidebarWidthTransitionEnd() {
+  sidebarTransitioning.value = false;
+}
 
 const isDesktopLyrics = computed(() => {
   // Vite 浏览器预览没有 Tauri runtime，这里只可能是主窗。
@@ -45,7 +60,7 @@ const isDesktopLyrics = computed(() => {
 });
 
 // 桌面歌词窗只渲染 DesktopLyrics.vue，不能实例化主窗的 player/audio runtime；
-// 主窗的 player store 由这里显式持有，用于把播放失败与音质降级转成全局提示。
+// 主窗的 player store 由这里显式持有，用于把播放失败转成全局提示。
 const playerStore = isDesktopLyrics.value ? null : usePlayerStore();
 const userStore = playerStore ? useUserStore() : null;
 /** auth epoch 订阅的注销函数（主窗才订阅）。 */
@@ -54,15 +69,11 @@ let stopAuthEpochSubscription: (() => void) | null = null;
 /** 全局播放失败提示固定用一个 id：连续失败时原地更新而不是堆叠成列。 */
 const PLAYBACK_NOTICE_ID = "playback-failure";
 
-/** 音质降级「同一组合只播报一次」的记录；登出/切号/进登录页后重置。 */
-const announcedQualityDowngrades = new Set<string>();
-
 /** 首次驻留托盘提示的 id：应用级、只出现一次，会话清理不应把它吞掉。 */
 const TRAY_HINT_NOTICE_ID = "tray-residence-hint";
 
-/** 会话切换或进入登录页时，旧会话的全局提示与降级播报记录都不再适用。 */
+/** 会话切换或进入登录页时，旧会话的全局提示不再适用。 */
 function resetSessionNotices() {
-  announcedQualityDowngrades.clear();
   // 驻留托盘提示与账号无关，且由用户手动关闭；会话清理只清其余提示。
   for (const notice of [...noticeStore.notices]) {
     if (notice.id !== TRAY_HINT_NOTICE_ID) noticeStore.dismiss(notice.id);
@@ -113,36 +124,10 @@ if (playerStore) {
     },
   );
 
-  // 音质降级：服务端实际档位低于所选时播报一次（状态诚实原则）。
-  // 同一「所选 → 实际」组合只提示一次，避免每首歌重复打扰。
-  const qualityDowngrade = computed<{
-    requested: AudioQuality;
-    actual: AudioQuality;
-  } | null>(() => {
-    const actual = playerStore.activeQuality;
-    if (actual === null || !playerStore.activeAudioResolved) return null;
-    if (!isQualityDowngraded(actual, playerStore.quality)) return null;
-    return { requested: playerStore.quality, actual };
-  });
+  // 音质降级不推全局通知：降级由播放条音质胶囊的「↓」、菜单的「实际」标记
+  // 与菜单项/按钮的 title 文案承载，避免常驻提示永久盖住正在播放页歌词。
 
-  watch(qualityDowngrade, (downgrade) => {
-    if (!downgrade) return;
-    const key = `${downgrade.requested}>${downgrade.actual}`;
-    if (announcedQualityDowngrades.has(key)) return;
-    announcedQualityDowngrades.add(key);
-    const requestedLabel = audioQualityOption(downgrade.requested).label;
-    const actualSummary =
-      formatActualQuality(downgrade.actual, playerStore.activeBitrate) ??
-      audioQualityOption(downgrade.actual).label;
-    noticeStore.push({
-      id: "quality-downgrade",
-      tone: "info",
-      title: `音质已降级：所选 ${requestedLabel}，实际 ${actualSummary}`,
-      hint: "服务端按账号权益与歌曲版权下发较低档位；可在播放条的音质菜单重新选择。",
-    });
-  });
-
-  // 登出/切号会整体换会话：旧账号的音质降级提示与去重记录不能带到新账号。
+  // 登出/切号会整体换会话：旧账号的全局提示不能带到新账号。
   stopAuthEpochSubscription = subscribeAuthEpoch(resetSessionNotices);
 }
 
@@ -190,15 +175,25 @@ onBeforeUnmount(() => {
 
   <!-- 主窗：完整布局 -->
   <div v-else class="theme-root h-full flex bg-bg overflow-hidden">
-    <Sidebar class="shrink-0 mobile-sidebar-hidden" />
+    <!-- 侧栏宽度过渡的开始/结束上报给 App：页面侧据此冻结容器查询（见 script）。 -->
+    <Sidebar
+      class="shrink-0 mobile-sidebar-hidden"
+      @width-transition-start="onSidebarWidthTransitionStart"
+      @width-transition-end="onSidebarWidthTransitionEnd"
+    />
 
-    <!-- 播放栏和页面共用同一个内容壳，因此始终相对侧栏之外的区域居中。 -->
+    <!-- 播放栏和页面共用同一个内容壳，因此始终相对侧栏之外的区域居中。
+         宽度过渡期间内容壳（含悬浮播放条）逐帧重排是宽度动画的固有成本：
+         播放条居中完全由绝对定位 + translateX(-50%) 完成（PlayerBarFloating.vue），
+         没有任何逐帧 JS 布局读写；SongList 组件在过渡期间冻结容器查询结果。
+         这里用 data 属性暴露过渡状态，方便渲染验证时确认冻结/解冻时机。 -->
     <div
       class="app-content-shell relative flex-1 min-w-0 h-full overflow-hidden"
       :class="{
         'app-content-shell--overlay': isNowPlayingRoute,
         'app-content-shell--no-player': isLoginRoute,
       }"
+      :data-sidebar-transitioning="sidebarTransitioning ? 'true' : undefined"
     >
       <main class="app-main overflow-y-auto" tabindex="-1">
         <div class="route-stage">
@@ -222,9 +217,10 @@ onBeforeUnmount(() => {
 .theme-root {
   color: var(--color-text-primary);
   background: var(--color-canvas);
-  transition:
-    color 0.45s ease,
-    background-color 0.6s ease;
+  /* 文字/结构色按设计固定，只有纸面背景随封面变化：不再继承式过渡 color，
+     并把整窗 background-color 过渡压到 150ms（短于 200ms 主题 debounce），
+     避免换歌时 600ms 整窗重绘 + 文档级继承色重算。 */
+  transition: background-color 0.15s ease;
 }
 
 .app-content-shell {
@@ -291,13 +287,12 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .app-content-shell {
-    --player-reserved-space: 76px;
+    /* 窄窗播放条 74px（#9 新几何）+ 8px 底距 + 8px 间隙 = 90px。 */
+    --player-reserved-space: 90px;
   }
 
-  /* 旧的逐页移动端留白由 app-main 统一接管，避免叠加成双倍空白。 */
-  .app-main :deep(.mobile-content-padding) {
-    padding-bottom: 0 !important;
-  }
+  /* 底部让位只由上面的 --player-reserved-space 承担：页面自身不再声明
+     底部留白（styles.css 已无 padding-bottom），不存在双倍空白。 */
 }
 
 @media (prefers-reduced-motion: reduce) {

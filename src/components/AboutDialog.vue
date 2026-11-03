@@ -24,8 +24,9 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-/** package.json / tauri.conf.json 的版本号；getVersion 失败时回退到它。 */
-const FALLBACK_VERSION = "0.3.2";
+/** 构建版本号由 vite 从 package.json 注入（__APP_VERSION__）；getVersion 失败时回退到它。
+ *  不写死字符串：硬编码会在发版后把 v0.4.0 报成旧版本，违背状态诚实原则。 */
+const FALLBACK_VERSION = __APP_VERSION__;
 const REPO_URL = "https://github.com/3274375092/nnplayer";
 const RELEASES_URL = `${REPO_URL}/releases/latest`;
 
@@ -58,9 +59,9 @@ const updateSummary = computed(() => {
     case "available":
       return `发现新版本 v${latestVersion.value}（当前 v${version.value}）`;
     case "error":
-      return "无法连接 GitHub Releases，请检查网络后重试。";
+      return "检查更新失败，请稍后重新检查。";
     default:
-      return "检查 GitHub Releases 上是否有新版本。";
+      return "还没有检查更新。";
   }
 });
 
@@ -264,9 +265,9 @@ onBeforeUnmount(() => {
               </section>
 
               <section class="about-section">
-                <h3 class="about-section-title">驻留托盘</h3>
+                <h3 class="about-section-title">关闭窗口后继续播放</h3>
                 <p class="about-text">
-                  关闭主窗口后，nnplayer 仍会在系统托盘继续播放；点击托盘图标可重新打开窗口，或从托盘菜单退出应用。播放不会被关窗打断。
+                  关闭主窗口不会停止播放，nnplayer 会留在系统托盘。点击托盘图标可显示或隐藏窗口，或从托盘菜单退出应用。
                 </p>
               </section>
 
@@ -618,12 +619,14 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
+  /* 与外壳/队列共用同一窄窗几何：74px 播放条 + 8px 底距 + 8px 间隙 = 90px
+     （历史 76px 对应旧 60px 条；见 tests/playerBarGeometry.test.mjs）。 */
   .about-stage {
-    padding: 16px 12px calc(76px + 12px);
+    padding: 16px 12px calc(90px + 12px);
   }
 
   .about-panel {
-    max-height: calc(100vh - 76px - 28px);
+    max-height: calc(100vh - 90px - 28px);
   }
 }
 

@@ -61,11 +61,11 @@ watch(() => userStore.userId, () => void load(true));
 </script>
 
 <template>
-  <div class="playlist-page px-8 py-6">
+  <div class="playlist-page px-8 py-6 mobile-content-padding">
     <header class="mb-7 flex items-baseline gap-3">
       <h1 class="text-2xl font-semibold tracking-[-0.02em]">我的歌单</h1>
       <span v-if="!loading && !describedError" class="playlist-count">
-        {{ playlists.length }} 个
+        {{ playlists.length }} 个歌单
       </span>
     </header>
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
@@ -22,6 +23,8 @@ const theme = await import(
 );
 
 const {
+  CANVAS_BACKGROUND_WEIGHT,
+  CANVAS_NEUTRAL,
   DEFAULT_THEME_SEED,
   DYNAMIC_THEME_CSS_VARIABLES,
   GRUVBOX_LIGHT_THEME,
@@ -77,9 +80,17 @@ function hueDistance(a, b) {
   return Math.min(distance, 360 - distance);
 }
 
-/** 封面换肤允许改变的色相范围：陶土≈20°，琥珀≈40°，两端各留窗口余量。 */
-const WARM_ACCENT_HUE_MIN = 10;
-const WARM_ACCENT_HUE_MAX = 55;
+/**
+ * 封面换肤允许的强调色相窗口：10°–40° 的暖色原样保留（陶土≈20°、琥珀≈40°），
+ * 40°–55° 的暖金连续折回陶土一侧（52° ≈ 29°），冷色圆弧压到 11°–26°。
+ * 输出窗口因此是 10°–40°，断言留到 42° 吸收十六进制量化的 ±0.5° 偏移。
+ */
+const ACCENT_HUE_MIN = 10;
+const ACCENT_HUE_MAX = 42;
+/** 暖色输入上界（暖金末端）：只用于静态环境光兜底的"必须暖"断言。 */
+const WARM_INPUT_HUE_MAX = 55;
+/** 暖金折回后的落点下限：40°–55° 的封面必须仍落在琥珀/陶土家族内。 */
+const ACCENT_GOLD_FOLD_MIN = 26;
 
 /**
  * DESIGN 记录的派生下限：强调色对纸面 ≥4.6:1，正文/洗色上的文字 ≥4.65:1。
@@ -100,8 +111,8 @@ function hexChannels(hex) {
 function assertWarmHue(
   hex,
   label,
-  min = WARM_ACCENT_HUE_MIN,
-  max = WARM_ACCENT_HUE_MAX,
+  min = ACCENT_HUE_MIN,
+  max = ACCENT_HUE_MAX,
 ) {
   const { h } = hexToHsl(hex);
   assert.ok(
@@ -110,12 +121,50 @@ function assertWarmHue(
   );
 }
 
+/**
+ * 橄榄/卡其强调色是这次修复的对象：hue 已越过 44° 的绿金区间，且饱和度被
+ * 下限顶到 ≥0.60（实测 #665C19 = hsl(52.2, 0.61, 0.25)）。两个条件同时成立
+ * 即为"读不出烧陶土"的回归。
+ */
+function assertNotOlive(hex, label) {
+  const { h, s } = hexToHsl(hex);
+  assert.ok(
+    !(h > 44 && s >= 0.5),
+    `${label}: ${hex} hsl(${h.toFixed(1)}, ${s.toFixed(2)}) is an olive/khaki accent, not terracotta`,
+  );
+  assert.ok(
+    h <= 44,
+    `${label}: ${hex} hue ${h.toFixed(1)}° must stay on the terracotta side of 44°`,
+  );
+}
+
+
 function assertWarmPaper(hex, label) {
   const [r, g, b] = hexChannels(hex);
   assert.ok(
     r > g && g > b,
     `${label}: ${hex} must remain warm paper (expected red > green > blue, got ${r}/${g}/${b})`,
   );
+}
+
+/**
+ * 应用真实绘制的纸面：`--color-canvas` 由 `--color-canvas-neutral` 与
+ * `--color-canvas-weight` 混出（styles.css），侧栏再叠 5% 墨色，raised 由卡片纸混白。
+ * 三档背景渐变（bg-from/bg-to）已从 CSS 与 token 层移除，这里改为校验真正绘制的
+ * 表面，比校验一条不存在的渐变更严格。
+ */
+function paintedPaperSurfaces(background) {
+  const canvas = mixHex(CANVAS_NEUTRAL, background, CANVAS_BACKGROUND_WEIGHT);
+  const surfaceSoft = mixHex(canvas, GRUVBOX_LIGHT_THEME.foreground, 0.05);
+  const raised = mixHex("#ffffff", GRUVBOX_LIGHT_THEME.card, 0.42);
+  return {
+    background,
+    canvas,
+    sidebar: surfaceSoft,
+    card: GRUVBOX_LIGHT_THEME.card,
+    cardHover: GRUVBOX_LIGHT_THEME.cardHover,
+    raised,
+  };
 }
 
 /**
@@ -135,11 +184,10 @@ function accentSubtleBackdrops({
     }
     return color;
   };
-  const canvas = mixHex("#f6f7f6", background, 0.36);
-  const surfaceSoft = mixHex(canvas, GRUVBOX_LIGHT_THEME.foreground, 0.05);
+  const surfaces = paintedPaperSurfaces(background);
   const raised = mixHex("#ffffff", card, 0.42);
   return {
-    sidebar: wash(surfaceSoft),
+    sidebar: wash(surfaces.sidebar),
     overlaySidebar: wash(background),
     queueBadge: wash(raised, 2),
     raised,
@@ -147,39 +195,36 @@ function accentSubtleBackdrops({
 }
 
 function assertThemeReadable(derived, label) {
-  const backgrounds = [
-    derived.tokens["--color-bg"],
-    derived.tokens["--color-bg-from"],
-    derived.tokens["--color-bg-to"],
-  ];
+  const background = derived.tokens["--color-bg"];
+  const surfaces = paintedPaperSurfaces(background);
   const accent = derived.tokens["--color-accent"];
   const accentSecondary = derived.tokens["--color-accent-secondary"];
   const onAccent = derived.tokens["--color-on-accent"];
   const accentOnSubtle = derived.tokens["--color-accent-on-subtle"];
   const backdrops = accentSubtleBackdrops({
-    background: derived.tokens["--color-bg"],
+    background,
     accent,
   });
 
-  for (const background of backgrounds) {
-    assert.ok(
-      contrastRatio(accent, background) >= ACCENT_MIN_CONTRAST,
-      `${label}: accent ${accent} is not readable on ${background}`,
-    );
-    assert.ok(
-      contrastRatio(accentSecondary, background) >= ACCENT_MIN_CONTRAST,
-      `${label}: secondary accent ${accentSecondary} is not visible on ${background}`,
-    );
-  }
-  for (const surface of [
-    GRUVBOX_LIGHT_THEME.card,
-    GRUVBOX_LIGHT_THEME.cardHover,
-    backdrops.raised,
-  ]) {
+  for (const [name, surface] of Object.entries(surfaces)) {
     assert.ok(
       contrastRatio(accent, surface) >= ACCENT_MIN_CONTRAST,
-      `${label}: accent ${accent} is not readable on floating surface ${surface}`,
+      `${label}: accent ${accent} is not readable on the ${name} surface ${surface}`,
     );
+    assert.ok(
+      contrastRatio(accentSecondary, surface) >= ACCENT_MIN_CONTRAST,
+      `${label}: secondary accent ${accentSecondary} is not visible on the ${name} surface ${surface}`,
+    );
+    for (const textColor of [
+      GRUVBOX_LIGHT_THEME.foreground,
+      GRUVBOX_LIGHT_THEME.textSecondary,
+      GRUVBOX_LIGHT_THEME.textTertiary,
+    ]) {
+      assert.ok(
+        contrastRatio(textColor, surface) >= BODY_MIN_CONTRAST,
+        `${label}: text ${textColor} is not readable on the ${name} surface ${surface}`,
+      );
+    }
   }
   assert.ok(
     contrastRatio(onAccent, accent) >= ACCENT_MIN_CONTRAST,
@@ -199,35 +244,12 @@ function assertThemeReadable(derived, label) {
     );
   }
 
-  const gradientSegments = [
-    [backgrounds[1], backgrounds[0]],
-    [backgrounds[0], backgrounds[2]],
-  ];
-  for (const [start, end] of gradientSegments) {
-    for (let step = 0; step <= 20; step += 1) {
-      const surface = mixHex(start, end, step / 20);
-      assert.ok(
-        contrastRatio(accent, surface) >= ACCENT_MIN_CONTRAST,
-        `${label}: accent ${accent} is not readable on gradient color ${surface}`,
-      );
-      assert.ok(
-        contrastRatio(accentSecondary, surface) >= ACCENT_MIN_CONTRAST,
-        `${label}: secondary accent ${accentSecondary} is not visible on gradient color ${surface}`,
-      );
-      for (const textColor of [
-        GRUVBOX_LIGHT_THEME.foreground,
-        GRUVBOX_LIGHT_THEME.textSecondary,
-        GRUVBOX_LIGHT_THEME.textTertiary,
-      ]) {
-        assert.ok(
-          contrastRatio(textColor, surface) >= BODY_MIN_CONTRAST,
-          `${label}: text ${textColor} is not readable on gradient color ${surface}`,
-        );
-      }
-    }
-  }
-
-  for (const surface of [...backgrounds, GRUVBOX_LIGHT_THEME.card]) {
+  for (const surface of [
+    background,
+    surfaces.canvas,
+    surfaces.sidebar,
+    GRUVBOX_LIGHT_THEME.card,
+  ]) {
     const subtleSurface = mixHex(surface, accent, 0.12);
     assert.ok(
       contrastRatio(GRUVBOX_LIGHT_THEME.foreground, subtleSurface) >=
@@ -275,8 +297,6 @@ test("Gruvbox Light defaults keep all text tiers readable", () => {
 test("CSS defaults stay synchronized with the Gruvbox token source", () => {
   const expected = {
     "--color-bg": GRUVBOX_LIGHT_THEME.background,
-    "--color-bg-from": GRUVBOX_LIGHT_THEME.backgroundHard,
-    "--color-bg-to": GRUVBOX_LIGHT_THEME.backgroundSoft,
     "--color-ambient-primary": "#d79921",
     "--color-ambient-secondary": "#a95823",
     "--color-card": GRUVBOX_LIGHT_THEME.card,
@@ -291,7 +311,6 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
     "--color-text-primary": GRUVBOX_LIGHT_THEME.foreground,
     "--color-text-secondary": GRUVBOX_LIGHT_THEME.textSecondary,
     "--color-text-tertiary": GRUVBOX_LIGHT_THEME.textTertiary,
-    "--color-ring": "transparent",
     "--color-glow": "rgba(175, 58, 3, 0.14)",
   };
   for (const name of DYNAMIC_THEME_CSS_VARIABLES) {
@@ -311,9 +330,114 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
     expected["--color-ambient-primary"],
     expected["--color-ambient-secondary"],
   ]) {
-    assertWarmHue(ambient, "static ambient default");
+    assertWarmHue(ambient, "static ambient default", ACCENT_HUE_MIN, WARM_INPUT_HUE_MAX);
   }
 });
+
+test("canvas neutral is single-sourced from styles.css", () => {
+  // 这次审计的根因：canvas 的中性色同时在 styles.css 与 themeTokens.ts 里硬编码，
+  // 只改一处时 accent-on-subtle 的推导会静默校验一个不再存在的合成面。
+  // 契约：CSS 声明两个变量，TS 常量与它们逐字一致，canvas 公式引用这两个变量。
+  const neutral = styles.match(/--color-canvas-neutral:\s*([^;]+);/i);
+  const weight = styles.match(/--color-canvas-weight:\s*([^;]+);/i);
+  assert.ok(neutral, "styles.css must declare --color-canvas-neutral");
+  assert.ok(weight, "styles.css must declare --color-canvas-weight");
+  assert.equal(
+    neutral[1].trim().toLowerCase(),
+    CANVAS_NEUTRAL,
+    "themeTokens.ts CANVAS_NEUTRAL must equal the CSS --color-canvas-neutral",
+  );
+  assert.equal(
+    weight[1].trim(),
+    `${CANVAS_BACKGROUND_WEIGHT * 100}%`,
+    "themeTokens.ts CANVAS_BACKGROUND_WEIGHT must equal the CSS --color-canvas-weight",
+  );
+  const canvas = styles.match(/--color-canvas:\s*([^;]+);/i);
+  assert.ok(canvas, "styles.css must declare --color-canvas");
+  for (const token of [
+    "var(--color-bg)",
+    "var(--color-canvas-neutral)",
+    "var(--color-canvas-weight)",
+  ]) {
+    assert.ok(
+      canvas[1].includes(token),
+      `--color-canvas must be mixed from ${token}, got: ${canvas[1].trim()}`,
+    );
+  }
+});
+
+test("dead theme tokens are gone from the dynamic write path", () => {
+  // styles.css 已删除这些声明；写路径也必须停止写它们，否则每次换歌都会
+  // 重新注入一个没有消费者的变量（旧的 --color-ring 还是可见的 28% 描边色）。
+  const dead = [
+    "--color-bg-from",
+    "--color-bg-to",
+    "--color-ring",
+    "--color-highlight",
+    "--color-shadow",
+  ];
+  for (const name of dead) {
+    assert.ok(
+      !DYNAMIC_THEME_CSS_VARIABLES.includes(name),
+      `${name} must not be in DYNAMIC_THEME_CSS_VARIABLES`,
+    );
+  }
+  const derived = deriveCoverTheme(DEFAULT_THEME_SEED);
+  for (const name of dead) {
+    assert.ok(
+      !(name in derived.tokens),
+      `${name} must not be written by deriveCoverTheme`,
+    );
+  }
+  // matches 是完整的 token 名，避免误伤 --color-bg 这类前缀相同的活 token。
+  for (const name of ["--color-bg-from", "--color-bg-to", "--color-ring"]) {
+    assert.ok(
+      !new RegExp(`"${name}"`).test(source),
+      `themeTokens.ts must not mention the retired token ${name}`,
+    );
+  }
+});
+
+test("tailwind exposes the compositor-only playback animations and no black shadows", () => {
+  // 跨文件契约（FIX-CONTEXT #1/#38）：A/B 用 animate-play-ring / animate-pulse-fade；
+  // 纸面阴影只允许 Raised/Floating（styles.css 的 --shadow-*），不再提供 Tailwind
+  // 默认黑色投影条目。
+  const config = readFileSync(
+    new URL("../tailwind.config.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    config,
+    /"play-ring":\s*\{\s*"0%":\s*\{\s*transform:\s*"scale\(0\.85\)",\s*opacity:\s*"0\.5"\s*\},\s*"75%,\s*100%":\s*\{\s*transform:\s*"scale\(1\.6\)",\s*opacity:\s*"0"\s*\}/,
+    "tailwind.config.js must define the play-ring keyframes (transform/opacity only)",
+  );
+  assert.match(
+    config,
+    /"play-ring":\s*"play-ring 2s ease-out infinite"/,
+    "tailwind.config.js must expose animation.play-ring",
+  );
+  assert.match(
+    config,
+    /"pulse-fade":\s*\{\s*"0%,\s*100%":\s*\{\s*opacity:\s*"1"\s*\},\s*"50%":\s*\{\s*opacity:\s*"0\.35"\s*\}\s*,\s*\}/,
+    "tailwind.config.js must define the pulse-fade keyframes (opacity only)",
+  );
+  assert.match(
+    config,
+    /"pulse-fade":\s*"pulse-fade 2s ease-in-out infinite"/,
+    "tailwind.config.js must expose animation.pulse-fade",
+  );
+  // Two-Shadow Rule：不再提供 Tailwind 的 boxShadow 比例尺，也不允许黑色投影字面量
+  // （旧 soft 是纯黑投影；旧的 play-pulse keyframe 也在迁移到 play-ring 后删除）。
+  assert.ok(
+    !/boxShadow\s*:/.test(config),
+    "tailwind.config.js must not define any boxShadow outside the Raised/Floating tokens",
+  );
+  assert.ok(
+    !/rgba\(0,\s*0,\s*0/.test(config.toLowerCase()),
+    "tailwind.config.js must not embed a black drop shadow",
+  );
+});
+
 
 test("cover-derived light themes remain readable across the color wheel", () => {
   for (let hue = 0; hue < 360; hue += 3) {
@@ -348,15 +472,20 @@ test("multi-color cover palettes vary ambient roles without adding a second UI a
       "ambient companions must not change the primary UI accent hue",
     );
   }
+  // 多色封面的角色分工只体现在环境光上：背景主色仍跟主导色，两端环境光可变。
   for (const token of [
-    "--color-bg-from",
-    "--color-bg-to",
     "--color-ambient-primary",
     "--color-ambient-secondary",
   ]) {
     assert.notEqual(violetGold.tokens[token], mono.tokens[token]);
     assert.notEqual(violetGold.tokens[token], greenRed.tokens[token]);
   }
+  // 背景主色只跟主导色（companions 只影响环境光），不同主导色仍必须染出不同纸面。
+  assert.notEqual(
+    mono.tokens["--color-bg"],
+    deriveCoverTheme("#689d6a").tokens["--color-bg"],
+    "different dominant covers must still tint the paper differently",
+  );
 
   for (const derived of [violetGold, greenRed]) {
     const accentHue = hexToHsl(derived.tokens["--color-accent"]).h;
@@ -445,7 +574,8 @@ test("cover accents converge into the warm brand window across the color wheel",
   }
 });
 
-test("warm covers keep their terracotta/amber hue instead of being flattened", () => {
+test("warm covers keep their terracotta hue; warm golds fold back toward terracotta", () => {
+  // ≤40° 的暖色必须原样保留（不得被折叠夺走性格）。
   const terracottaAccent = deriveCoverTheme(DEFAULT_THEME_SEED).tokens[
     "--color-accent"
   ];
@@ -454,13 +584,77 @@ test("warm covers keep their terracotta/amber hue instead of being flattened", (
     hueDistance(terracottaHue, 19) <= 2,
     `terracotta cover must stay terracotta, got ${terracottaAccent} (${terracottaHue.toFixed(1)}°)`,
   );
+  for (const hue of [28, 34, 40]) {
+    const accent = deriveCoverTheme(hslToHex(hue, 0.7, 0.4)).tokens[
+      "--color-accent"
+    ];
+    assert.ok(
+      hueDistance(hexToHsl(accent).h, hue) <= 2,
+      `warm cover at ${hue}° must keep its hue, got ${accent} (${hexToHsl(accent).h.toFixed(1)}°)`,
+    );
+  }
 
+  // 40°–55° 的暖金折回陶土一侧：琥珀封面不再固定在 40°，但仍在琥珀/陶土家族内。
   const amberAccent = deriveCoverTheme("#d79921").tokens["--color-accent"];
   const amberHue = hexToHsl(amberAccent).h;
   assert.ok(
-    hueDistance(amberHue, 40) <= 2,
-    `amber cover must stay amber, got ${amberAccent} (${amberHue.toFixed(1)}°)`,
+    amberHue >= 30 && amberHue <= ACCENT_HUE_MAX,
+    `amber cover must fold into the amber/terracotta band, got ${amberAccent} (${amberHue.toFixed(1)}°)`,
   );
+});
+
+test("warm-neutral khaki/gold covers fold to terracotta instead of olive", () => {
+  // 回归对象：审计实拍里灰阶暖调封面派生出 #665C19（hue 52.2°）橄榄强调色，
+  // 播放键/主按钮/已唱歌词全部变卡其。暖金覆盖层现在必须折回陶土一侧。
+  const warmNeutralSeeds = [];
+  for (let hue = 46; hue <= 54; hue += 2) {
+    for (const saturation of [0.15, 0.25, 0.35]) {
+      for (const lightness of [0.45, 0.55, 0.65]) {
+        warmNeutralSeeds.push(hslToHex(hue, saturation, lightness));
+      }
+    }
+  }
+
+  for (const seed of warmNeutralSeeds) {
+    const derived = deriveCoverTheme(seed);
+    const accent = derived.tokens["--color-accent"];
+    const accentHue = hexToHsl(accent).h;
+    assert.ok(
+      accentHue <= 44,
+      `warm-neutral cover ${seed}: accent ${accent} hue ${accentHue.toFixed(1)}° must stay on the terracotta side of 44°`,
+    );
+    assertWarmHue(accent, `warm-neutral accent for ${seed}`);
+    assertNotOlive(accent, `warm-neutral accent for ${seed}`);
+    assertWarmHue(
+      derived.tokens["--color-accent-secondary"],
+      `warm-neutral secondary accent for ${seed}`,
+    );
+    assertWarmHue(
+      derived.desktopAccent,
+      `warm-neutral desktop accent for ${seed}`,
+    );
+    assertThemeReadable(derived, `warm-neutral ${seed}`);
+  }
+
+  // 审计报告中复现过的两个具体种子：折回后必须落在陶土/Ochre 家族，不再是橄榄金。
+  const regressions = [
+    [hslToHex(52, 0.3, 0.62), "#6a5f1b"],
+    [hslToHex(48, 0.2, 0.55), "#6c5c1b"],
+  ];
+  for (const [seed, oliveRegression] of regressions) {
+    const accent = deriveCoverTheme(seed).tokens["--color-accent"];
+    const { h, s } = hexToHsl(accent);
+    assert.ok(
+      h >= 20 && h <= 36,
+      `${seed}: accent ${accent} hue ${h.toFixed(1)}° must sit between terracotta(20°) and amber(36°)`,
+    );
+    assert.ok(s >= 0.58, `${seed}: accent ${accent} lost saturation (${s.toFixed(2)})`);
+    const oliveHue = hexToHsl(oliveRegression).h;
+    assert.ok(
+      oliveHue - h >= 8,
+      `${seed}: accent ${accent} (${h.toFixed(1)}°) must be clearly warmer than the old olive ${oliveRegression} (${oliveHue.toFixed(1)}°)`,
+    );
+  }
 });
 
 test("cold green/blue/pink covers fold onto warm accents while keeping breathing room", () => {
@@ -510,23 +704,50 @@ test("cold green/blue/pink covers fold onto warm accents while keeping breathing
   );
 });
 
+test("muted covers keep the derived accent above the terracotta saturation floor", () => {
+  // 用户确认：灰/冷封面把强调色推到 S≈0.48 的橄榄棕不是有意的。派生饱和度下限
+  // 由 0.48 抬到 0.60；十六进制量化约损失 0.005，故实测下界取 0.58。
+  const mutedSeeds = [
+    "#4b5563",
+    "#689d6a",
+    "#458588",
+    "#7a7a7a",
+    "#b16286",
+    "#6b5a3a",
+  ];
+  for (const seed of mutedSeeds) {
+    const accent = deriveCoverTheme(seed).tokens["--color-accent"];
+    const { s } = hexToHsl(accent);
+    assert.ok(
+      s >= 0.58,
+      `muted cover ${seed}: accent ${accent} saturation ${s.toFixed(3)} fell below the 0.58 measured floor`,
+    );
+  }
+
+  // 暖色封面本就触顶 0.76，抬高下限不得夺走它们的陶土/琥珀饱和度性格。
+  for (const seed of [DEFAULT_THEME_SEED, "#d79921"]) {
+    const accent = deriveCoverTheme(seed).tokens["--color-accent"];
+    const { s } = hexToHsl(accent);
+    assert.ok(
+      s >= 0.74,
+      `warm cover ${seed}: accent ${accent} saturation ${s.toFixed(3)} lost its terracotta/amber character`,
+    );
+  }
+});
+
 test("cover-derived backgrounds always stay warm paper", () => {
   for (let hue = 0; hue < 360; hue += 6) {
     for (const saturation of [0.12, 0.6, 0.95]) {
       for (const lightness of [0.15, 0.5, 0.85]) {
         const seed = hslToHex(hue, saturation, lightness);
         const derived = deriveCoverTheme(seed);
-        for (const token of [
-          "--color-bg",
-          "--color-bg-from",
-          "--color-bg-to",
-        ]) {
-          const paper = derived.tokens[token];
-          assertWarmPaper(paper, `${token} for cover ${seed}`);
+        {
+          const paper = derived.tokens["--color-bg"];
+          assertWarmPaper(paper, `--color-bg for cover ${seed}`);
           const { h } = hexToHsl(paper);
           assert.ok(
             h >= 20 && h <= 60,
-            `${token} for cover ${seed}: ${paper} hue ${h.toFixed(1)}° is not a warm paper`,
+            `--color-bg for cover ${seed}: ${paper} hue ${h.toFixed(1)}° is not a warm paper`,
           );
         }
         for (const token of [
@@ -546,9 +767,7 @@ test("cover-derived backgrounds always stay warm paper", () => {
 
   for (const seed of ["#689d6a", "#458588", "#d3869b", "#b16286", "#4b5563"]) {
     const derived = deriveCoverTheme(seed);
-    for (const token of ["--color-bg", "--color-bg-from", "--color-bg-to"]) {
-      assertWarmPaper(derived.tokens[token], `${token} for cold cover ${seed}`);
-    }
+    assertWarmPaper(derived.tokens["--color-bg"], `--color-bg for cold cover ${seed}`);
   }
 });
 

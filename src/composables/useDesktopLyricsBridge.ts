@@ -44,6 +44,12 @@ const SNAPSHOT_BURST_RETRY_DELAYS_MS = [300, 900, 1_600, 2_400, 3_200] as const;
 /** 监听注册失败后的重试退避（IPC/权限问题常是暂时的，不能注册失败就永久放弃）。 */
 const LISTENER_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000] as const;
 const LISTENER_RETRY_MAX_DELAY_MS = 8_000;
+/**
+ * 本地时钟投影节奏：33ms（≈30fps）。子窗的消费者（卡拉OK擦色）本来就按 50ms
+ * 桶取样，60fps 的 rAF 只是把同一段 computed 白跑两倍；33ms 与 50ms 桶对齐后
+ * 既不丢擦色精度，又把子窗的 JS/投影负载减半。
+ */
+const FRAME_INTERVAL_MS = 33;
 
 export function useDesktopLyricsBridge() {
   const receiver = createDesktopLyricsReceiver();
@@ -60,6 +66,7 @@ export function useDesktopLyricsBridge() {
   const unlistens: UnlistenFn[] = [];
   let disposed = false;
   let frameRequest = 0;
+  let lastFrameTickAt = 0;
   let recoveryStarted = false;
   let listenerRetryAttempt = 0;
   let listenerRetryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -149,7 +156,12 @@ export function useDesktopLyricsBridge() {
   function frameTick() {
     frameRequest = 0;
     if (!shouldProjectRealtime()) return;
-    localPositionMs.value = anchoredClock.positionAt(performance.now());
+    const now = performance.now();
+    // rAF 仍负责对齐刷新节拍，但只在跨过 33ms 桶时重算一次位置。
+    if (now - lastFrameTickAt >= FRAME_INTERVAL_MS) {
+      lastFrameTickAt = now;
+      localPositionMs.value = anchoredClock.positionAt(now);
+    }
     frameRequest = requestAnimationFrame(frameTick);
   }
 
@@ -158,7 +170,11 @@ export function useDesktopLyricsBridge() {
       stopFrameLoop();
       return;
     }
-    if (!frameRequest) frameRequest = requestAnimationFrame(frameTick);
+    if (!frameRequest) {
+      // 从暂停/隐藏恢复时立即补一帧，不等下一个 33ms 桶。
+      lastFrameTickAt = 0;
+      frameRequest = requestAnimationFrame(frameTick);
+    }
   }
 
   function applyClockAnchor() {

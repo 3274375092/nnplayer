@@ -27,6 +27,17 @@ pub fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
 
+    // 透明桌面歌词窗依赖 WebKit 的加速合成。若外部环境关掉合成
+    // （WEBKIT_DISABLE_COMPOSITING_MODE=1），窗口旧帧不会被擦除，歌词窗会出现
+    // 多块底板残影叠加（上一行/下一行同时浮在同一位置）。只告警、不改写环境：
+    // 少数驱动确实需要关闭合成才能显示主窗，改写在那种机器上会变成黑窗。
+    if std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE").is_ok_and(|v| v == "1") {
+        log::warn!(
+            "检测到 WEBKIT_DISABLE_COMPOSITING_MODE=1：透明桌面歌词窗会因合成关闭而出现残影/叠板；\
+             如无显示问题，请取消该环境变量后重启"
+        );
+    }
+
     let session = commands::load_session_meta();
     // 持久化会话在远端校验成功前绝不能暴露为“已登录”。
     let initial_app_state = AppState::new(None, Default::default()).expect("创建 AppState 失败");

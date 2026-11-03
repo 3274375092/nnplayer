@@ -6,16 +6,27 @@ export const DEFAULT_DESKTOP_ACCENT = "#d65d0e";
  * 暖色窗口内（陶土≈20°、琥珀≈40°），绿/蓝/紫封面只影响背景与环境光的暖度。
  */
 export const COVER_ACCENT_HUE_MIN = 10;
+/** 暖色输入窗口的上界（暖金末端）；它是折叠的输入边界，不是输出上界。 */
 export const COVER_ACCENT_HUE_MAX = 55;
 /** 十六进制量化会让测量 hue 偏移近 0.5°，映射窗口内留 1° 余量。 */
 const ACCENT_HUE_MAPPED_MIN = COVER_ACCENT_HUE_MIN + 1;
-const ACCENT_HUE_MAPPED_MAX = COVER_ACCENT_HUE_MAX - 1;
+/**
+ * 原样保留的暖色区间上界（陶土≈20°、琥珀≈40°）。40°–55° 的暖金必须连续折回
+ * 陶土一侧：暖金/卡其封面（灰阶人像的暖色底、旧唱片纸色）若原样保留，配合下面的
+ * 饱和度下限会派生出橄榄棕强调色（实测 #665C19），品牌就读不出「烧陶土」了。
+ */
+const ACCENT_HUE_KEEP_MAX = 40;
+/** 55° 暖金折叠后的落点：仍在陶土/琥珀家族内，但明显偏红。 */
+const ACCENT_HUE_FOLD_TOP = 26;
 const TERRACOTTA_HUE = 20;
 /** 背景/环境光色相向陶土靠拢的比例，保留封面差异但纸面始终暖。 */
 const AMBIENT_HUE_PULL = 0.68;
-/** 与 styles.css 派生面一致的合成参数：把 accent-subtle 洗色复算成浏览器实色。 */
-const CANVAS_NEUTRAL = "#f6f7f6";
-const CANVAS_BACKGROUND_WEIGHT = 0.36;
+/** 与 styles.css 派生面一致的合成参数：把 accent-subtle 洗色复算成浏览器实色。
+ *  canvas 的中性色与权重是单源契约：styles.css 的 `--color-canvas-neutral` /
+ *  `--color-canvas-weight` 必须与这两个常量逐字一致（测试断言），否则推导会
+ *  静默校验一个不再存在的合成面。 */
+export const CANVAS_NEUTRAL = "#f6f7f6";
+export const CANVAS_BACKGROUND_WEIGHT = 0.36;
 const RAISED_NEUTRAL = "#ffffff";
 const RAISED_CARD_WEIGHT = 0.42;
 const SURFACE_SOFT_ALPHA = 0.05;
@@ -29,8 +40,10 @@ export const GRUVBOX_LIGHT_THEME = {
   backgroundSoft: "#f2e5bc",
   card: "#f9f5d7",
   cardHover: "#ebdbb2",
-  border: "#d5c4a1",
-  borderStrong: "#bdae93",
+  // No-Line Rule（DESIGN.md）：边框/描边 token 一律解析为 transparent，
+  // 分区只靠表面明度、留白与阴影。旧值 #d5c4a1 既不在调色板里，也没有任何读取点。
+  border: "transparent",
+  borderStrong: "transparent",
   foreground: "#282828",
   textSecondary: "#504945",
   textTertiary: "#665c54",
@@ -38,11 +51,8 @@ export const GRUVBOX_LIGHT_THEME = {
 
 export const DYNAMIC_THEME_CSS_VARIABLES = [
   "--color-bg",
-  "--color-bg-from",
-  "--color-bg-to",
   "--color-ambient-primary",
   "--color-ambient-secondary",
-  "--color-ring",
   "--color-accent",
   "--color-on-accent",
   "--color-accent-secondary",
@@ -262,21 +272,32 @@ function normalizeHue(hue: number): number {
 }
 
 /**
- * 把封面色相连续折叠进暖色窗口：窗口内的暖色原样保留（陶土≈20°、琥珀≈40°），
- * 窗口外的冷色圆弧线性压缩到窗口边界之间。映射在两端都连续，且不同冷色仍落
- * 到不同的暖色上，所以切歌有变化、品牌色相却不被取代。
+ * 把封面色相连续折叠进暖色窗口：10°–40° 的暖色原样保留（陶土≈20°、琥珀≈40°），
+ * 40°–55° 的暖金连续折回陶土一侧（52° ≈ 29°），窗口外的冷色圆弧压缩到
+ * [11°, 26°]，因此绿/蓝/紫/暖金封面都只能改变暖度与深浅，不能取代品牌色相；
+ * 三段在 11°、40°、55° 处都连续，所以切歌仍有可见变化。
  */
 function warmHue(rawHue: number): number {
   const hue = normalizeHue(rawHue);
-  const span = ACCENT_HUE_MAPPED_MAX - ACCENT_HUE_MAPPED_MIN;
-  if (hue >= ACCENT_HUE_MAPPED_MIN && hue <= ACCENT_HUE_MAPPED_MAX) {
+  if (hue >= ACCENT_HUE_MAPPED_MIN && hue <= ACCENT_HUE_KEEP_MAX) {
     return hue;
   }
-  const coldArc = 360 - span;
-  const position = hue > ACCENT_HUE_MAPPED_MAX
-    ? hue - ACCENT_HUE_MAPPED_MAX
-    : hue + 360 - ACCENT_HUE_MAPPED_MAX;
-  return ACCENT_HUE_MAPPED_MAX - (span * position) / coldArc;
+  if (hue > ACCENT_HUE_KEEP_MAX && hue < COVER_ACCENT_HUE_MAX) {
+    const position =
+      (hue - ACCENT_HUE_KEEP_MAX) /
+      (COVER_ACCENT_HUE_MAX - ACCENT_HUE_KEEP_MAX);
+    return (
+      ACCENT_HUE_KEEP_MAX +
+      (ACCENT_HUE_FOLD_TOP - ACCENT_HUE_KEEP_MAX) * position
+    );
+  }
+  const coldSpan = ACCENT_HUE_FOLD_TOP - ACCENT_HUE_MAPPED_MIN;
+  const coldArc = 360 - (COVER_ACCENT_HUE_MAX - ACCENT_HUE_MAPPED_MIN);
+  const position =
+    hue > ACCENT_HUE_KEEP_MAX
+      ? hue - COVER_ACCENT_HUE_MAX
+      : hue + 360 - COVER_ACCENT_HUE_MAX;
+  return ACCENT_HUE_FOLD_TOP - (coldSpan * position) / coldArc;
 }
 
 /** 背景/环境光色相：先折叠进暖色窗口，再向陶土色相拉近，纸面永远带暖。 */
@@ -389,8 +410,9 @@ function accessibleAccentOnSubtle(
 
 /**
  * 将封面原色映射到浅色主题：结构色保持 Gruvbox Light，只让背景色温和
- * 强调色随封面变化。背景/环境光的 hue 向陶土拉近，强调色 hue 折叠进暖色
- * 窗口（10°–55°），因此切歌仍有可见反馈，品牌却始终是暖陶土而不是封面主色。
+ * 强调色随封面变化。背景/环境光的 hue 向陶土拉近，强调色 hue 收进 10°–40°
+ * 的暖色区间（40°–55° 的暖金折回陶土一侧），因此切歌仍有可见反馈，品牌却始终
+ * 是暖陶土而不是封面主色。
  */
 export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
   const palette = normalizePalette(input);
@@ -422,6 +444,8 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
     ambientTint(primary),
     ambientStrength(primary),
   );
+  // 染色区间的两端只用于校验强调色/正文下限：CSS 已不再绘制三档纸面渐变，
+  // 但它们代表染色的最亮/最暗范围，保留进下限循环可以保证任何染色结果都可读。
   const backgroundFrom = accessibleTintedSurface(
     GRUVBOX_LIGHT_THEME.backgroundHard,
     ambientTint(backgroundFromSource),
@@ -435,7 +459,9 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
 
   const { h, s, l } = primary;
   const accentHue = warmHue(h);
-  const accentSaturation = clamp(s * 1.08 + 0.18, 0.48, 0.76);
+  // 饱和度下限压过灰化封面的橄榄偏色：冷/灰封面也要读成「深陶土」而不是橄榄棕。
+  // 暖金封面（40°–55°）的色相已在上一步折回陶土一侧，因此下限不会再把它推成橄榄。
+  const accentSaturation = clamp(s * 1.08 + 0.18, 0.6, 0.76);
   const accentSurfaces = [
     background,
     backgroundFrom,
@@ -470,11 +496,8 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
   return {
     tokens: {
       "--color-bg": background,
-      "--color-bg-from": backgroundFrom,
-      "--color-bg-to": backgroundTo,
       "--color-ambient-primary": ambientPrimary,
       "--color-ambient-secondary": ambientSecondary,
-      "--color-ring": hexToRgba(accent, 0.28),
       "--color-accent": accent,
       "--color-on-accent": foregroundFor(accent),
       "--color-accent-secondary": accentSecondary,

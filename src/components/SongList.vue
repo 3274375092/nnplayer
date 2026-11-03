@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import {
   computed,
+  inject,
   nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
   watch,
+  type Ref,
 } from "vue";
 import { Play, Music2 } from "@lucide/vue";
 import type { Song } from "@/types/music";
@@ -18,16 +20,68 @@ interface Props {
   title?: string;
   showIndex?: boolean;
   showAlbum?: boolean;
+  /** 空状态文案由页面决定：同样是没有歌曲，每日推荐与歌单的“为什么空”不同。 */
+  emptyTitle?: string;
+  emptyHint?: string;
+  /** 结果总量（如搜索命中数）；大于已加载 songs 时说明只显示了前 N 首。 */
+  totalCount?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showIndex: true,
   showAlbum: true,
+  emptyTitle: "这里还没有歌曲",
+  emptyHint: "从每日推荐或搜索里挑一首",
 });
 
 const player = usePlayerStore();
 
 const currentId = computed(() => player.currentSong?.id ?? null);
+
+// ===== 侧栏宽度过渡期间冻结容器查询（FIX-CONTEXT-2 #13） =====
+//
+// 跨文件契约：`App.vue` 用同一个字符串键 provide「侧栏宽度过渡中」的 ref。
+// 侧栏折叠/展开/断点切换有 220ms 宽度过渡（DESIGN 规定），列表容器宽度连续变化：
+// 下面的 @container 查询会在中途翻转「专辑列显示/隐藏」（列集合变化 → 每行重新
+// 计算列宽与显隐），即使不翻转，1fr 宽度也逐帧重算。这里在过渡开始时按当时的
+// 宽度钉住宽/窄两种列策略之一，并用 contain 把连续重排限制在列表盒子内；过渡
+// 结束后立刻解除，让容器查询按最终宽度只重排一次（唯一一次列翻转）。
+const SIDEBAR_TRANSITION_KEY = "nnplayer.sidebarTransitioning";
+const sidebarTransitioning = inject<Ref<boolean>>(
+  SIDEBAR_TRANSITION_KEY,
+  ref(false),
+);
+
+/** 与 @container song-list (max-width: 34rem) 完全相同的阈值（34rem = 544px）。 */
+const NARROW_CONTAINER_MAX_PX = 34 * 16;
+
+const rootRef = ref<HTMLElement | null>(null);
+type PinnedGrid = "wide" | "narrow" | null;
+const pinnedGrid = ref<PinnedGrid>(null);
+
+/**
+ * flush:"sync"：在 App 把共享状态置为 true 的同一轮里测量，此时侧栏的 DOM/宽度
+ * 还是过渡前的值（也就是动画中不会翻转的那个列策略），读到的是正确的冻结目标。
+ * 连续切换时共享状态保持 true、不会重复测量：沿用第一次钉住的策略直到整段动画结束。
+ */
+watch(
+  sidebarTransitioning,
+  (transitioning) => {
+    if (transitioning) {
+      // 用 getBoundingClientRect 取小数宽度：容器查询按 CSS px 的连续值比较，
+      // clientWidth 会取整，在 544px 边界上可能钉错一档。根节点无 padding/border，
+      // border-box 宽度即容器查询用的内容盒 inline-size。
+      const width =
+        rootRef.value?.getBoundingClientRect().width ?? window.innerWidth;
+      // @container 的 `max-width: 34rem` 含等号：宽于阈值才保留专辑列。
+      pinnedGrid.value = width > NARROW_CONTAINER_MAX_PX ? "wide" : "narrow";
+      return;
+    }
+    // 过渡结束：解除冻结，容器查询按最终宽度重排一次（唯一一次翻转）。
+    pinnedGrid.value = null;
+  },
+  { flush: "sync" },
+);
 
 const VIRTUAL_THRESHOLD = 160;
 const ROW_HEIGHT = 60;
@@ -208,16 +262,26 @@ function playLabel(song: Song) {
 </script>
 
 <template>
-  <div class="song-list-root min-w-0">
+  <div
+    ref="rootRef"
+    class="song-list-root min-w-0"
+    :class="{
+      'song-list-root--pinned-wide': pinnedGrid === 'wide',
+      'song-list-root--pinned-narrow': pinnedGrid === 'narrow',
+    }"
+  >
     <div class="flex items-center justify-between gap-3 px-3 mb-4">
       <h2 class="text-base font-semibold text-text-primary">
         {{ title ?? "歌曲列表" }}
-        <span class="text-xs text-text-tertiary ml-2 font-normal">
-          共 {{ songs.length }} 首
+        <span class="text-xs text-text-tertiary ml-2 font-normal tabular-nums">
+          <template v-if="totalCount !== undefined && totalCount > songs.length">
+            找到 {{ totalCount }} 首，显示前 {{ songs.length }} 首
+          </template>
+          <template v-else>共 {{ songs.length }} 首</template>
         </span>
       </h2>
       <button
-        class="btn btn-primary shrink-0 text-xs px-4 py-2"
+        class="btn btn-primary shrink-0 text-sm px-4 py-2"
         :disabled="songs.length === 0"
         @click="playAll"
       >
@@ -227,7 +291,7 @@ function playLabel(song: Song) {
 
     <div
       v-if="showIndex"
-      class="song-list-header grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium mobile-song-grid-header"
+      class="song-list-header grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium"
     >
       <div>序号</div>
       <div></div>
@@ -244,7 +308,7 @@ function playLabel(song: Song) {
       <li
         v-for="{ song, index: idx } in visibleSongs"
         :key="`${song.id}:${idx}`"
-        class="song-row song-list-row group relative grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md hover:bg-surface-strong transition-all duration-150 items-center mobile-song-grid"
+        class="song-row song-list-row group relative grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md hover:bg-surface-strong transition-all duration-150 items-center"
         :class="{
           'bg-accent-subtle': currentId === song.id,
         }"
@@ -257,7 +321,7 @@ function playLabel(song: Song) {
             v-if="currentId === song.id && player.audioState.playing"
             :size="12"
             :stroke-width="2"
-            class="text-accent mx-auto animate-play-pulse"
+            class="text-accent mx-auto animate-pulse-fade"
             aria-hidden="true"
           />
           <span v-else-if="currentId === song.id" class="text-text-primary font-semibold">{{ idx + 1 }}</span>
@@ -324,8 +388,9 @@ function playLabel(song: Song) {
       </li>
     </ul>
 
-    <div v-if="songs.length === 0" class="py-12 text-center text-text-tertiary text-sm">
-      这里还没有歌曲
+    <div v-if="songs.length === 0" class="py-12 text-center text-text-tertiary">
+      <p class="text-sm">{{ emptyTitle }}</p>
+      <p class="mt-1 text-xs">{{ emptyHint }}</p>
     </div>
   </div>
 </template>
@@ -360,15 +425,10 @@ function playLabel(song: Song) {
   opacity: 1;
 }
 
-@media (max-width: 768px) {
-  .song-list-album {
-    display: none;
-  }
-}
-
-/* 容器查询：列表自己的宽度（不是窗口宽度）决定列数。
-   固定列 40+44+160+72 + 4×12 间距 = 364px，容器窄于 34rem 时
-   标题列会被压到不可读，此时去掉专辑列，把宽度还给标题/艺人。 */
+/* 容器查询：列表自己的宽度（不是窗口宽度）决定列数，这是唯一的列策略判据。
+   固定列 40+44+160+72 + 4×12 间距 = 364px（加行内边距 24px 共 388px），
+   容器窄于 34rem（544px）时标题列会被压到不可读，此时去掉专辑列，
+   把宽度还给标题/艺人；768 CSS 下列表容器 ≈674px，专辑列正常显示。 */
 .song-list-root {
   container-name: song-list;
   container-type: inline-size;
@@ -383,5 +443,37 @@ function playLabel(song: Song) {
   .song-list-album {
     display: none;
   }
+}
+
+/* ===== 侧栏宽度过渡期间冻结容器查询（FIX-CONTEXT-2 #13） =====
+   220ms 里列表宽度连续变化，容器查询会在中途翻转专辑列显隐并让每行重算列宽。
+   过渡开始时按当时宽度钉住宽/窄列策略（类名由 App provide 的共享过渡状态驱动），
+   contain 把内部重排限制在列表盒子内（行内标题是单行 truncate，不会换行）；
+   `container-type: normal` 停掉逐帧的容器查询重算（结果已由下面的列策略固定）。
+   过渡结束后类名移除，容器查询按最终宽度只重排一次。 */
+.song-list-root--pinned-wide,
+.song-list-root--pinned-narrow {
+  contain: layout paint;
+  container-type: normal;
+}
+
+/* 与 @container 的两个分支逐字一致，保证冻结期间视觉不跳变。 */
+.song-list-root--pinned-wide .song-list-header,
+.song-list-root--pinned-wide .song-list-row {
+  grid-template-columns: 40px 44px 1fr 160px 72px;
+}
+
+.song-list-root--pinned-narrow .song-list-header,
+.song-list-root--pinned-narrow .song-list-row {
+  grid-template-columns: 36px 40px minmax(0, 1fr) 52px;
+}
+
+/* 专辑列的显隐也必须固定，否则 @container 失效后仍会按基础类显示。 */
+.song-list-root--pinned-wide .song-list-album {
+  display: block;
+}
+
+.song-list-root--pinned-narrow .song-list-album {
+  display: none;
 }
 </style>

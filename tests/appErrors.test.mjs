@@ -20,8 +20,12 @@ async function compile(relativePath) {
 }
 
 const appErrorsUrl = await compile("../src/utils/appErrors.ts");
-const { describeAppError, describePlaybackFailure, describeInputError } =
-  await import(appErrorsUrl);
+const {
+  describeAppError,
+  describePlaybackFailure,
+  describeInputError,
+  describeLoginError,
+} = await import(appErrorsUrl);
 
 /** 模拟 useNcmApi.AppError：保留后端 kind 的 Error 实例。 */
 function backendError(kind, message) {
@@ -158,9 +162,111 @@ test("表单本地校验文案原样展示，不生成技术详情", () => {
   assert.equal(described.retryable, false);
 });
 
+// =============== describeLoginError：登录页专用映射 ===============
+
+test("登录凭据错误：说清账号/密码问题，不误报服务不可用", () => {
+  const described = describeLoginError(
+    backendError("Ncm", "NCM API 错误: 登录失败 (code=501): 账号或密码错误"),
+    "account",
+  );
+  assert.equal(described.title, "账号或密码不正确");
+  assert.doesNotMatch(described.title, /服务|稍后重试/);
+  assert.match(described.hint, /检查邮箱或用户名与密码/);
+  assert.equal(described.retryable, false);
+  assert.match(described.detail, /code=501/);
+});
+
+test("登录凭据错误：服务端只给业务码（无中文 message）也能识别", () => {
+  // 实测 code=501 的原文是 "API error (code=501): Unknown error"。
+  const described = describeLoginError(
+    backendError("Ncm", "NCM API 错误: API error (code=501): Unknown error"),
+    "account",
+  );
+  assert.equal(described.title, "账号或密码不正确");
+  assert.equal(described.retryable, false);
+  assert.match(described.detail, /Unknown error/);
+});
+
+test("登录频繁：业务码 509 也归为稍后再试", () => {
+  const described = describeLoginError(
+    backendError("Ncm", "NCM API 错误: 登录失败 (code=509): Unknown error"),
+    "account",
+  );
+  assert.equal(described.title, "登录尝试过于频繁");
+  assert.equal(described.retryable, true);
+});
+
+test("登录验证码错误：恢复动作是重新获取验证码", () => {
+  const described = describeLoginError(
+    backendError("Ncm", "NCM API 错误: 登录失败 (code=502): 验证码错误"),
+    "phone",
+  );
+  assert.equal(described.title, "验证码不正确或已过期");
+  assert.match(described.hint, /重新获取验证码/);
+  assert.equal(described.retryable, false);
+});
+
+test("登录手机号错误：指出手机号格式问题", () => {
+  const described = describeLoginError(
+    backendError("InvalidParam", "参数无效: 手机号或验证码无效"),
+    "phone",
+  );
+  assert.equal(described.title, "手机号格式不正确");
+  assert.match(described.hint, /11 位手机号/);
+});
+
+test("登录频繁：建议稍后再试或换一种登录方式", () => {
+  const described = describeLoginError(
+    backendError("Ncm", "NCM API 错误: 登录失败 (code=503): 操作频繁"),
+    "account",
+  );
+  assert.equal(described.title, "登录尝试过于频繁");
+  assert.match(described.hint, /稍等几分钟|换一种登录方式/);
+  assert.equal(described.retryable, true);
+});
+
+test("登录页不出现「登录已过期」：auth 类失败按登录语境改写", () => {
+  const described = describeLoginError(
+    backendError("Unauthorized", "未登录或 Cookie 已过期"),
+    "account",
+  );
+  assert.equal(described.title, "登录信息已失效");
+  assert.doesNotMatch(described.title, /登录已过期/);
+  assert.equal(described.relogin, false);
+  assert.match(described.detail, /Cookie 已过期/);
+});
+
+test("Cookie 登录失败：恢复动作是重新复制完整 Cookie", () => {
+  const described = describeLoginError(
+    backendError("Unauthorized", "未登录或 Cookie 已过期"),
+    "cookie",
+  );
+  assert.equal(described.title, "Cookie 登录没有成功");
+  assert.match(described.hint, /MUSIC_U/);
+  assert.equal(described.retryable, false);
+});
+
+test("登录网络失败：沿用网络文案，不建议换登录方式", () => {
+  const described = describeLoginError(
+    backendError("Network", "网络请求失败: 连接被拒绝"),
+    "account",
+  );
+  assert.equal(described.title, "网络连接失败");
+  assert.equal(described.category, "network");
+});
+
+test("无法识别的登录失败：不猜原因，给出登录语境回退", () => {
+  const described = describeLoginError(
+    backendError("Internal", "内部错误: 未知异常"),
+    "account",
+  );
+  assert.equal(described.title, "登录没有完成");
+  assert.match(described.detail, /内部错误/);
+});
+
 // =============== describePlaybackFailure：播放链路失败 ===============
 
-test("播放装载失败：标题带歌名 + 原因类别，可重试并保留原文", () => {
+test("播放装载失败：标题带歌名 + 原因类别，并说明已自动跳到下一首", () => {
   const described = describePlaybackFailure(
     playbackFailure({
       kind: "Network",
@@ -168,13 +274,14 @@ test("播放装载失败：标题带歌名 + 原因类别，可重试并保留�
     }),
   );
   assert.equal(described.title, "《晴天》播放失败：网络连接失败");
+  assert.match(described.hint, /^已自动跳到下一首。/);
   assert.match(described.hint, /检查网络连接后重试/);
   assert.equal(described.retryable, true);
   assert.equal(described.relogin, false);
   assert.equal(described.detail, "Network · 网络请求失败: 连接被拒绝");
 });
 
-test("连续 3 首停止：给汇总标题并列出失败歌曲", () => {
+test("连续 3 次停止：按次汇总、去重歌曲名，不重复同一首", () => {
   const described = describePlaybackFailure(
     playbackFailure({
       songId: 3,
@@ -183,11 +290,12 @@ test("连续 3 首停止：给汇总标题并列出失败歌曲", () => {
       message: "NCM API 错误: 服务器错误",
       failCount: 3,
       stopped: true,
-      recentSongNames: ["S1", "S2", "S3"],
+      recentSongNames: ["S1", "S1", "S1"],
     }),
   );
-  assert.equal(described.title, "连续 3 首播放失败，已停止自动切换");
-  assert.match(described.hint, /《S1》、《S2》、《S3》/);
+  assert.equal(described.title, "连续 3 次播放失败，已停止自动切换");
+  assert.match(described.hint, /《S1》。/);
+  assert.doesNotMatch(described.hint, /《S1》、《S1》/);
   assert.doesNotMatch(described.title, /晴|S3/); // 汇总不再把最后一首当单曲失败
   assert.equal(described.retryable, true);
 });

@@ -8,7 +8,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useUserStore } from "@/stores/user";
-import { describeAppError, describeInputError } from "@/utils/appErrors";
+import { describeAppError, describeInputError, describeLoginError } from "@/utils/appErrors";
 import type { UserFacingError } from "@/utils/appErrors";
 import { isValidEmail, isValidPhone, md5Password } from "@/utils/crypto";
 
@@ -27,7 +27,7 @@ const userStore = useUserStore();
 /** 从受保护页面被守卫重定向过来时，明确告诉用户为什么回到登录页。 */
 const loginHint = computed(() =>
   typeof route.query.redirect === "string" && route.query.redirect.length > 0
-    ? "登录已过期或尚未登录，登录后会回到刚才的页面。"
+    ? "登录后才能继续使用；登录后会回到刚才的页面。"
     : "",
 );
 
@@ -54,7 +54,11 @@ async function loadQr() {
     if (disposed || seq !== qrLoadSeq || tab.value !== "qr") return;
     qr.value = nextQr;
     qrError.value = null;
-    qrStatus.value = "请使用网易云音乐 App 扫码登录";
+    // 图片渲染失败时服务端仍会返回 unikey；此时不能再说「请扫码」，
+    // 否则界面一边说没有二维码、一边让用户去扫。
+    qrStatus.value = nextQr.qrImage
+      ? "请使用网易云音乐 App 扫码登录"
+      : "二维码图片没有生成，请刷新二维码后重试。";
     startPolling();
   } catch (e) {
     if (disposed || seq !== qrLoadSeq) return;
@@ -144,7 +148,7 @@ async function submitAccount() {
     await userStore.loginByAccount(accountValue, md5Password(accountPwd.value));
     redirectAfterLogin();
   } catch (e) {
-    accountError.value = describeAppError(e);
+    accountError.value = describeLoginError(e, "account");
   } finally {
     accountLoading.value = false;
   }
@@ -183,7 +187,7 @@ async function sendCaptcha() {
       }
     }, 1000);
   } catch (e) {
-    phoneError.value = describeAppError(e);
+    phoneError.value = describeLoginError(e, "phone");
   } finally {
     captchaSending.value = false;
   }
@@ -197,7 +201,7 @@ async function submitPhone() {
     await userStore.loginByPhone(phone.value.trim(), captcha.value.trim());
     redirectAfterLogin();
   } catch (e) {
-    phoneError.value = describeAppError(e);
+    phoneError.value = describeLoginError(e, "phone");
   } finally {
     phoneLoading.value = false;
   }
@@ -275,20 +279,23 @@ async function submitCookie() {
     await userStore.loginByCookie(cookieRaw.value.trim());
     redirectAfterLogin();
   } catch (e) {
-    cookieError.value = describeAppError(e);
+    cookieError.value = describeLoginError(e, "cookie");
   }
 }
 </script>
 
 <template>
-  <div class="h-full flex items-center justify-center px-6 relative overflow-hidden">
+  <!-- 512 CSS 高的验收基线里卡片比视口高：页面本身负责滚动（overflow-y-auto），
+       卡片用 my-auto 在装得下时垂直居中、装不下时 auto 外边距归零从顶部开始，
+       避免 flex 居中 + 滚动容器把卡片顶端裁到不可滚区域。 -->
+  <div class="h-full flex justify-center px-6 py-6 relative overflow-x-hidden overflow-y-auto">
     <!-- 背景装饰 -->
     <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
       <div class="absolute top-1/4 -left-20 w-96 h-96 rounded-full opacity-[0.07] blur-3xl" style="background: radial-gradient(circle, var(--color-ambient-primary) 0%, transparent 70%);" />
       <div class="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full opacity-[0.05] blur-3xl" style="background: radial-gradient(circle, var(--color-ambient-secondary) 0%, transparent 70%);" />
     </div>
 
-    <div class="login-panel w-full max-w-md p-8 animate-fade-in-up relative z-10">
+    <div class="login-panel my-auto w-full max-w-md p-8 animate-fade-in-up relative z-10">
       <h1 class="text-xl font-semibold mb-1">登录 nnplayer</h1>
       <p v-if="loginHint" class="text-xs text-text-secondary mb-5">
         {{ loginHint }}
@@ -329,7 +336,7 @@ async function submitCookie() {
         class="flex flex-col items-center"
       >
         <div
-          class="w-56 h-56 rounded-xl bg-white p-2 flex items-center justify-center overflow-hidden shadow-lg"
+          class="login-qr rounded-xl bg-white p-2 flex items-center justify-center overflow-hidden"
         >
           <img
             v-if="qr?.qrImage"
@@ -338,7 +345,7 @@ async function submitCookie() {
             class="w-full h-full"
           />
           <span v-else-if="qrLoading" class="text-text-secondary text-xs" role="status">正在获取二维码…</span>
-          <span v-else class="text-text-secondary text-xs">二维码加载失败</span>
+          <span v-else class="text-text-secondary text-xs">二维码暂不可用</span>
         </div>
         <p
           v-if="qrStatus"
@@ -360,7 +367,7 @@ async function submitCookie() {
           <p v-if="qrError.hint" class="login-error-hint">{{ qrError.hint }}</p>
           <div v-if="qrError.retryable" class="login-error-actions">
             <button type="button" class="btn btn-ghost" :disabled="qrLoading" @click="loadQr">
-              重新获取二维码
+              刷新二维码
             </button>
           </div>
           <details v-if="qrError.detail" class="login-error-detail">
@@ -395,14 +402,12 @@ async function submitCookie() {
           id="login-account"
           v-model="account"
           type="text"
-          class="input mb-1"
+          class="input mb-3"
           placeholder="name@example.com 或用户名"
           autocomplete="username"
-          aria-describedby="login-account-help"
+          :aria-invalid="accountError ? 'true' : undefined"
+          :aria-describedby="accountError ? 'login-account-error' : undefined"
         />
-        <p id="login-account-help" class="login-field-help mb-3">
-          可用网易云账号的邮箱或用户名登录。
-        </p>
 
         <label for="login-password" class="block text-xs text-text-secondary mb-1">密码</label>
         <input
@@ -410,31 +415,51 @@ async function submitCookie() {
           v-model="accountPwd"
           type="password"
           class="input mb-3"
-          placeholder="请输入密码"
           autocomplete="current-password"
+          :aria-invalid="accountError ? 'true' : undefined"
+          :aria-describedby="accountError ? 'login-account-error' : undefined"
         />
 
+        <!-- 常驻错误节点：错误文案注入这个始终挂载的 assertive region，提交失败
+             时照旧朗读，之后重新进入任一输入框也能经 aria-describedby 再读到。
+             两个字段共用一份表单级错误（后端只说「账号或密码不正确」，无法归因
+             到单个字段）。 -->
         <div
-          v-if="accountError"
-          class="login-inline-error mb-3"
+          id="login-account-error"
+          :class="accountError ? 'login-inline-error mb-3' : ''"
           role="alert"
           aria-live="assertive"
           aria-atomic="true"
         >
-          <p class="login-error-title">{{ accountError.title }}</p>
-          <p v-if="accountError.hint" class="login-error-hint">
+          <p v-if="accountError" class="login-error-title">{{ accountError.title }}</p>
+          <p v-if="accountError?.hint" class="login-error-hint">
             {{ accountError.hint }}
           </p>
-          <details v-if="accountError.detail" class="login-error-detail">
+          <details v-if="accountError?.detail" class="login-error-detail">
             <summary>技术详情</summary>
             <code>{{ accountError.detail }}</code>
           </details>
         </div>
 
+        <!-- 提交按钮未填完整时保持 disabled，但把「缺什么」写成常驻可见、并被
+             aria-describedby 关联的说明，替代此前静默禁用。 -->
+        <p
+          v-if="!accountValid && !accountLoading"
+          id="login-account-submit-hint"
+          class="login-field-help"
+        >
+          请填写邮箱或用户名和密码后再登录。
+        </p>
+
         <button
           type="submit"
           class="btn btn-primary w-full"
           :disabled="!accountValid || accountLoading"
+          :aria-describedby="
+            !accountValid && !accountLoading
+              ? 'login-account-submit-hint'
+              : undefined
+          "
         >
           {{ accountLoading ? "登录中…" : "登录" }}
         </button>
@@ -458,6 +483,8 @@ async function submitCookie() {
           placeholder="11 位手机号"
           maxlength="11"
           autocomplete="tel"
+          :aria-invalid="phoneError ? 'true' : undefined"
+          :aria-describedby="phoneError ? 'login-phone-error' : undefined"
         />
 
         <label for="login-captcha" class="block text-xs text-text-secondary mb-1">验证码</label>
@@ -470,6 +497,8 @@ async function submitCookie() {
             placeholder="4–6 位数字"
             maxlength="6"
             autocomplete="one-time-code"
+            :aria-invalid="phoneError ? 'true' : undefined"
+            :aria-describedby="phoneError ? 'login-phone-error' : undefined"
           />
           <button
             type="button"
@@ -481,27 +510,41 @@ async function submitCookie() {
           </button>
         </div>
 
+        <!-- 与账号表单同一套常驻错误节点：读屏可重复读取，两个字段共享表单级错误。 -->
         <div
-          v-if="phoneError"
-          class="login-inline-error mb-3"
+          id="login-phone-error"
+          :class="phoneError ? 'login-inline-error mb-3' : ''"
           role="alert"
           aria-live="assertive"
           aria-atomic="true"
         >
-          <p class="login-error-title">{{ phoneError.title }}</p>
-          <p v-if="phoneError.hint" class="login-error-hint">
+          <p v-if="phoneError" class="login-error-title">{{ phoneError.title }}</p>
+          <p v-if="phoneError?.hint" class="login-error-hint">
             {{ phoneError.hint }}
           </p>
-          <details v-if="phoneError.detail" class="login-error-detail">
+          <details v-if="phoneError?.detail" class="login-error-detail">
             <summary>技术详情</summary>
             <code>{{ phoneError.detail }}</code>
           </details>
         </div>
 
+        <p
+          v-if="!phoneValid && !phoneLoading"
+          id="login-phone-submit-hint"
+          class="login-field-help"
+        >
+          请填写有效的 11 位手机号和验证码后再登录。
+        </p>
+
         <button
           type="submit"
           class="btn btn-primary w-full"
           :disabled="!phoneValid || phoneLoading"
+          :aria-describedby="
+            !phoneValid && !phoneLoading
+              ? 'login-phone-submit-hint'
+              : undefined
+          "
         >
           {{ phoneLoading ? "登录中…" : "登录" }}
         </button>
@@ -520,7 +563,7 @@ async function submitCookie() {
           <label for="login-cookie" class="block text-xs text-text-secondary mb-1">
             Cookie（需包含 MUSIC_U）
           </label>
-          <p class="text-[11px] text-text-secondary mb-2 leading-relaxed">
+          <p id="login-cookie-help" class="text-[11px] text-text-secondary mb-2 leading-relaxed">
             从已登录网易云音乐的浏览器中复制完整 Cookie，粘贴到这里。
           </p>
           <textarea
@@ -529,19 +572,25 @@ async function submitCookie() {
             rows="3"
             class="input font-mono text-[11px] resize-none"
             placeholder="MUSIC_U=xxx; __csrf=xxx; ..."
+            :aria-invalid="cookieError ? 'true' : undefined"
+            :aria-describedby="
+              cookieError
+                ? 'login-cookie-help login-cookie-error'
+                : 'login-cookie-help'
+            "
           />
           <div
-            v-if="cookieError"
-            class="login-inline-error mt-2"
+            id="login-cookie-error"
+            :class="cookieError ? 'login-inline-error mt-2' : ''"
             role="alert"
             aria-live="assertive"
             aria-atomic="true"
           >
-            <p class="login-error-title">{{ cookieError.title }}</p>
-            <p v-if="cookieError.hint" class="login-error-hint">
+            <p v-if="cookieError" class="login-error-title">{{ cookieError.title }}</p>
+            <p v-if="cookieError?.hint" class="login-error-hint">
               {{ cookieError.hint }}
             </p>
-            <details v-if="cookieError.detail" class="login-error-detail">
+            <details v-if="cookieError?.detail" class="login-error-detail">
               <summary>技术详情</summary>
               <code>{{ cookieError.detail }}</code>
             </details>
@@ -550,6 +599,9 @@ async function submitCookie() {
             type="button"
             class="btn btn-ghost w-full mt-2 text-xs"
             :disabled="!cookieRaw.includes('MUSIC_U')"
+            :aria-describedby="
+              !cookieRaw.includes('MUSIC_U') ? 'login-cookie-help' : undefined
+            "
             @click="submitCookie"
           >
             使用 Cookie 登录
@@ -567,9 +619,28 @@ async function submitCookie() {
   box-shadow: var(--shadow-floating);
 }
 
-/* 登录表单的常驻说明文字：和错误一样紧贴对应控件，不占用标签位置。 */
+/* 二维码外框沿用 Floating 阴影（Two-Shadow Rule），不再用 Tailwind 的黑色
+   shadow-lg。bg-white 是二维码静区（quiet zone）的扫描要求，不属于纸面配色，
+   因此保留纯白而不是换成 raised-paper。 */
+.login-qr {
+  width: 14rem;
+  height: 14rem;
+  box-shadow: var(--shadow-floating);
+}
+
+/* 矮窗（512 CSS 高验收基线）里 224px 的二维码会把卡片顶到滚不到的位置；
+   收一档到 160px，既保住扫描尺寸，又让卡片首尾都能滚到。 */
+@media (max-height: 560px) {
+  .login-qr {
+    width: 10rem;
+    height: 10rem;
+  }
+}
+
+/* 登录表单的常驻说明文字：和错误一样紧贴对应控件，不占用标签位置。
+   直接给底部间距（scoped 样式在 cascade layer 之外，会盖掉 Tailwind 的 mb-2）。 */
 .login-field-help {
-  margin: 0;
+  margin: 0 0 8px;
   font-size: 11px;
   line-height: 1.5;
   color: var(--color-text-tertiary);

@@ -103,7 +103,8 @@ test("持久化：写读回环，损坏值回落默认，localStorage 故障静�
 });
 
 test("audioQualityOption 返回对应选项元数据", () => {
-  assert.equal(audioQualityOption("exhigh").shortLabel, "320K");
+  // 徽标只表达档位名，不出现裸码率；码率只留在这里的完整标签与副文本。
+  assert.equal(audioQualityOption("exhigh").shortLabel, "极高");
   assert.equal(audioQualityOption("jymaster").label, "超清母带");
 });
 
@@ -131,7 +132,7 @@ test("formatBitrateShort：压缩为徽标短文本，未知值返回 null", () 
 });
 
 test("actualQualityShortLabel：档位优先，档位未知时才用码率", () => {
-  assert.equal(actualQualityShortLabel("exhigh", 999_000), "320K");
+  assert.equal(actualQualityShortLabel("exhigh", 999_000), "极高");
   assert.equal(actualQualityShortLabel("hires", null), "Hi-Res");
   assert.equal(actualQualityShortLabel(null, 320_000), "320K");
   assert.equal(actualQualityShortLabel(null, 0), null);

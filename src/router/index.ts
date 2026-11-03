@@ -1,9 +1,11 @@
 // Vue Router 配置。
 // 注意：createWebHashHistory 用于 Tauri 桌面端更稳妥（无服务器路由）。
 
+import { nextTick } from "vue";
 import {
   createRouter,
   createWebHashHistory,
+  START_LOCATION,
   type RouteRecordRaw,
 } from "vue-router";
 
@@ -88,7 +90,28 @@ router.beforeEach(async (to) => {
   return true;
 });
 
-router.afterEach((to) => {
+/**
+ * 路由切换后把焦点交给新页面（SPA 的焦点管理，WCAG 2.4.3）：
+ * 焦点留在被点击的侧栏链接上时，读屏用户听到的还是旧页面上下文。
+ * 只在 path 变化时移动（搜索页的 query 变化不能把焦点从输入框抢走），
+ * 初始加载不抢；新页面自己已经把焦点放进内容区（如搜索页 autofocus）时尊重它。
+ */
+async function focusRouteContent() {
+  await nextTick();
+  const main = document.querySelector<HTMLElement>(".app-main");
+  if (!main) return; // 桌面歌词窗没有主页面容器
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && main.contains(active)) return;
+  main.focus({ preventScroll: true });
+}
+
+router.afterEach((to, from, failure) => {
   const title = (to.meta?.title as string) || "nnplayer";
   document.title = `${title} · nnplayer`;
+
+  // 被守卫中止/取消的导航没有换页，不能把焦点从原处挪走。
+  if (failure) return;
+  if (from === START_LOCATION) return;
+  if (to.path === from.path) return;
+  void focusRouteContent();
 });

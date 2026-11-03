@@ -204,20 +204,27 @@ export interface YrcLine {
   words: YrcWord[];
 }
 
+type GraphemeSegmenterLike = {
+  segment(input: string): Iterable<{ segment: string }>;
+};
+type GraphemeSegmenterConstructor = new (
+  locales?: string | string[],
+  options?: { granularity: "grapheme" },
+) => GraphemeSegmenterLike;
+
+const GraphemeSegmenter = (
+  Intl as typeof Intl & { Segmenter?: GraphemeSegmenterConstructor }
+).Segmenter;
+/** Segmenter 构造一次复用：逐条 word tag 都 new 一个实例会多花约 55–64% 的
+ *  解析时间（实测 200 行 YRC：21.9ms → 9ms 量级）；输出与逐次构造一致。 */
+let graphemeSegmenter: GraphemeSegmenterLike | null = null;
+
 function splitGraphemes(text: string): string[] {
-  type SegmenterLike = {
-    segment(input: string): Iterable<{ segment: string }>;
-  };
-  type SegmenterConstructor = new (
-    locales?: string | string[],
-    options?: { granularity: "grapheme" },
-  ) => SegmenterLike;
-  const Segmenter = (
-    Intl as typeof Intl & { Segmenter?: SegmenterConstructor }
-  ).Segmenter;
-  if (!Segmenter) return Array.from(text);
-  const segmenter = new Segmenter(undefined, { granularity: "grapheme" });
-  return Array.from(segmenter.segment(text), ({ segment }) => segment);
+  if (!GraphemeSegmenter) return Array.from(text);
+  graphemeSegmenter ??= new GraphemeSegmenter(undefined, {
+    granularity: "grapheme",
+  });
+  return Array.from(graphemeSegmenter.segment(text), ({ segment }) => segment);
 }
 
 /**

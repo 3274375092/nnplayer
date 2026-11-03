@@ -5,8 +5,6 @@
   color-scheme: light;
   /* Gruvbox Light 血统：无歌曲时的稳定结构色；环境光只允许停留在暖色家族。 */
   --color-bg: #fbf1c7;
-  --color-bg-from: #f9f5d7;
-  --color-bg-to: #f2e5bc;
   --color-ambient-primary: #d79921;
   --color-ambient-secondary: #a95823;
   --color-card: #f9f5d7;
@@ -14,7 +12,6 @@
   /* 内容平铺；播放器和弹层通过表面色与阴影表达层级。 */
   --color-border: transparent;
   --color-border-strong: transparent;
-  --color-ring: transparent;
   --color-accent: #af3a03;
   --color-on-accent: #fbf1c7;
   --color-accent-secondary: #d65d0e;
@@ -24,7 +21,6 @@
   --color-text-primary: #282828;
   --color-text-secondary: #504945;
   --color-text-tertiary: #665c54;
-  --color-shadow: transparent;
   --color-scrollbar: #bdae93;
   --color-scrollbar-hover: #7c6f64;
   --color-glow: rgba(175, 58, 3, 0.14);
@@ -33,10 +29,14 @@
   --color-glass: color-mix(in srgb, var(--color-bg) 94%, transparent);
   --color-surface-soft: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
   --color-surface-strong: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
-  --color-highlight: transparent;
   --color-track: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
   --color-thumb: #f9f5d7;
-  --color-canvas: color-mix(in srgb, var(--color-bg) 36%, #f6f7f6);
+  /* 画布的中性色与混合权重在这里单点声明：themeTokens.ts 的 accent-on-subtle
+     推导复刻同一组值（CANVAS_NEUTRAL / CANVAS_BACKGROUND_WEIGHT），改动必须
+     两边同步，themeTokens.test.mjs 会同时断言这三条声明。 */
+  --color-canvas-neutral: #f6f7f6;
+  --color-canvas-weight: 36%;
+  --color-canvas: color-mix(in srgb, var(--color-bg) var(--color-canvas-weight), var(--color-canvas-neutral));
   --color-raised: color-mix(in srgb, var(--color-card) 42%, #fff);
   --shadow-raised: 0 4px 16px rgb(60 56 54 / 6%);
   --shadow-floating: 0 12px 36px rgb(60 56 54 / 12%), 0 2px 6px rgb(60 56 54 / 5%);
@@ -61,9 +61,7 @@ body {
   color: var(--color-text-primary);
   background: var(--color-canvas);
   -webkit-font-smoothing: antialiased;
-  transition:
-    background-color 0.6s ease,
-    color 0.6s ease;
+  transition: background-color 0.15s ease;
 }
 
 ::-webkit-scrollbar {
@@ -82,10 +80,29 @@ body {
   background: var(--color-scrollbar-hover);
 }
 
+/* 桌面歌词是透明无边框窗（url: #/desktop-lyrics）。路由此前只有
+   DesktopLyrics.vue 里异步加载的全局样式负责透明，首帧仍会画出入口样式里的
+   纸色矩形；index.html 的内联脚本在路由代码之前给 <html> 打好这个类，让窗口
+   从第一帧起就是透明背景（审计 #20）。 */
+html.desktop-lyrics-window,
+html.desktop-lyrics-window body {
+  background: transparent !important;
+}
+
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* 内容壳横向兜底：App.vue 的 .app-main 只声明了 overflow-y: auto，按 CSS 规范
+   x 轴会被提升为 auto，于是最小窗 768×512 下 WebKitGTK 会在内容区底缘画出
+   一条 6px 横向滚动条残影（约 830×5 物理像素）。页面横向没有任何可读内容，
+   这里直接取消 x 轴滚动容器：clip 不产生滚动容器（键盘/JS 也无法横向滚动），
+   旧 WebKit 不支持 clip 时退回 hidden。 */
+.app-main {
+  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 @layer components {
@@ -154,6 +171,14 @@ input[type="number"]::-webkit-outer-spin-button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  /* 缓冲中的旋转是状态信息而不是装饰：上面的统一压制会把 LoaderCircle 的
+     .animate-spin 停成一弯静态月牙，播放器静音缓冲时用户就失去唯一的「仍在
+     工作」提示。只给这一个类放回持续旋转，其余动画照旧被压到 0.01ms。 */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 .text-on-accent {
@@ -174,9 +199,6 @@ input[type="number"]::-webkit-outer-spin-button {
   .border-border-strong {
     border-color: var(--color-border-strong);
   }
-  .ring-ring {
-    --tw-ring-color: transparent;
-  }
   .bg-card-hover {
     background-color: var(--color-card-hover);
   }
@@ -186,15 +208,6 @@ input[type="number"]::-webkit-outer-spin-button {
   .bg-accent-subtle {
     background-color: var(--color-accent-subtle);
   }
-  .shadow-theme {
-    box-shadow: var(--shadow-floating);
-  }
-  .text-glow {
-    text-shadow: 0 0 12px var(--color-glow);
-  }
-  .bg-gradient-bar {
-    background: linear-gradient(90deg, var(--color-accent), var(--color-accent-secondary));
-  }
 }
 
 @media (max-width: 768px) {
@@ -202,18 +215,19 @@ input[type="number"]::-webkit-outer-spin-button {
     grid-template-columns: 1fr !important;
   }
 
-  .mobile-song-grid {
-    grid-template-columns: 36px 40px 1fr 52px !important;
-  }
+  /* 歌曲列表的列策略只由 SongList.vue 的 @container song-list（34rem）决定，
+     不再按窗口宽度强制 4 列：固定列 40+44+160+72 + 4×12 间距 = 364px，
+     与行内边距 24px 合计 388px；768 CSS 下列表容器 ≈674px > 544px（34rem），
+     专辑列有位置，窗口媒体查询不该把它夺走。 */
 
-  .mobile-song-grid-header {
-    grid-template-columns: 36px 40px 1fr 52px !important;
-  }
-
+  /* 窄窗播放条 74px：中央列 = 40px 控件行 + 8px 间距 + 12px 进度行 = 60px，
+     居中后上下各 7px；进度行 55–67、24px 命中框 49–73，完整落在条内；
+     播放键圆心(27) ↔ 命中框圆心(61) = 34px ≥ 20 + 12 = 32px（WCAG 2.5.8：
+     目标本身即 24px，不再依赖间距例外）。几何契约见 tests/playerBarGeometry.test.mjs。 */
   .mobile-player-bar {
     width: calc(100% - 16px) !important;
     max-width: calc(100% - 16px) !important;
-    height: 60px !important;
+    height: 74px !important;
     padding-left: 12px !important;
     padding-right: 12px !important;
     gap: 8px !important;
@@ -230,9 +244,13 @@ input[type="number"]::-webkit-outer-spin-button {
     display: flex;
   }
 
+  /* 窄窗页面内边距：横向 20px（DESIGN 窄屏 20/12），纵向 12px。
+     播放条遮挡由 .app-main 的 --player-reserved-space: 90px（74 播放条
+     + 8 底距 + 8 间隙）统一让开，页面自身不再叠底部留白——单一来源，
+     避免双倍空白或某些页面漏留白。见 tests/playerBarGeometry.test.mjs。 */
   .mobile-content-padding {
-    padding-left: 12px !important;
-    padding-right: 12px !important;
-    padding-bottom: 80px !important;
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+    padding-top: 12px !important;
   }
 }

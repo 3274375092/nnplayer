@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { isTauri } from "@tauri-apps/api/core";
 import {
   ChevronLeft,
@@ -24,9 +24,22 @@ import AboutDialog from "@/components/AboutDialog.vue";
 import QueueDrawer from "@/components/QueueDrawer.vue";
 
 const router = useRouter();
+const route = useRoute();
 const userStore = useUserStore();
 const desktopLyricsStore = useDesktopLyricsStore();
 const noticeStore = useNoticeStore();
+
+/**
+ * 侧栏宽度过渡（DESIGN 规定的 220ms）开始/结束信号。
+ * App 收到后把「过渡中」状态 provide 给页面组件（SongList 注入），让容器查询
+ * 的结果在动画期间保持冻结；所有会改变侧栏实际宽度的路径（桌面折叠/展开、
+ * 窄窗浮层收放、768↔769 断点切换）都汇聚到这一组事件，页面侧只会看到
+ * 「开始 → 一次结束」。
+ */
+const emit = defineEmits<{
+  (e: "width-transition-start"): void;
+  (e: "width-transition-end"): void;
+}>();
 
 const STORAGE_KEY = "nnplayer.sidebarCollapsed";
 /** 首次驻留托盘提示只出现一次的标记。 */
@@ -64,6 +77,55 @@ const shellWidthClass = computed(() =>
       : "w-60",
 );
 
+// ===== 宽度过渡信号（供 App 冻结页面侧容器查询，见 FIX-CONTEXT-2 #13） =====
+
+/** DESIGN 规定的侧栏宽度过渡时长（与 aside 的 duration-220 / shell 的 220ms 一致）。 */
+const WIDTH_TRANSITION_MS = 220;
+/** 多等一帧再解除冻结：等最后一帧的宽度提交后，页面只按最终宽度重排一次。 */
+const WIDTH_TRANSITION_SETTLE_MS = WIDTH_TRANSITION_MS + 20;
+let widthTransitionTimer: number | undefined;
+
+const reduceMotionQuery =
+  typeof window !== "undefined"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)")
+    : null;
+
+/**
+ * 侧栏实际宽度（64 / 240）。桌面折叠、窄窗浮层、断点切换最终都落到这里，
+ * 因此 watch 它能覆盖全部宽度过渡路径；只有宽度真的变化才通知。
+ */
+const effectiveSidebarWidth = computed(() => (compact.value ? 64 : 240));
+const lastSidebarWidth = ref(effectiveSidebarWidth.value);
+
+function endWidthTransition() {
+  if (widthTransitionTimer !== undefined) {
+    window.clearTimeout(widthTransitionTimer);
+    widthTransitionTimer = undefined;
+  }
+  emit("width-transition-end");
+}
+
+function beginWidthTransition() {
+  // 减少动效时宽度是瞬变的，没有逐帧重排可冻结，也不该让页面多冻结 240ms。
+  if (reduceMotionQuery?.matches) return;
+  // 连续切换（动画中途再点）会重置计时器，但保持同一段「过渡中」，
+  // 页面侧继续沿用第一次钉住的列策略，不会在动画中途重新测量。
+  emit("width-transition-start");
+  if (widthTransitionTimer !== undefined) {
+    window.clearTimeout(widthTransitionTimer);
+  }
+  widthTransitionTimer = window.setTimeout(
+    endWidthTransition,
+    WIDTH_TRANSITION_SETTLE_MS,
+  );
+}
+
+watch(effectiveSidebarWidth, (width) => {
+  if (width === lastSidebarWidth.value) return;
+  lastSidebarWidth.value = width;
+  beginWidthTransition();
+});
+
 const menu = [
   { to: "/now-playing", label: "正在播放", icon: CirclePlay },
   { to: "/daily", label: "每日推荐", icon: Sparkles },
@@ -90,6 +152,14 @@ function activeOptionId(listId: string) {
     ? optionId(listId, highlightIndex.value)
     : undefined;
 }
+/** 建议行副标题：艺人 · 专辑，空字段不参与拼接，避免只剩一个孤立的「·」。 */
+function suggestionMeta(s: SearchSuggestion): string {
+  return [s.song?.artists, s.song?.album].filter(Boolean).join(" · ");
+}
+/** 建议行标题：关键词、歌名都没有时用「歌曲」兜底，不留空行或破折号。 */
+function suggestionTitle(s: SearchSuggestion): string {
+  return s.keyword || s.song?.name || "歌曲";
+}
 let debounceTimer: number | undefined;
 let inFlightSeq = 0;
 
@@ -104,6 +174,46 @@ const sidebarRef = ref<HTMLElement | null>(null);
 /** 搜索弹层（dialog 模式）的焦点圈容器。 */
 const searchPanelRef = ref<HTMLElement | null>(null);
 const searchExpand = ref(false);
+
+/**
+ * 搜索页上侧栏输入框是 route.query.q 的镜像：路由成为唯一查询来源，
+ * 页面输入框与侧栏不再各持一份会互相打架的关键词。其它页面上它仍是独立草稿。
+ */
+const onSearchPage = computed(() => route.name === "Search");
+/** 上一次路由是否停在搜索页：离开时清掉镜像来的关键词，不留误导性的旧词。 */
+let wasOnSearchPage = false;
+
+/** 路由 query.q 只接受字符串：重复参数会解析成数组，宁可当作空查询。 */
+function routeKeyword(): string {
+  const q = route.query.q;
+  return typeof q === "string" ? q : "";
+}
+
+/** 路由切换后对齐侧栏输入：进入搜索页镜像当前查询，离开时清空。 */
+function syncKeywordWithRoute() {
+  const current = router.currentRoute.value;
+  const onSearch = current.name === "Search";
+  if (onSearch) {
+    keyword.value =
+      typeof current.query.q === "string" ? current.query.q : "";
+  } else if (wasOnSearchPage) {
+    keyword.value = "";
+  }
+  wasOnSearchPage = onSearch;
+}
+
+/**
+ * 搜索页上侧栏输入停顿后把关键词写回路由（replace，不新增历史）：
+ * 页面输入框由 route.query.q 驱动，两个输入框看到同一个词、也搜同一批结果。
+ */
+function syncKeywordToRoute() {
+  if (!onSearchPage.value) return;
+  // 与路由已经一致就不重复导航（输入后又删回原词会走到这里）。
+  if (routeKeyword() === keyword.value) return;
+  void router.replace({
+    query: keyword.value ? { q: keyword.value } : {},
+  });
+}
 
 function goSearch(kw?: string) {
   const q = (kw ?? keyword.value).trim();
@@ -154,7 +264,11 @@ function onInput() {
   // 立即使旧请求失效，避免防抖窗口内显示上一关键词的结果。
   suggestError.value = false;
   inFlightSeq += 1;
-  debounceTimer = window.setTimeout(fetchSuggest, 300);
+  debounceTimer = window.setTimeout(() => {
+    fetchSuggest();
+    // 搜索页上路由是唯一真相：停顿后同步回 query，页面输入框随之更新。
+    syncKeywordToRoute();
+  }, 300);
 }
 
 function onEnter() {
@@ -214,7 +328,7 @@ function onSuggestionClick(idx: number) {
 function logout() {
   if (
     !window.confirm(
-      "退出登录？退出后会停止当前播放，需要重新登录才能继续使用。",
+      "退出登录？当前播放会停止，本机登录信息会清除，之后需要重新登录才能继续使用。",
     )
   ) {
     return;
@@ -469,14 +583,31 @@ watch(
   },
 );
 
+// 搜索页的路由查询是唯一真相：页面输入框或前进/后退改了 q，侧栏同步镜像；
+// 侧栏自己写回路由时 q 与本地输入相等，这里不会回灌覆盖正在输入的新内容。
+watch(
+  () => route.query.q,
+  () => {
+    if (!onSearchPage.value) return;
+    const next = routeKeyword();
+    if (next === keyword.value) return;
+    keyword.value = next;
+    // 外部改了查询：上一次的建议已经不对应当前关键词，收起而不是继续显示。
+    hideSuggest();
+  },
+);
+
 watch(
   () => router.currentRoute.value.path,
   () => {
     hideSuggest();
-    // 窄窗里点导航后收起浮层，把整幅内容还给页面；浮层是 dialog，
-    // 收起后把焦点交还触发按钮，避免焦点掉到 body。
-    if (narrowExpanded.value) closeNarrowOverlay();
+    // 窄窗里点导航后收起浮层，把整幅内容还给页面；不在这里归还焦点：
+    // 路由切换后的焦点统一由 router.afterEach 交给新页面的内容区，
+    // 否则两个 nextTick 回调会互相抢焦点。
+    if (narrowExpanded.value) closeNarrowOverlay(false);
     searchExpand.value = false;
+    // 进入/离开搜索页时对齐输入框，离开后不留下与页面不一致的旧词。
+    syncKeywordWithRoute();
   },
   { immediate: true },
 );
@@ -495,6 +626,8 @@ onBeforeUnmount(() => {
   narrowQuery?.removeEventListener("change", onNarrowChange);
   if (debounceTimer) window.clearTimeout(debounceTimer);
   clearOverlayTimer();
+  // 卸载时若仍在过渡中，补发结束信号，避免 App 的共享状态永远停在 true。
+  if (widthTransitionTimer !== undefined) endWidthTransition();
 });
 </script>
 
@@ -508,7 +641,7 @@ onBeforeUnmount(() => {
     <aside
       ref="sidebarRef"
       :class="[
-        'sidebar h-full py-6 flex flex-col transition-[width,padding] duration-220 ease-out overflow-hidden',
+        'sidebar h-full py-6 flex flex-col transition-[width] duration-220 ease-out overflow-hidden',
         compact ? 'w-16 px-2' : 'w-60 px-4',
         { 'sidebar--overlay': overlayActive },
       ]"
@@ -631,13 +764,13 @@ onBeforeUnmount(() => {
               />
               <div class="min-w-0 flex-1">
                 <div class="truncate">
-                  {{ s.keyword || s.song?.name || "—" }}
+                  {{ suggestionTitle(s) }}
                 </div>
                 <div
-                  v-if="s.song"
+                  v-if="suggestionMeta(s)"
                   class="text-[11px] text-text-tertiary truncate"
                 >
-                  {{ s.song.artists }} · {{ s.song.album }}
+                  {{ suggestionMeta(s) }}
                 </div>
               </div>
             </div>
@@ -662,96 +795,101 @@ onBeforeUnmount(() => {
         <Transition name="search-fade">
           <div
             v-if="searchExpand && compact"
-            class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-start justify-center pt-20 px-4"
-            @click.self="closeSearchModal"
+            class="fixed inset-0 z-40 overflow-y-auto bg-black/60 backdrop-blur-sm"
           >
+            <!-- 短视口下外层滚动；关闭只认舞台空白处（点滚动条不会误关，与关于弹层同构）。 -->
             <div
-              ref="searchPanelRef"
-              class="glass p-4 w-full max-w-md"
-              role="dialog"
-              aria-modal="true"
-              aria-label="搜索歌曲"
-              tabindex="-1"
+              class="search-modal-stage flex min-h-full items-start justify-center px-4 pt-20 pb-6"
+              @click.self="closeSearchModal"
             >
-              <input
-                ref="searchInputRef"
-                v-model="keyword"
-                type="text"
-                placeholder="搜索歌曲或艺人"
-                class="input mb-3"
-                autocomplete="off"
-                aria-label="搜索歌曲或艺人"
-                role="combobox"
-                aria-autocomplete="list"
-                aria-haspopup="listbox"
-                :aria-expanded="showSuggest && suggestions.length > 0"
-                :aria-controls="
-                  showSuggest && suggestions.length > 0
-                    ? SUGGEST_MODAL_LIST_ID
-                    : undefined
-                "
-                :aria-activedescendant="
-                  activeOptionId(SUGGEST_MODAL_LIST_ID)
-                "
-                @input="onInput"
-                @keydown="onKeydown"
-                @keydown.enter="onEnter"
-              />
               <div
-                v-if="suggestError"
-                class="px-3 py-2 text-xs text-accent"
-                role="status"
+                ref="searchPanelRef"
+                class="glass search-modal-panel p-4 w-full max-w-md"
+                role="dialog"
+                aria-modal="true"
+                aria-label="搜索歌曲"
+                tabindex="-1"
               >
-                搜索建议加载失败，按回车可直接搜索
-              </div>
-              <div
-                v-else-if="showSuggest && suggestions.length > 0"
-                :id="SUGGEST_MODAL_LIST_ID"
-                role="listbox"
-                aria-label="搜索建议"
-                class="max-h-72 overflow-y-auto"
-              >
-                <div
-                  v-for="(s, idx) in suggestions"
-                  :key="`${s.keyword}-${s.song?.id ?? idx}`"
-                  :id="optionId(SUGGEST_MODAL_LIST_ID, idx)"
-                  role="option"
-                  :aria-selected="highlightIndex === idx"
-                  class="px-3 py-2 cursor-pointer rounded-btn flex items-center gap-2 text-sm"
-                  :class="
-                    highlightIndex === idx
-                      ? 'bg-accent-subtle text-text-primary'
-                      : 'hover:bg-card-hover'
+                <input
+                  ref="searchInputRef"
+                  v-model="keyword"
+                  type="text"
+                  placeholder="搜索歌曲或艺人"
+                  class="input mb-3 shrink-0"
+                  autocomplete="off"
+                  aria-label="搜索歌曲或艺人"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-haspopup="listbox"
+                  :aria-expanded="showSuggest && suggestions.length > 0"
+                  :aria-controls="
+                    showSuggest && suggestions.length > 0
+                      ? SUGGEST_MODAL_LIST_ID
+                      : undefined
                   "
-                  @mouseenter="highlightIndex = idx"
-                  @click="onSuggestionClick(idx)"
+                  :aria-activedescendant="
+                    activeOptionId(SUGGEST_MODAL_LIST_ID)
+                  "
+                  @input="onInput"
+                  @keydown="onKeydown"
+                  @keydown.enter="onEnter"
+                />
+                <div
+                  v-if="suggestError"
+                  class="px-3 py-2 text-xs text-accent shrink-0"
+                  role="status"
                 >
-                  <Search
-                    :size="14"
-                    :stroke-width="1.75"
-                    class="text-text-tertiary shrink-0"
-                  />
-                  <div class="min-w-0 flex-1">
-                    <div class="truncate">
-                      {{ s.keyword || s.song?.name || "—" }}
-                    </div>
-                    <div
-                      v-if="s.song"
-                      class="text-[11px] text-text-tertiary truncate"
-                    >
-                      {{ s.song.artists }} · {{ s.song.album }}
+                  搜索建议加载失败，按回车可直接搜索
+                </div>
+                <div
+                  v-else-if="showSuggest && suggestions.length > 0"
+                  :id="SUGGEST_MODAL_LIST_ID"
+                  role="listbox"
+                  aria-label="搜索建议"
+                  class="max-h-72 min-h-0 overflow-y-auto"
+                >
+                  <div
+                    v-for="(s, idx) in suggestions"
+                    :key="`${s.keyword}-${s.song?.id ?? idx}`"
+                    :id="optionId(SUGGEST_MODAL_LIST_ID, idx)"
+                    role="option"
+                    :aria-selected="highlightIndex === idx"
+                    class="px-3 py-2 cursor-pointer rounded-btn flex items-center gap-2 text-sm"
+                    :class="
+                      highlightIndex === idx
+                        ? 'bg-accent-subtle text-text-primary'
+                        : 'hover:bg-card-hover'
+                    "
+                    @mouseenter="highlightIndex = idx"
+                    @click="onSuggestionClick(idx)"
+                  >
+                    <Search
+                      :size="14"
+                      :stroke-width="1.75"
+                      class="text-text-tertiary shrink-0"
+                    />
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate">
+                        {{ suggestionTitle(s) }}
+                      </div>
+                      <div
+                        v-if="suggestionMeta(s)"
+                        class="text-[11px] text-text-tertiary truncate"
+                      >
+                        {{ suggestionMeta(s) }}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-              <div class="flex justify-end mt-2">
-                <button
-                  type="button"
-                  class="btn btn-ghost text-xs"
-                  @click="closeSearchModal"
-                >
-                  取消
-                </button>
+                <div class="flex justify-end mt-2 shrink-0">
+                  <button
+                    type="button"
+                    class="btn btn-ghost text-xs"
+                    @click="closeSearchModal"
+                  >
+                    取消
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -783,6 +921,7 @@ onBeforeUnmount(() => {
           ]"
           active-class="!text-accent-on-subtle !bg-accent-subtle font-medium"
           :title="compact ? item.label : undefined"
+          :aria-label="compact ? item.label : undefined"
         >
           <component
             :is="item.icon"
@@ -919,7 +1058,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* 常驻 flex 流的占位 wrapper：aside 在窄窗浮层状态下变 fixed 时，
    由 wrapper 继续占住 64px 轨道宽度，内容壳与播放条不会横向跳动。
-   宽度过渡与 aside 的 `transition-[width,padding] duration-220 ease-out`
+   宽度过渡与 aside 的 `transition-[width] duration-220 ease-out`
    完全同步，桌面折叠/展开与 768↔769 断点切换时内容平滑跟随。 */
 .sidebar-shell {
   display: flex;
@@ -934,6 +1073,10 @@ onBeforeUnmount(() => {
 
 .sidebar {
   background: var(--color-surface-soft);
+  /* 只过渡 width（DESIGN 的 220ms）：padding 不再参与过渡，二次失效的盒子少一半；
+     layout/paint containment 把侧栏内部的 reflow 收在栏内，不向内容壳外溢。
+     所有浮层（队列抽屉/搜索/关于）都 Teleport 到 body，不会被 paint containment 裁掉。 */
+  contain: layout paint;
 }
 
 /* 侧栏内所有可键盘聚焦的控件统一 2px 陶土焦点环（DESIGN 的焦点约定）。 */
@@ -955,6 +1098,15 @@ onBeforeUnmount(() => {
     background: var(--color-bg);
     box-shadow: var(--shadow-floating);
   }
+}
+
+/* 折叠态搜索弹层：短视口下整层可滚动，面板高度封顶在视口内，
+   建议列表收缩滚动，取消按钮始终可达（不再被 fixed 层裁掉）。 */
+.search-modal-panel {
+  display: flex;
+  max-height: calc(100vh - 104px);
+  max-height: calc(100dvh - 104px);
+  flex-direction: column;
 }
 
 .search-fade-enter-active,

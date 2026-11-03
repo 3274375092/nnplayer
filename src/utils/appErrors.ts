@@ -281,11 +281,133 @@ export function describeInputError(message: string): UserFacingError {
   return { ...INPUT_COPY, title: message, hint: "", detail: "" };
 }
 
+// =============== 登录页：把凭据/验证码/频率类失败说清楚 ===============
+//
+// 账号、验证码登录失败会以 AppError::Ncm 返回（如
+// 「NCM API 错误: 登录失败 (code=501): 账号或密码错误」）。若直接走通用
+// API 文案，用户会被告知「音乐服务暂时不可用 / 请稍后重试」——既误报原因，
+// 又给出无用的恢复动作。这里在通用映射之上补一层登录语境。
+
+export type LoginErrorContext = "account" | "phone" | "cookie";
+
+const LOGIN_CREDENTIALS_COPY: ErrorCopy = {
+  category: "input",
+  title: "账号或密码不正确",
+  hint: "检查邮箱或用户名与密码后重新登录。",
+  retryable: false,
+  relogin: false,
+};
+
+const LOGIN_CAPTCHA_COPY: ErrorCopy = {
+  category: "input",
+  title: "验证码不正确或已过期",
+  hint: "请重新获取验证码后再试。",
+  retryable: false,
+  relogin: false,
+};
+
+const LOGIN_PHONE_COPY: ErrorCopy = {
+  category: "input",
+  title: "手机号格式不正确",
+  hint: "检查 11 位手机号后重新获取验证码。",
+  retryable: false,
+  relogin: false,
+};
+
+const LOGIN_RATE_LIMIT_COPY: ErrorCopy = {
+  category: "api",
+  title: "登录尝试过于频繁",
+  hint: "稍等几分钟再试；也可以换一种登录方式。",
+  retryable: true,
+  relogin: false,
+};
+
+const LOGIN_AUTH_COPY: ErrorCopy = {
+  category: "auth",
+  title: "登录信息已失效",
+  hint: "请重新输入账号，或改用扫码登录。",
+  retryable: false,
+  relogin: false,
+};
+
+const LOGIN_COOKIE_COPY: ErrorCopy = {
+  category: "input",
+  title: "Cookie 登录没有成功",
+  hint: "请从已登录网易云音乐的浏览器重新复制完整 Cookie，并确认包含 MUSIC_U。",
+  retryable: false,
+  relogin: false,
+};
+
+const LOGIN_SERVICE_COPY: ErrorCopy = {
+  category: "api",
+  title: "登录没有完成",
+  hint: "音乐服务暂时没有响应，请稍后重试。",
+  retryable: true,
+  relogin: false,
+};
+
+/** 登录页的默认回退：Cookie 登录与账号/验证码登录的下一步不同。 */
+function loginFallbackCopy(context: LoginErrorContext): ErrorCopy {
+  return context === "cookie" ? LOGIN_COOKIE_COPY : LOGIN_SERVICE_COPY;
+}
+
+/**
+ * 登录失败的专用映射：在通用错误层之上识别「凭据 / 验证码 / 手机号 /
+ * 频率」等用户可自行修正的原因；登录页也不该出现「登录已过期」这种
+ * 面向已登录界面的说法。
+ */
+export function describeLoginError(
+  error: unknown,
+  context: LoginErrorContext = "account",
+): UserFacingError {
+  const base = describeAppError(error);
+  const text = base.detail;
+
+  // 先认后端原文里的具体原因（Rust 会把服务端中文原样带进 message）。
+  if (/手机号/.test(text)) return buildError(LOGIN_PHONE_COPY, base.detail);
+  if (/验证码/.test(text)) return buildError(LOGIN_CAPTCHA_COPY, base.detail);
+  if (/(密码|账号|帐户|用户名)/.test(text)) {
+    return buildError(LOGIN_CREDENTIALS_COPY, base.detail);
+  }
+  if (/(频繁|限流|风控|操作过快|稍后再试)/.test(text)) {
+    return buildError(LOGIN_RATE_LIMIT_COPY, base.detail);
+  }
+
+  // 服务端有时不带中文 message（实测 code=501 返回 "Unknown error"），
+  // 只能按业务码兜底：501/502 都是账号或密码问题，509 是登录频繁。
+  const code = /code=(\d+)/.exec(text)?.[1];
+  if (context !== "cookie" && (code === "501" || code === "502")) {
+    return buildError(LOGIN_CREDENTIALS_COPY, base.detail);
+  }
+  if (code === "509") {
+    return buildError(LOGIN_RATE_LIMIT_COPY, base.detail);
+  }
+
+  // 网络层失败原样保留：换登录方式也解决不了断网。
+  if (base.category === "network") return base;
+
+  if (base.category === "auth") {
+    return buildError(
+      context === "cookie" ? LOGIN_COOKIE_COPY : LOGIN_AUTH_COPY,
+      base.detail,
+    );
+  }
+  if (base.category === "input") {
+    return buildError(
+      context === "cookie" ? LOGIN_COOKIE_COPY : LOGIN_CREDENTIALS_COPY,
+      base.detail,
+    );
+  }
+  return buildError(loginFallbackCopy(context), base.detail);
+}
+
 /**
  * 播放失败（装载失败 / 流中断 / 切档重载失败）的用户语言汇总。
  *
- * 连续失败达到引擎上限时不再展示单曲标题，而给出「连续 N 首失败、已停止
- * 自动切换」的汇总，并列出失败歌曲名，保证停止原因可见。
+ * 引擎在未达到上限时会自动切到下一首（见 recoverFromPlaybackFailure），
+ * 单曲失败文案必须把这件事说出来，否则用户会以为播放停在这里。
+ * 连续失败达到上限时不再展示单曲标题，而给出「连续 N 次失败、已停止
+ * 自动切换」的汇总，并去重列出失败歌曲名，保证停止原因可见。
  */
 export function describePlaybackFailure(
   failure: PlaybackFailure,
@@ -298,12 +420,13 @@ export function describePlaybackFailure(
       : base;
 
   if (failure.stopped) {
-    const names = failure.recentSongNames
+    // 单曲循环时同一首会被反复重试，按次计数并去重，避免《X》、《X》、《X》。
+    const names = [...new Set(failure.recentSongNames)]
       .map((name) => `《${name}》`)
       .join("、");
     return {
       ...cause,
-      title: `连续 ${failure.failCount} 首播放失败，已停止自动切换`,
+      title: `连续 ${failure.failCount} 次播放失败，已停止自动切换`,
       hint: names ? `失败歌曲：${names}。${cause.hint}` : cause.hint,
     };
   }
@@ -319,5 +442,6 @@ export function describePlaybackFailure(
   return {
     ...cause,
     title: `《${failure.songName}》播放失败：${cause.title}`,
+    hint: `已自动跳到下一首。${cause.hint}`,
   };
 }

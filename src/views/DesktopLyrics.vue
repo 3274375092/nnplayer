@@ -2,21 +2,22 @@
 // 独立桌面歌词窗口页面（PR2 升级）。
 //
 // 升级内容：
-//   1. CSS 变量驱动字号 / 不透明度 / 颜色（通过 useLyricWindowPrefs）
-//   2. 自定义拖动（mousedown → startDragging，锁定后禁用）
+//   1. CSS 变量驱动字号 / 不透明度（通过 useLyricWindowPrefs）
+//   2. 自定义拖动（Pointer Events → startDragging，锁定后禁用）
 //   3. 双击切换锁定
 //   4. Hover 工具条（字号 +/-、不透明度滑块、锁定、关闭）
 //   5. 几何信息防抖持久化（useWindowGeometry）
-//   6. 监听主窗 apply-prefs 事件（同步主窗设置面板）
+//   6. Esc 只收起工具条，不销毁窗口；强退出只保留工具条关闭按钮
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 import { useDesktopLyricsBridge } from "@/composables/useDesktopLyricsBridge";
 import { useLyricWindowPrefs } from "@/composables/useLyricWindowPrefs";
 import { useWindowGeometry } from "@/composables/useWindowGeometry";
 import { createKaraokeFrameProjector } from "@/lyrics/lyricFrame";
 import { contrastRatio, DEFAULT_DESKTOP_ACCENT } from "@/utils/themeTokens";
+import { langForLyric } from "@/utils/lyricScript";
 
 const {
   state,
@@ -24,13 +25,11 @@ const {
   connectionStatus,
   connectionError,
 } = useDesktopLyricsBridge();
-const { prefs, apply: applyPrefs } = useLyricWindowPrefs();
+const { prefs } = useLyricWindowPrefs();
 useWindowGeometry(); // 防抖保存窗口位置/大小
 
-const unlistens: UnlistenFn[] = [];
 const toolbarVisible = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
-let disposed = false;
 
 // =============== 本地绝对媒体时钟 + 独立时间轴定位 ===============
 // 主窗只低频发送绝对时钟锚点；完整 lines/tokensByLine 在快照中只传一次。
@@ -50,6 +49,9 @@ const visible = computed(() => {
 
 const hasSong = computed(() => !!state.value.songName);
 const hasLyric = computed(() => state.value.lines.length > 0);
+/** 有歌但没有歌词时歌名 chip 常驻，否则移开鼠标就不知道这是哪首歌；
+ *  有歌词时仍只在工具条出现时显示，避免常驻遮挡桌面。 */
+const songInfoAlwaysVisible = computed(() => hasSong.value && !hasLyric.value);
 
 const placeholderText = computed(() => {
   // 首开握手：先明确「正在连接」，2.5s 未收到主窗快照升级为可见的重试提示。
@@ -72,8 +74,10 @@ const placeholderText = computed(() => {
 // 无 YRC token 时只显示行级歌词，不伪造看似精确的逐字动画。
 
 const karaokeFrameProjector = createKaraokeFrameProjector();
-// 卡拉OK擦色 30fps 节流（与主窗一致）：透明置顶窗的逐字重绘是子窗光栅大头，
-// 30fps 擦除无肉眼差异，重绘次数减半。
+// 卡拉OK擦色 20fps 节流：透明置顶窗的逐字重绘（每字 3 个节点 + clip-path +
+// 描边阴影）是子窗光栅大头。DESIGN 只要求擦色跟得上演唱，20fps 与 30fps 无
+// 肉眼差异，重绘次数再降三分之一；桥接帧循环同步降到 33ms（见 useDesktopLyricsBridge）。
+const KARAOKE_PAINT_INTERVAL_MS = 50;
 const karaokeProgressMs = ref(0);
 let lastKaraokePaint = 0;
 watch(
@@ -88,7 +92,7 @@ watch(
   () => lyricFrame.value.lineProgressMs,
   (ms) => {
     const now = performance.now();
-    if (now - lastKaraokePaint >= 33) {
+    if (now - lastKaraokePaint >= KARAOKE_PAINT_INTERVAL_MS) {
       lastKaraokePaint = now;
       karaokeProgressMs.value = ms;
     }
@@ -97,6 +101,91 @@ watch(
 const projectedKaraokeFrame = computed(() =>
   karaokeFrameProjector.project(lyricFrame.value.tokens, karaokeProgressMs.value)
 );
+
+// =============== 上下文槽位：下一行 + 翻译（唯一槽位） ===============
+//
+// 上下文只保留一个槽位（下一行），固定在窗口右下：悬浮工具条在顶部右侧，
+// 两者竖直方向隔着一整块当前行，工具条既盖不到它，也不需要 hover 让位
+// （不重排任何歌词行）。跟唱最需要的是“接下来唱什么”，刚唱过的内容已经由
+// 当前行的逐字擦色交代，所以上一行让位给下一行。
+//
+// 窗口固定 800×200（本机 125% 渲染下 160 CSS）：46–48px 字号时当前行底板下缘
+// 到窗口底部只剩 30 CSS 左右，这条安全带必须实测——猜一个固定值就会把上下文
+// 底板叠到当前行底板上（评审判定的“两块黑板压字”）。
+
+const currentWrapRef = ref<HTMLElement | null>(null);
+/** 上下文底板可用高度（px）；null = 尚未测量，先用 CSS 里的 44px 兜底。 */
+const contextBandPx = ref<number | null>(null);
+/** 底板底边距（与 .context-line 的 bottom 一致）与两板之间的呼吸距离。 */
+const CONTEXT_BOTTOM_OFFSET_PX = 8;
+const CONTEXT_BAND_GAP_PX = 2;
+/** .context-line__stack 的内边距与 .context-line 的行高（与 CSS 同源）。 */
+const CONTEXT_STACK_TOP_PAD_PX = 3;
+const CONTEXT_STACK_BOTTOM_PAD_PX = 6;
+/** 底边渐隐区（mask 的最后 6px）。它由 6px 下内边距承载，不额外再加一层。 */
+const CONTEXT_MASK_BLEED_PX = 6;
+const CONTEXT_LINE_HEIGHT = 1.12;
+/** .context-line__translation 的 margin-top。 */
+const CONTEXT_TRANSLATION_GAP_PX = 1;
+
+function measureContextBand() {
+  const wrap = currentWrapRef.value;
+  const root = rootRef.value;
+  if (!wrap || !root) return;
+  const wrapBottom = wrap.getBoundingClientRect().bottom;
+  const rootBottom = root.getBoundingClientRect().bottom;
+  contextBandPx.value = Math.max(
+    0,
+    Math.floor(
+      rootBottom - wrapBottom - CONTEXT_BOTTOM_OFFSET_PX - CONTEXT_BAND_GAP_PX,
+    ),
+  );
+}
+
+/** DESIGN：上下文行 clamp(11px, 42% × 当前字号, 16px)，翻译行 38% 字号。
+ *  这里算出来既喂 CSS 变量，也用来判断两行能否放进安全带——单一来源，避免
+ *  CSS 与脚本各写一份 clamp 后漂移。 */
+function contextFontSize(fontSize: number, ratio: number): number {
+  return Math.min(16, Math.max(11, fontSize * ratio));
+}
+
+const contextFontPx = computed(() => contextFontSize(prefs.value.fontSize, 0.42));
+const contextTranslationFontPx = computed(() =>
+  contextFontSize(prefs.value.fontSize, 0.38),
+);
+
+/** 安全带连一行上下文都放不下时（46–48px 且当前行自带翻译，实测只剩 22–23
+ *  CSS），整个槽位不渲染，而不是塞半行被 6px 渐隐吃掉。判定用最省空间的一行：
+ *  上内边距 + 一行字高 + 6px 渐隐区。no-translation 的 48px 情况实测 ≥32px，
+ *  仍满足该门槛、照常显示下一行。 */
+const contextBandFitsContextLine = computed(() => {
+  const band = contextBandPx.value;
+  if (band === null) return true; // 首次测量前先渲染，量到后一帧内收敛
+  return contextBandFitsLine(
+    band,
+    contextFontPx.value,
+    CONTEXT_STACK_TOP_PAD_PX,
+    CONTEXT_MASK_BLEED_PX,
+    CONTEXT_LINE_HEIGHT,
+  );
+});
+
+/** 下一行 + 翻译两行连同上下内边距都放得下时才渲染翻译行；放不下（大字号，
+ *  或当前行自己带翻译把安全带压得更窄）只保留下一行本身，不硬塞半行被裁的字。
+ *  底边渐隐仍兜底更极端的情况（见 .context-line__stack）。 */
+const contextShowsTranslation = computed(() => {
+  if (!contextBandFitsContextLine.value) return false;
+  const band = contextBandPx.value;
+  if (band === null) return true; // 首次测量前先按两行渲染，量到后一帧内收敛
+  const chromePx = CONTEXT_STACK_TOP_PAD_PX + CONTEXT_STACK_BOTTOM_PAD_PX;
+  return (
+    chromePx +
+      contextFontPx.value * CONTEXT_LINE_HEIGHT +
+      CONTEXT_TRANSLATION_GAP_PX +
+      contextTranslationFontPx.value * CONTEXT_LINE_HEIGHT <=
+    band
+  );
+});
 
 // =============== CSS 变量 ===============
 
@@ -111,10 +200,12 @@ const accentColor = computed(() =>
 // 这里给歌词文本加一块半透明深色底板（.lyric-plate，仍随窗口不透明度淡出），
 // 并按"底板叠在最亮桌面（纯白）"这一最差样本反推已唱强调色的最低亮度：
 //   - 底板 rgba(0,0,0,0.88) 叠在纯白桌面上 = #1F1F1F；
-//   - 白字 95% 对底板 15.0:1 起，上下文 62–74% 白 7.1–9.7:1（全窗口不透明度）；
-//   - 已唱强调色只向白色提亮、不换色相，保证 ≥5:1（默认不透明度 0.95 下仍 ≥4.6）。
+//   - 白字 95% 对底板 15.0:1 起，上下文（下一行 74% / 翻译 72%）白 9.2–9.7:1；
+//   - 已唱强调色只向白色提亮、不换色相：全不透明时对底板 ≥5:1，并按当前整窗
+//     不透明度与最亮桌面（纯白）重新合成，保证实际渲染仍 ≥4.6:1。
 const LYRIC_PLATE_ALPHA = 0.88;
 const LYRIC_ACCENT_MIN_CONTRAST = 5;
+const LYRIC_ACCENT_MIN_CONTRAST_COMPOSITED = 4.6;
 /** 底板叠在纯白桌面上时最亮，是强调色对比度的最差样本。 */
 const LIGHTEST_PLATE_CHANNEL = Math.round(255 * (1 - LYRIC_PLATE_ALPHA));
 const LIGHTEST_PLATE_HEX = `#${LIGHTEST_PLATE_CHANNEL.toString(16)
@@ -128,8 +219,29 @@ function parseHexChannels(value: string): [number, number, number] | null {
   return [(int >> 16) & 0xff, (int >> 8) & 0xff, int & 0xff];
 }
 
+/** 整窗不透明度 o 时，颜色从黑板层叠到纯白桌面后的等效色（WCAG 合成）。 */
+function compositeOverLightestPlate(value: string, opacity: number): string {
+  const channels = parseHexChannels(value);
+  if (!channels) return value;
+  return `#${channels
+    .map((channel) =>
+      Math.round(channel * opacity + 255 * (1 - opacity))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+/** 当前整窗不透明度下，文字对底板（叠纯白桌面）的真实对比度。 */
+function contrastAtWindowOpacity(textHex: string, opacity: number): number {
+  return contrastRatio(
+    compositeOverLightestPlate(textHex, opacity),
+    compositeOverLightestPlate(LIGHTEST_PLATE_HEX, opacity),
+  );
+}
+
 /** 保持色相，只把强调色按比例推向白色，直到它在底板上达到对比度下限。 */
-function ensureReadableAccent(value: string): string {
+function ensureReadableAccent(value: string, groupOpacity: number): string {
   const channels = parseHexChannels(value);
   // 桥接状态始终是 deriveCoverTheme 产出的 hex；非 hex 输入保持原值。
   if (!channels) return value;
@@ -141,24 +253,110 @@ function ensureReadableAccent(value: string): string {
         return mixed.toString(16).padStart(2, "0");
       })
       .join("")}`;
-    if (contrastRatio(hex, LIGHTEST_PLATE_HEX) >= LYRIC_ACCENT_MIN_CONTRAST) {
+    if (
+      contrastRatio(hex, LIGHTEST_PLATE_HEX) >= LYRIC_ACCENT_MIN_CONTRAST &&
+      contrastAtWindowOpacity(hex, groupOpacity) >=
+        LYRIC_ACCENT_MIN_CONTRAST_COMPOSITED
+    ) {
       return hex;
     }
   }
   return "#ffffff";
 }
 
-const readableAccent = computed(() => ensureReadableAccent(accentColor.value));
+// 强调色随当前不透明度重新推导：滑块越低，已唱字越靠白，保证合成后仍可读。
+const readableAccent = computed(() =>
+  ensureReadableAccent(accentColor.value, prefs.value.opacity),
+);
 
 const cssVars = computed(() => ({
   "--lyric-font-size": `${prefs.value.fontSize}px`,
   "--lyric-opacity": String(prefs.value.opacity),
-  "--lyric-text-color": prefs.value.textColor,
   "--color-accent": accentColor.value,
   // 深色半透明底板与可读强调色：见上方对比度说明。
   "--lyric-plate": `rgba(0, 0, 0, ${LYRIC_PLATE_ALPHA})`,
   "--lyric-accent": readableAccent.value,
+  // 上下文槽位：字号公式与实测安全带（见 measureContextBand）。
+  "--lyric-context-font-size": `${contextFontPx.value}px`,
+  "--lyric-context-translation-size": `${contextTranslationFontPx.value}px`,
+  "--lyric-context-band": `${contextBandPx.value ?? 44}px`,
 }));
+
+// =============== 工具条可测逻辑（纯函数） ===============
+// 本段必须保持零依赖：不 import Vue/Tauri、不读浏览器 API。单测
+// tests/desktopLyricsControls.test.mjs 会截取两个标记之间的源码转译后直接执行，
+// 新增可测逻辑放这里并同步补测试。
+
+type EscapeAction = "hide-toolbar" | "ignore";
+
+interface EscapeContext {
+  toolbarVisible: boolean;
+}
+
+/**
+ * Esc 决策：工具条可见 → 只收起工具条；工具条已收起 → 忽略。
+ *
+ * 桌面歌词是置顶常驻窗，误按 Esc 让它从桌面上消失会直接打断正在看的歌词
+ * （PRODUCT 原则 1「播放不被打断」）。强退出只保留工具条关闭按钮 onClose。
+ */
+function resolveEscapeAction(context: EscapeContext): EscapeAction {
+  return context.toolbarVisible ? "hide-toolbar" : "ignore";
+}
+
+/** 不透明度读数：0.95 → "95%"（步进 0.05，四舍五入后最多三位数）。 */
+function formatOpacityPercent(opacity: number): string {
+  return `${Math.round(opacity * 100)}%`;
+}
+
+/** 不透明度滑块的完整标签（aria-label / title 共用，含当前值与操作方式）。 */
+function formatOpacityLabel(opacity: number): string {
+  return `不透明度 ${formatOpacityPercent(opacity)}，左右拖动调整`;
+}
+
+/** 下一行歌词开关的动作 + 当前状态；上一行不再显示，文案不能再说「上一行」。 */
+function formatPrevNextLabel(show: boolean): string {
+  return show
+    ? "隐藏下一行歌词（当前已显示）"
+    : "显示下一行歌词（当前已隐藏）";
+}
+
+/** 锁定开关的 aria-label：动作 + 当前状态，并写明锁定后窗口不可拖动。 */
+function formatLockLabel(locked: boolean): string {
+  return locked
+    ? "解锁桌面歌词（当前已锁定，窗口不可拖动）"
+    : "锁定桌面歌词（锁定后窗口不可拖动）";
+}
+
+/** 锁定开关的 title：在 label 基础上保留「双击歌词也可切换」这条既有操作提示。 */
+function formatLockTitle(locked: boolean): string {
+  return locked
+    ? "解锁桌面歌词（当前已锁定，窗口不可拖动；双击歌词也可解锁）"
+    : "锁定桌面歌词（锁定后窗口不可拖动；双击歌词也可锁定）";
+}
+
+/** 字号步进按钮的动作 + 当前字号。 */
+function formatFontSizeLabel(
+  direction: "increase" | "decrease",
+  fontSize: number,
+): string {
+  return `${direction === "increase" ? "增大" : "减小"}字号（当前 ${fontSize}px）`;
+}
+
+/** 安全带能否容纳一行上下文：上内边距 + 一行字高 + 6px 底边渐隐区。
+ *  返回 false 时整个上下文槽位不渲染——46–48px 且当前行带翻译时实测只剩
+ *  22–23 CSS，硬塞进去只会得到被 mask 裁掉底部的半行。默认值与 CSS 的
+ *  .context-line__stack / .context-line 同源；组件调用时传入上面的常量。 */
+function contextBandFitsLine(
+  bandPx: number,
+  contextFontPx: number,
+  topPadPx = 3,
+  maskBleedPx = 6,
+  lineHeight = 1.12,
+): boolean {
+  return topPadPx + contextFontPx * lineHeight + maskBleedPx <= bandPx;
+}
+
+// =============== 工具条可测逻辑结束 ===============
 
 // =============== 超长当前行自适应 ===============
 //
@@ -231,45 +429,37 @@ watch(
     // 连接/等待/空态文案也会变化长度，同样需要重新缩放。
     placeholderText.value,
     prefs.value.fontSize,
-    toolbarVisible.value,
   ],
-  () => void nextTick(fitCurrentLine),
+  () => void nextTick(() => {
+    fitCurrentLine();
+    // 当前行底板的高度（受字号/翻译影响）就是上下文槽位的可用上界。
+    measureContextBand();
+  }),
   { flush: "post" },
 );
 
 // =============== 生命周期 ===============
 
-onMounted(async () => {
-  disposed = false;
-  lyricResizeObserver = new ResizeObserver(() => fitCurrentLine());
+onMounted(() => {
+  lyricResizeObserver = new ResizeObserver(() => {
+    fitCurrentLine();
+    measureContextBand();
+  });
   if (currentLineFrameRef.value) {
     lyricResizeObserver.observe(currentLineFrameRef.value);
   }
-  void nextTick(fitCurrentLine);
+  void nextTick(() => {
+    fitCurrentLine();
+    measureContextBand();
+  });
 
-  // 监听主窗配置推送
-  const stopPrefs = await listen<Partial<typeof prefs.value>>(
-    "desktop-lyrics:apply-prefs",
-    (e) => {
-      if (!disposed) applyPrefs(e.payload);
-    },
-  );
-  if (disposed) {
-    stopPrefs();
-    return;
-  }
-  unlistens.push(stopPrefs);
-
-  // Escape 键关闭
+  // Escape 键收起工具条（不销毁窗口）
   window.addEventListener("keydown", onKeyDown);
 });
 
 onBeforeUnmount(() => {
-  disposed = true;
   lyricResizeObserver?.disconnect();
   lyricResizeObserver = null;
-  unlistens.forEach((u) => u());
-  unlistens.length = 0;
   window.removeEventListener("keydown", onKeyDown);
   _cleanupDragListeners();
 });
@@ -286,22 +476,25 @@ watch(
 
 // =============== 交互 ===============
 //
-// 拖拽策略：不在 mousedown 立即调用 startDragging（那样会阻塞 dblclick 等事件），
-// 而是监听 mousemove，只有鼠标实际移动超过 5px 阈值后才启动拖拽。
-// 短点击 / 双击切换锁定不受影响。
+// 拖拽策略：不在 pointerdown 立即调用 startDragging（那样会阻塞 dblclick 等
+// 事件），而是等指针实际移动超过 5px 阈值后才启动拖拽；短点击 / 双击切换锁定
+// 不受影响。监听用 Pointer Events + setPointerCapture：鼠标、触摸、触控笔走
+// 同一条路径，指针移出窗口后仍能收到 move/up，且 pointercancel /
+// lostpointercapture / blur 都会复位，不会留下半途的拖拽状态。
+// 拖动面（.lyric-root）同时声明 touch-action: none，触摸拖动不会先被滚动/缩放
+// 手势截走。
 
+let _dragPointerId: number | null = null;
 let _dragStartX = 0;
 let _dragStartY = 0;
-let _dragMoved = false;
 
 const DRAG_THRESHOLD_PX = 5;
 
-function _onDragMove(ev: MouseEvent) {
-  if (_dragMoved) return;
+function _onDragMove(ev: PointerEvent) {
+  if (_dragPointerId === null || ev.pointerId !== _dragPointerId) return;
   const dx = ev.clientX - _dragStartX;
   const dy = ev.clientY - _dragStartY;
   if (dx * dx + dy * dy > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
-    _dragMoved = true;
     _cleanupDragListeners();
     getCurrentWindow().startDragging().catch((e) => {
       // 拖拽是用户显式手势，失败时表现为"拖不动"；不记录就完全看不出原因。
@@ -310,23 +503,51 @@ function _onDragMove(ev: MouseEvent) {
   }
 }
 
-function _onDragUp() {
+/** pointerup / pointercancel / lostpointercapture / window blur 共用：只复位，
+ *  不触发拖拽之外的任何状态（锁定与双击语义不变）。 */
+function _onDragEnd() {
   _cleanupDragListeners();
 }
 
 function _cleanupDragListeners() {
-  window.removeEventListener("mousemove", _onDragMove);
-  window.removeEventListener("mouseup", _onDragUp);
+  const root = rootRef.value;
+  if (root) {
+    root.removeEventListener("pointermove", _onDragMove);
+    root.removeEventListener("pointerup", _onDragEnd);
+    root.removeEventListener("pointercancel", _onDragEnd);
+    root.removeEventListener("lostpointercapture", _onDragEnd);
+    if (_dragPointerId !== null && root.hasPointerCapture(_dragPointerId)) {
+      root.releasePointerCapture(_dragPointerId);
+    }
+  }
+  window.removeEventListener("blur", _onDragEnd);
+  _dragPointerId = null;
 }
 
-function onMouseDown(e: MouseEvent) {
+function onPointerDown(e: PointerEvent) {
   if (prefs.value.locked) return;
+  // 主指针之外（多指触摸的第二指）不参与窗口拖动。
+  if (!e.isPrimary) return;
+  // 鼠标只认主键；触摸/触控笔的 button 恒为 0。
+  if (e.pointerType === "mouse" && e.button !== 0) return;
   if ((e.target as HTMLElement).closest("[data-toolbar]")) return;
+  const root = rootRef.value;
+  if (!root) return;
+  _dragPointerId = e.pointerId;
   _dragStartX = e.clientX;
   _dragStartY = e.clientY;
-  _dragMoved = false;
-  window.addEventListener("mousemove", _onDragMove);
-  window.addEventListener("mouseup", _onDragUp);
+  // 监听挂在根节点上并捕获指针：移出窗口后 move/up 仍会派发到这里。
+  root.addEventListener("pointermove", _onDragMove);
+  root.addEventListener("pointerup", _onDragEnd);
+  root.addEventListener("pointercancel", _onDragEnd);
+  root.addEventListener("lostpointercapture", _onDragEnd);
+  window.addEventListener("blur", _onDragEnd);
+  try {
+    root.setPointerCapture(e.pointerId);
+  } catch (err) {
+    // WebKitGTK 在极少见的指针状态下可能拒绝捕获；此时仍有 window blur 兜底。
+    console.warn("[desktop-lyrics] setPointerCapture 失败", err);
+  }
 }
 
 function onDoubleClick(e: MouseEvent) {
@@ -369,12 +590,17 @@ async function onClose() {
   }
 }
 
-/** Escape 键关闭桌面歌词窗 */
+/** Escape 键：只收起工具条；工具条已收起时忽略——绝不销毁整窗。
+ *  强退出只保留工具条关闭按钮（onClose），避免误按 Esc 让桌面歌词凭空消失。 */
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    void onClose();
-  }
+  if (e.key !== "Escape") return;
+  const action = resolveEscapeAction({ toolbarVisible: toolbarVisible.value });
+  if (action === "ignore") return;
+  e.preventDefault();
+  // 焦点在工具条按钮上时先归还根容器；focusin 会把工具条重新打开，所以最后再置 false。
+  const toolbar = rootRef.value?.querySelector<HTMLElement>("[data-toolbar]");
+  if (toolbar?.contains(document.activeElement)) rootRef.value?.focus();
+  toolbarVisible.value = false;
 }
 
 function onFontSizeChange(delta: number) {
@@ -386,11 +612,11 @@ function onFontSizeChange(delta: number) {
   <div
     ref="rootRef"
     class="lyric-root relative flex flex-col items-center justify-center h-screen select-none"
-    :class="{ 'toolbar-visible': toolbarVisible }"
     :style="cssVars"
     tabindex="0"
+    role="region"
     aria-label="桌面歌词，按 Tab 可调整显示设置"
-    @mousedown="onMouseDown"
+    @pointerdown="onPointerDown"
     @dblclick="onDoubleClick"
     @mouseenter="toolbarVisible = true"
     @mouseleave="onMouseLeave"
@@ -399,22 +625,19 @@ function onFontSizeChange(delta: number) {
   >
     <!-- 歌词内容层（受 --lyric-opacity 影响；工具栏在同层但在外） -->
     <div class="lyric-content flex flex-col items-center justify-center">
-      <!-- 上一行（小字号、半透明，叠深色底板保证浅色桌面可读） -->
-      <p
-        v-if="visible.prev && prefs.showPrevNext"
-        class="context-line prev-line lyric-plate truncate"
-      >
-        {{ visible.prev.text }}
-      </p>
+      <!-- 上下文只保留一个槽位：下一行（右下）。上一行放在左上时，64% 宽会伸进
+           悬停工具条（顶部右侧）下面；而跟唱最需要的是“接下来唱什么”，刚唱过的
+           内容已经由当前行的逐字擦色交代。 -->
 
-      <!-- 当前行（卡拉OK 逐字） -->
-      <div class="current-wrap lyric-plate">
+      <!-- 当前行（卡拉OK 逐字）；currentWrapRef 用于实测上下文槽位的安全带高度 -->
+      <div ref="currentWrapRef" class="current-wrap lyric-plate">
         <!-- 测量容器：宽度限制在窗口可用宽度内；当前行/翻译在其中整体缩放，
              永不横向裁切或滚动（见 fitCurrentLine）。 -->
         <div ref="currentLineFrameRef" class="current-line-frame">
           <h1
             v-if="visible.current && projectedKaraokeFrame.tokens.length > 0"
             class="current-lyric current-line-scaled text-transparent font-semibold leading-tight"
+            :lang="langForLyric(visible.current.text)"
             :aria-label="visible.current.text"
           >
             <span
@@ -441,6 +664,7 @@ function onFontSizeChange(delta: number) {
           <h1
             v-else-if="visible.current && visible.current.text"
             class="current-lyric current-line-scaled font-semibold leading-tight"
+            :lang="langForLyric(visible.current.text)"
           >
             <!-- 无精确时间戳时展示稳定文本，不伪造逐字进度。 -->
             <span
@@ -468,6 +692,7 @@ function onFontSizeChange(delta: number) {
           <p
             v-if="visible.current && visible.current.translation"
             class="translation-line"
+            :lang="langForLyric(visible.current.translation)"
           >
             <span
               ref="translationTextRef"
@@ -478,25 +703,38 @@ function onFontSizeChange(delta: number) {
         </div>
       </div>
 
-      <!-- 下一行（中字号、半透明，叠深色底板保证浅色桌面可读） -->
+      <!-- 下一行（上下文唯一槽位，右下）：下一行与它的翻译同属一块底板，
+           翻译在下一行下面单独一行，不再各占一块并排的“黑板”。
+           宽度上限 64%、最多两行，超宽/超高都用 mask 渐隐收口，不用省略号。 -->
+      <!-- 安全带连一行都放不下时整槽隐藏（见 contextBandFitsContextLine），
+           而不是把下一行裁成半行。 -->
       <p
-        v-if="visible.next && prefs.showPrevNext"
-        class="context-line next-line lyric-plate truncate"
+        v-if="visible.next && prefs.showPrevNext && contextBandFitsContextLine"
+        class="context-line lyric-plate"
+        :lang="langForLyric(visible.next.text)"
       >
-        {{ visible.next.text }}
+        <span class="context-line__stack">
+          <span class="context-line__text">{{ visible.next.text }}</span>
+          <span
+            v-if="visible.next.translation && contextShowsTranslation"
+            class="context-line__translation"
+            :lang="langForLyric(visible.next.translation)"
+          >{{ visible.next.translation }}</span>
+        </span>
       </p>
 
-      <!-- 歌曲信息 -->
+      <!-- 歌曲信息：有歌但没有歌词时（"这首歌没有提供歌词"）常驻，
+           否则只在工具条出现时显示，避免长期遮挡桌面。 -->
       <p
         v-if="hasSong"
         class="song-info lyric-plate truncate"
-        :class="{ 'song-info--visible': toolbarVisible }"
+        :class="{ 'song-info--visible': toolbarVisible || songInfoAlwaysVisible }"
       >
         {{ state.songName }}<span v-if="state.artists" class="ml-2">— {{ state.artists }}</span>
       </p>
     </div>
 
-    <!-- 工具条（hover 显示） -->
+    <!-- 工具条（hover / 键盘聚焦时显示；绝对定位浮层，出现时不推挤歌词行） -->
     <div
       v-show="toolbarVisible"
       data-toolbar
@@ -508,12 +746,12 @@ function onFontSizeChange(delta: number) {
       <button
         type="button"
         class="toolbar-btn"
-        title="减小字号"
-        aria-label="减小字号"
+        :title="formatFontSizeLabel('decrease', prefs.fontSize)"
+        :aria-label="formatFontSizeLabel('decrease', prefs.fontSize)"
         @click="onFontSizeChange(-2)"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
 
       <span class="w-8 text-center tabular-nums">{{ prefs.fontSize }}px</span>
@@ -522,29 +760,39 @@ function onFontSizeChange(delta: number) {
       <button
         type="button"
         class="toolbar-btn"
-        title="增大字号"
-        aria-label="增大字号"
+        :title="formatFontSizeLabel('increase', prefs.fontSize)"
+        :aria-label="formatFontSizeLabel('increase', prefs.fontSize)"
         @click="onFontSizeChange(2)"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
 
       <!-- 分隔线 -->
       <span class="w-px h-3.5 bg-white/20"></span>
 
-      <!-- 不透明度滑块（保留原生 mousedown 以恢复拖拽；按钮各自 .stop，容器不 .stop） -->
-      <input
-        type="range"
-        min="0.2"
-        max="1"
-        step="0.05"
-        :value="prefs.opacity"
-        class="opacity-slider w-14 h-1 accent-white/80"
-        title="不透明度"
-        aria-label="桌面歌词不透明度"
-        @input="prefs.opacity = Number(($event.target as HTMLInputElement).value)"
-      />
+      <!-- 不透明度：太阳图标 + 百分比读数（可见标签，不再只靠 title）；
+           滑块整块 24px 高都能拖，视觉轨道仍是 4px（见 .opacity-slider）。
+           下限 0.9：再低已唱强调色与白字阶梯无法同时满足 AA（见 useLyricWindowPrefs）。
+           工具条整块通过 [data-toolbar] 从窗口拖动中排除，原生滑块拖动不受影响。 -->
+      <div class="opacity-control">
+        <span class="opacity-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        </span>
+        <input
+          type="range"
+          min="0.9"
+          max="1"
+          step="0.05"
+          :value="prefs.opacity"
+          class="opacity-slider"
+          :title="formatOpacityLabel(prefs.opacity)"
+          :aria-label="formatOpacityLabel(prefs.opacity)"
+          :aria-valuetext="formatOpacityPercent(prefs.opacity)"
+          @input="prefs.opacity = Number(($event.target as HTMLInputElement).value)"
+        />
+        <span class="opacity-value tabular-nums" aria-hidden="true">{{ formatOpacityPercent(prefs.opacity) }}</span>
+      </div>
 
       <!-- 分隔线 -->
       <span class="w-px h-3.5 bg-white/20"></span>
@@ -555,12 +803,12 @@ function onFontSizeChange(delta: number) {
         class="toolbar-btn"
         :class="{ 'is-active': prefs.showPrevNext }"
         :aria-pressed="prefs.showPrevNext"
-        aria-label="显示上下行歌词"
-        :title="prefs.showPrevNext ? '隐藏上一行和下一行' : '显示上一行和下一行'"
+        :aria-label="formatPrevNextLabel(prefs.showPrevNext)"
+        :title="formatPrevNextLabel(prefs.showPrevNext)"
         @click="prefs.showPrevNext = !prefs.showPrevNext"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round"><line x1="5" y1="7" x2="19" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="5" y1="17" x2="19" y2="17"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round"><line x1="5" y1="7" x2="19" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="5" y1="17" x2="19" y2="17"/></svg>
       </button>
 
       <span class="w-px h-3.5 bg-white/20"></span>
@@ -570,23 +818,30 @@ function onFontSizeChange(delta: number) {
         type="button"
         class="toolbar-btn"
         :aria-pressed="prefs.locked"
-        aria-label="锁定桌面歌词"
-        :title="prefs.locked ? '已锁定；双击歌词可解锁' : '未锁定；双击歌词可锁定'"
+        :aria-label="formatLockLabel(prefs.locked)"
+        :title="formatLockTitle(prefs.locked)"
         @click="prefs.locked = !prefs.locked"
         @mousedown.stop
       >
         <!-- Lock icon when locked -->
-        <svg v-if="prefs.locked" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <svg v-if="prefs.locked" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         <!-- Unlock icon when unlocked -->
-        <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
       </button>
 
       <!-- 分隔线 -->
       <span class="w-px h-3.5 bg-white/20"></span>
 
-      <!-- 关闭 -->
-      <button type="button" class="toolbar-btn" title="关闭桌面歌词" aria-label="关闭桌面歌词" @click="onClose" @mousedown.stop>
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      <!-- 关闭：桌面歌词的唯一强退出路径（Esc 只收起工具条，不销毁窗口） -->
+      <button
+        type="button"
+        class="toolbar-btn"
+        title="关闭桌面歌词（窗口关闭，需从侧栏重新打开）"
+        aria-label="关闭桌面歌词（需要从侧栏重新打开）"
+        @click="onClose"
+        @mousedown.stop
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
   </div>
@@ -632,7 +887,10 @@ body,
   -webkit-user-select: none;
 }
 
-/* 歌词根容器：融入桌面，无背景/边框/投影；不透明度由 .lyric-content 层控制 */
+/* 歌词根容器：融入桌面，无背景/边框/投影；不透明度由 .lyric-content 层控制。
+   它是 role="region" 的命名容器（aria-label：桌面歌词，按 Tab 可调整显示设置），
+   也是窗口的拖动面，所以声明 touch-action: none——触摸/触控笔拖动不会被浏览器的
+   滚动/缩放手势截走（Pointer Events 见 onPointerDown）。 */
 .lyric-root {
   width: 100%;
   max-width: 100vw;
@@ -643,40 +901,78 @@ body,
   border: none;
   box-shadow: none;
   outline: none;
+  touch-action: none;
 }
 
-/* 工具条出现时为其让出水平安全区，避免在 800×200 窗口内盖住长歌词。 */
-.lyric-root.toolbar-visible .lyric-content {
-  padding-right: 300px;
+/* 首次键盘焦点（Tab 进入窗口主体）的可见提示：透明窗没有页面底色可描边，
+   给当前行黑板加 2px 内嵌白环——与工具条按钮的白色焦点环同一套语言，且不
+   依赖桌面壁纸颜色。用 outline（负 offset 内嵌）而不是 box-shadow：强制颜色
+   模式下 shadow 会被丢掉，outline 会映射成系统焦点色。
+   鼠标点击不触发（:focus-visible），工具条自身仍有焦点环。 */
+.lyric-root:focus-visible .current-wrap {
+  outline: 2px solid rgb(255 255 255 / 92%);
+  outline-offset: -2px;
 }
 
+/* 工具条是绝对定位浮层：出现/隐藏不改变歌词布局，避免 hover 时歌词行被推挤/缩放。 */
+
+/* 上下文槽位（只保留一个：下一行 + 翻译），固定在窗口右下。
+   悬浮工具条在顶部右侧，两者竖直方向隔着一整块当前行：工具条出现时盖不到它，
+   也不需要 hover 让位（不重排任何歌词行）。
+   宽度上限 64%：窗口 640 CSS 时约 410px，是安全区 596px 的 69%，落在 DESIGN
+   的 60–70% 带内；高度上限是实测安全带（当前行底板下缘到窗口底部），保证
+   上下文底板永远不压到当前行底板（大字号下这段空间只有 30 CSS 左右）。 */
 .context-line {
   position: absolute;
+  right: 18px;
+  bottom: 8px;
   z-index: 1;
   box-sizing: border-box;
-  max-width: 42%;
+  /* 宽度跟着内容走：短句仍是一块贴住右缘的小底板，长句才用满 64%。 */
+  width: max-content;
+  max-width: 64%;
+  max-height: var(--lyric-context-band, 44px);
   margin: 0;
-  padding: 2px 8px;
+  padding: 0;
   overflow: hidden;
   border-radius: 6px;
-  color: rgba(255, 255, 255, 0.62);
-  font-size: clamp(11px, calc(var(--lyric-font-size, 28px) * 0.42), 16px);
+  color: rgba(255, 255, 255, 0.74);
+  font-size: var(--lyric-context-font-size, 16px);
   font-weight: 500;
-  line-height: 1.15;
+  line-height: 1.12;
+  text-align: left;
   pointer-events: none;
 }
 
-.prev-line {
-  top: 8px;
-  left: 18px;
-  text-align: left;
+/* 内容层负责收口：底边 6px 渐隐。mask 放在内容层而不是底板上，所以底板的
+   内嵌描边与 6px 圆角永远完整；6px 同时是下内边距，正常两行内容不会被渐隐
+   吃掉，只有被安全带裁掉时才看得到这层淡出。 */
+.context-line__stack {
+  display: block;
+  max-height: inherit;
+  padding: 3px 0 6px 10px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent);
 }
 
-.next-line {
-  right: 18px;
-  bottom: 8px;
-  color: rgba(255, 255, 255, 0.74);
-  text-align: right;
+/* 文本行：右缘 14px 渐隐代替省略号（不用 text-overflow / line-clamp 的省略号）。
+   14px 同时是右内边距，正常长度不会被吃掉；超长时墨迹进入内边距、在底板内侧淡出。 */
+.context-line__text,
+.context-line__translation {
+  display: block;
+  padding-right: 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+}
+
+/* 翻译：与下一行同一块底板，单独一行；沿用文档的 72% 白与 38% 字号。 */
+.context-line__translation {
+  margin-top: 1px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: var(--lyric-context-translation-size, 12px);
 }
 
 .current-wrap {
@@ -723,7 +1019,8 @@ body,
   overflow: visible;
   box-sizing: border-box;
   font-size: var(--lyric-font-size, 28px);
-  color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
+  /* 固定白 95%：歌词文字颜色不可配置（DESIGN 的白色阶梯是唯一来源）。 */
+  color: rgba(255, 255, 255, 0.95);
   line-height: 1.06;
 }
 
@@ -733,11 +1030,14 @@ body,
   text-align: left;
 }
 
+/* 歌曲信息：左上角。右下整条安全带留给上下文槽位（一条 60–70% 宽的底板），
+   左上在上下文独占下一行后已经空出来；工具条在右上，640 CSS 下两者相隔足够远。
+   有歌但没有歌词时常驻，否则只在工具条出现时显示，避免长期遮挡桌面。 */
 .song-info {
   position: absolute;
   z-index: 3;
   box-sizing: border-box;
-  bottom: 8px;
+  top: 8px;
   left: 18px;
   max-width: 38%;
   margin: 0;
@@ -826,7 +1126,7 @@ body,
   position: relative;
   left: 50%;
   white-space: nowrap;
-  color: var(--lyric-text-color, rgba(255, 255, 255, 0.95));
+  color: rgba(255, 255, 255, 0.95);
   transform-origin: center center;
   transition: transform 0.15s ease-out;
 }
@@ -898,12 +1198,14 @@ body,
   -webkit-backdrop-filter: blur(12px);
 }
 
+/* 工具条按钮：24×24 命中区（≥24 可点），视觉仍是 4px 圆角小方钮。
+   图标 16px，与 24px 方钮的留白比例接近旧版 14px/20px。 */
 .toolbar-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border: none;
   background: transparent;
   color: inherit;
@@ -927,15 +1229,51 @@ body,
   outline-offset: 2px;
 }
 
-/* 不透明度滑块 */
+/* 不透明度控件：太阳图标 + 百分比读数构成可见标签（不再只靠 title）；
+   整块 24px 高便于点按，滑块本体透明，只有 4px 轨道可见（track 伪元素），
+   所以命中区是 24px 高、视觉轨道仍是 DESIGN 的 4px。 */
+.opacity-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+}
+
+.opacity-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+
+.opacity-value {
+  min-width: 30px;
+  color: rgba(255, 255, 255, 0.9);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  pointer-events: none;
+}
+
 .opacity-slider {
   appearance: none;
   -webkit-appearance: none;
-  background: rgba(255, 255, 255, 0.3);
+  width: 56px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
   border-radius: 2px;
   outline: none;
   cursor: pointer;
   vertical-align: middle;
+}
+
+/* 视觉轨道仍是 4px：input 本身 24px 高（拖拽命中区），轨道由本伪元素绘制。 */
+.opacity-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .opacity-slider::-webkit-slider-thumb {
@@ -943,6 +1281,8 @@ body,
   -webkit-appearance: none;
   width: 10px;
   height: 10px;
+  /* (4px 轨道 - 10px 拇指) / 2：让拇指在轨道上垂直居中。 */
+  margin-top: -3px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.85);
   border: none;

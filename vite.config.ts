@@ -1,10 +1,21 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
+// 版本号只认 package.json：关于弹层直接用它兜底，避免 Tauri getVersion
+// 失败时回退到一个写死的旧版本（状态诚实原则）。
+const pkg = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
+) as { version: string };
+
 // Vite 配置：固定端口 + 关闭 host 检查（Tauri 桌面端需要）
 export default defineConfig(async () => ({
   plugins: [vue()],
+
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // @/ 别名：与 tsconfig.json 的 paths 保持一致
   // （Vite 不会自动读 tsconfig.paths，必须在这里再声明一次）

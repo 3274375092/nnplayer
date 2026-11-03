@@ -25,8 +25,11 @@ import { coverImageUrl } from "@/utils/coverImage";
 import {
   AUDIO_QUALITY_OPTIONS,
   audioQualityOption,
+  audioQualityRank,
   formatActualQuality,
+  formatBitrate,
   isQualityDowngraded,
+  type AudioQualityOption,
 } from "@/utils/audioQuality";
 import type { AudioQuality } from "@/types/music";
 
@@ -76,6 +79,27 @@ const modeLabel = computed(() => {
   }
 });
 
+/** 下一档是确定的（列表循环 → 单曲循环 → 随机播放），标题直接说出来。 */
+const nextModeLabel = computed(() => {
+  switch (player.playMode) {
+    case "loop-list":
+      return "单曲循环";
+    case "loop-one":
+      return "随机播放";
+    default:
+      return "列表循环";
+  }
+});
+
+/** 播放键的无障碍名称/悬停提示：加载中说明正在等待，而不是仍报「播放」。 */
+const playButtonLabel = computed(() =>
+  player.audioState.loading
+    ? "正在加载歌曲"
+    : player.audioState.playing
+      ? "暂停"
+      : "播放",
+);
+
 // =============== 音质选择 ===============
 
 const QUALITY_MENU_WIDTH = 240;
@@ -116,10 +140,12 @@ const qualityPending = computed(
     player.audioState.loading,
 );
 
-/** 徽标只显示当前实际音质；未播放时显示所选档位作为待用选择。
- *  档位未知时明确写「未知」，不把裸码率（如 3338K）当成档位短标签。 */
+/** 徽标只显示服务端实际下发的档位；尚未播放/未解析时一律写「未知」。
+ *  所选档位只出现在 title/aria-label 与菜单的「所选」标记里——胶囊不能把
+ *  用户的请求当成事实（PRODUCT/DESIGN 的状态诚实：实际未知写「未知」）。
+ *  也不把裸码率（如 3338K）当成档位短标签。 */
 const qualityBadgeLabel = computed(() => {
-  if (!mediaLoaded.value) return requestedQuality.value.shortLabel;
+  if (!mediaLoaded.value) return "未知";
   if (player.activeQuality !== null) {
     return audioQualityOption(player.activeQuality).shortLabel;
   }
@@ -130,7 +156,7 @@ const qualityBadgeLabel = computed(() => {
 const qualityButtonTitle = computed(() => {
   const requested = requestedQuality.value;
   if (!mediaLoaded.value) {
-    return `音质：所选 ${requested.label}（${requested.hint}），点击选择`;
+    return `音质：实际档位未知（尚未播放）；所选 ${requested.label}（${requested.hint}），打开音质菜单`;
   }
   if (!player.activeAudioResolved) {
     return qualityPending.value
@@ -142,31 +168,32 @@ const qualityButtonTitle = computed(() => {
     return `音质：当前实际 ${summary}；所选 ${requested.label} 未生效，服务端下发较低档位`;
   }
   if (player.activeQuality === null) {
-    return `音质：当前实际 ${summary}（档位未知，所选 ${requested.label}）`;
+    // formatActualQuality 已带「（档位未知）」时不要再拼一次，否则读屏会听到两遍。
+    const rate = formatBitrate(player.activeBitrate);
+    return rate
+      ? `音质：当前实际 ${rate}，档位未知（所选 ${requested.label}）`
+      : `音质：当前实际音质未知（所选 ${requested.label}）`;
   }
   return `音质：当前实际 ${summary}（所选 ${requested.label}）`;
 });
 
-/** 菜单底部实际状态行；所选档位由勾选表示，实际档位由这里说明。 */
-const qualityFooter = computed(() => {
-  const requested = requestedQuality.value;
-  if (!mediaLoaded.value) {
-    return `尚未播放；所选 ${requested.label}。`;
+/** 菜单项的可访问说明：勾选与「实际」徽标只是视觉线索，读屏需要从
+ *  title/aria-label 听到「所选 / 实际」；降级时明说所选未生效。
+ *  无损及以上的权益说明从脚注移到这里，菜单不再堆三段小字。 */
+function qualityItemLabel(opt: AudioQualityOption): string {
+  const parts = [`${opt.label}（${opt.hint}）`];
+  if (opt.value === player.quality) parts.push("所选档位");
+  if (mediaLoaded.value && opt.value === player.activeQuality) {
+    parts.push("服务端实际下发");
   }
-  if (!player.activeAudioResolved) {
-    return qualityPending.value
-      ? "正在获取实际音质…"
-      : `当前实际音质未知（所选 ${requested.label}）。`;
+  if (opt.value === player.quality && qualityDowngraded.value) {
+    parts.push("所选未生效，服务端下发了较低档位");
   }
-  const summary = activeQualitySummary.value;
-  if (summary === null) {
-    return "当前实际音质未知；服务端未返回档位与码率。";
+  if (audioQualityRank(opt.value) >= audioQualityRank("lossless")) {
+    parts.push("需要网易云 VIP/SVIP 权益");
   }
-  if (qualityDowngraded.value) {
-    return `当前实际：${summary}。所选 ${requested.label} 未生效，服务端按账号权益下发较低档位。`;
-  }
-  return `当前实际：${summary}。`;
-});
+  return parts.join("；");
+}
 
 function positionQualityMenu() {
   const rect = qualityButtonRef.value?.getBoundingClientRect();
@@ -344,14 +371,16 @@ function openNowPlaying() {
       </div>
     </div>
 
-    <!-- 中：control + progress -->
-    <div class="w-full flex flex-col items-center gap-1.5 min-w-0">
+    <!-- 中：control + progress。
+         中央列高度窄窗固定 40 + gap(8) + 12 = 60px，居中于 74px 条；
+         间距 8px 是为了让 24px 进度命中框完整落在条内同时不侵入播放键的目标区。 -->
+    <div class="player-center-column w-full flex flex-col items-center min-w-0">
       <div class="player-transport flex items-center">
         <button
           type="button"
           class="player-icon-button"
-          :title="`切换播放模式（当前：${modeLabel}）`"
-          :aria-label="`切换播放模式（当前：${modeLabel}）`"
+          :title="`播放模式：${modeLabel}，点击切换为${nextModeLabel}`"
+          :aria-label="`播放模式：${modeLabel}，点击切换为${nextModeLabel}`"
           @click="player.togglePlayMode"
         >
           <component :is="modeIcon" :size="16" :stroke-width="1.6" />
@@ -368,11 +397,20 @@ function openNowPlaying() {
         <button
           type="button"
           class="player-play-button relative bg-accent text-on-accent flex items-center justify-center"
-          :class="{ 'animate-play-pulse': player.audioState.playing && !player.audioState.loading }"
           :disabled="!player.currentSong"
-          :aria-label="player.audioState.playing ? '暂停' : '播放'"
+          :aria-label="playButtonLabel"
+          :aria-busy="player.audioState.loading"
+          :title="playButtonLabel"
           @click="player.togglePlay"
         >
+          <!-- 播放中的 2s 陶土脉冲光环（DESIGN Player bar → States）。
+               装饰层：只动 transform/opacity（合成器属性），同色描边在按钮内
+               不可见，scale 扩出按钮后形成光环；keyframes 缺失时保持静止不可见。 -->
+          <span
+            v-if="player.audioState.playing && !player.audioState.loading"
+            class="player-play-ring animate-play-ring"
+            aria-hidden="true"
+          />
           <LoaderCircle
             v-if="player.audioState.loading"
             :size="17"
@@ -422,7 +460,7 @@ function openNowPlaying() {
         :class="{
           'is-open': qualityMenuOpen,
           'is-downgraded': mediaLoaded && qualityDowngraded,
-          'is-unknown': mediaLoaded && player.activeQuality === null,
+          'is-unknown': !mediaLoaded || player.activeQuality === null,
         }"
         :title="qualityButtonTitle"
         :aria-label="qualityButtonTitle"
@@ -466,7 +504,12 @@ function openNowPlaying() {
           step="0.01"
           :value="player.audioState.volume"
           class="player-volume-range flex-1 min-w-0 appearance-none cursor-pointer"
-          :aria-label="`音量 ${Math.round(player.audioState.volume * 100)}%`"
+          aria-label="音量"
+          :aria-valuetext="
+            player.audioState.muted
+              ? `已静音（音量 ${Math.round(player.audioState.volume * 100)}%）`
+              : `${Math.round(player.audioState.volume * 100)}%`
+          "
           @input="onVolume"
           style="accent-color: var(--color-accent);"
         />
@@ -492,13 +535,18 @@ function openNowPlaying() {
           aria-label="播放音质"
           @keydown="onQualityMenuKeydown"
         >
+          <!-- 选中档位铺陶土洗色；本组件 scoped 样式重置了按钮背景，
+               Tailwind utility 需带 ! 才能压过它。 -->
           <button
             v-for="opt in AUDIO_QUALITY_OPTIONS"
             :key="opt.value"
             type="button"
             role="menuitemradio"
             :aria-checked="opt.value === player.quality"
+            :aria-label="qualityItemLabel(opt)"
+            :title="qualityItemLabel(opt)"
             class="quality-menu-item"
+            :class="{ '!bg-accent-subtle': opt.value === player.quality }"
             @click="selectQuality(opt.value)"
           >
             <span class="w-4 shrink-0 flex items-center justify-center">
@@ -506,7 +554,7 @@ function openNowPlaying() {
                 v-if="opt.value === player.quality"
                 :size="14"
                 :stroke-width="2"
-                class="text-accent"
+                class="text-accent-on-subtle"
               />
             </span>
             <span class="min-w-0 flex-1 text-left">
@@ -524,9 +572,7 @@ function openNowPlaying() {
           </button>
         </div>
         <div class="quality-menu-footer">
-          <div>{{ qualityFooter }}</div>
-          <div>勾选的是所选档位，实际以服务端下发为准。</div>
-          <div>无损及以上需要网易云 VIP/SVIP 权益。</div>
+          勾选=所选；实际以服务端下发为准。
         </div>
       </div>
     </div>
@@ -578,6 +624,14 @@ function openNowPlaying() {
   transform: scale(0.97);
 }
 
+/* 中央列：桌面 40 + 6 + 12 = 58px（76px 条内）；窄窗 40 + 8 + 12 = 60px
+   （74px 条内，上下各 7px）。窄窗 8px 间距是 #9 的几何契约：播放键圆心 27
+   ↔ 24px 进度命中框圆心 61 = 34px ≥ 20 + 12 = 32px（WCAG 2.5.8 目标尺寸），
+   同时命中框 49–73 完整落在条内。改这里要同步 tests/playerBarGeometry.test.mjs。 */
+.player-center-column {
+  gap: 6px;
+}
+
 .player-transport {
   gap: 3px;
 }
@@ -624,6 +678,16 @@ function openNowPlaying() {
   box-shadow: 0 3px 10px var(--color-glow);
 }
 
+/* 脉冲光环：绝对定位的装饰层，只在播放中出现；和按钮同色，
+   所以按钮内不可见、scale 到 1.6 后成为一圈陶土光晕。 */
+.player-play-ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--color-accent);
+  border-radius: 9999px;
+  pointer-events: none;
+}
+
 .player-play-button:hover:not(:disabled) {
   transform: scale(1.045);
   box-shadow: 0 4px 14px var(--color-glow);
@@ -656,6 +720,11 @@ function openNowPlaying() {
 }
 
 .player-time {
+  /* 11px 时间标签默认继承 1.5 行高（16.5px），会把进度行撑到 16.5px，
+     破坏 #9 的窄窗几何（进度行必须是 12px，24px 命中框才能落在 49–73）。
+     行高收到 1 后：桌面中央列 40+6+12 = 58px（76px 条内），
+     窄窗 40+8+12 = 60px（74px 条内，上下各 7px）。数字本就只占 11px，视觉不变。 */
+  line-height: 1;
   color: var(--color-text-tertiary);
 }
 
@@ -762,14 +831,16 @@ function openNowPlaying() {
   outline-offset: -2px;
 }
 
-/* 菜单勾选表示“所选请求档位”；实际下发档位用独立胶囊标记。 */
+/* 菜单勾选表示“所选请求档位”；实际下发档位用独立胶囊标记。
+   字号 11px：DESIGN 的 Micro 最小可读字号，不再往下（旧 10px 与文档自相矛盾）；
+   洗色上的文字用 accent-on-subtle，满足 DESIGN「洗色上的强调色文字」对比度要求。 */
 .quality-menu-current {
   flex: 0 0 auto;
   padding: 1px 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
-  color: var(--color-accent);
+  color: var(--color-accent-on-subtle, var(--color-accent));
   background: var(--color-accent-subtle, var(--color-surface-soft));
 }
 
@@ -830,6 +901,17 @@ function openNowPlaying() {
   .player-extras {
     width: auto;
     max-width: none;
+  }
+
+  /* #9 几何契约：窄窗 74px 播放条（styles.css .mobile-player-bar），
+     中央列 40 + 8 + 12 = 60px，居中后上下各 7px：
+       播放键圆心 = 7 + 40/2 = 27
+       进度命中框圆心 = 7 + 40 + 8 + 12/2 = 61
+       间距 = 34px ≥ 20（播放键半径）+ 12（命中框半径）= 32px
+     24px 命中框落在 49–73，完整处于 74px 条内（1px 余量）。
+     跑 tests/playerBarGeometry.test.mjs 可校验这组算术。 */
+  .player-center-column {
+    gap: 8px;
   }
 }
 

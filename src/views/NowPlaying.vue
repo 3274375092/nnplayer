@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Music2, X } from "@lucide/vue";
 import LyricPanel from "@/components/LyricPanel.vue";
@@ -26,6 +26,91 @@ function goSearch() {
   void router.push({ name: "Search" });
 }
 
+// =============== 歌词面板高度 ===============
+// 512 CSS 高的验收基线里固定 360 会把整页顶出视口（约 135px 滚动才能读到歌词
+// 尾声）。这里改为实测：可见视口 − 页头 − 内容区内边距 − 元信息 − 列间距 −
+// 歌词面板自身的渲染余量，结果夹在 180–360 之间；960×640 仍解析为 360，保持
+// DESIGN 几何。
+const LYRIC_PANEL_MAX_HEIGHT = 360;
+const LYRIC_PANEL_MIN_HEIGHT = 180;
+// LyricPanel 把 panelHeight 当 min-height 与内部视口基准，但根节点还有 p-4
+// （上下共 32px 内边距）、32px 标题行（24px 标题 + mb-2 8px），而内部视口只
+// 扣掉 LYRIC_CHROME_HEIGHT 40px ⇒ 实际渲染高度 = panelHeight + 24px。预留时
+// 必须把这个余量算进去，否则 768×512 下页面会多出约 24px 的滚动（审计 #18
+// 的残余）。用常量而不是渲染后再测一次：避免「测高度 → 改 prop → 再测」的
+// 抖动循环。
+const LYRIC_PANEL_RENDER_OVERHEAD = 24;
+
+const rootRef = ref<HTMLElement | null>(null);
+const headerRef = ref<HTMLElement | null>(null);
+const contentRef = ref<HTMLElement | null>(null);
+const detailsRef = ref<HTMLElement | null>(null);
+const metadataRef = ref<HTMLElement | null>(null);
+const lyricPanelHeight = ref(LYRIC_PANEL_MAX_HEIGHT);
+let layoutObserver: ResizeObserver | null = null;
+
+function measureLyricPanelHeight() {
+  const root = rootRef.value;
+  const header = headerRef.value;
+  const content = contentRef.value;
+  const details = detailsRef.value;
+  if (!root || !header || !content || !details || root.clientHeight === 0) return;
+  // 这个页面本身由骨架的 .app-main 承担滚动：.now-playing 是 flex:1 项，
+  // 内容超过窗口时它的 height 会被内容撑开，clientHeight 不再等于可见视口。
+  // 可用高度取「可见滚动视口」与根容器中较小者，两种布局下都成立。
+  const scrollPort = root.closest(".app-main") as HTMLElement | null;
+  const viewportHeight = Math.min(
+    root.clientHeight,
+    scrollPort?.clientHeight || window.innerHeight,
+  );
+  const contentStyle = getComputedStyle(content);
+  const detailsStyle = getComputedStyle(details);
+  const reserved =
+    header.offsetHeight +
+    (Number.parseFloat(contentStyle.paddingTop) || 0) +
+    (Number.parseFloat(contentStyle.paddingBottom) || 0) +
+    (metadataRef.value?.offsetHeight ?? 0) +
+    (Number.parseFloat(detailsStyle.rowGap) || 0) +
+    LYRIC_PANEL_RENDER_OVERHEAD;
+  const available = viewportHeight - reserved;
+  const next = Math.round(
+    Math.min(
+      LYRIC_PANEL_MAX_HEIGHT,
+      Math.max(LYRIC_PANEL_MIN_HEIGHT, available),
+    ),
+  );
+  if (next !== lyricPanelHeight.value) lyricPanelHeight.value = next;
+}
+
+function observeLayoutTargets() {
+  if (!layoutObserver) return;
+  const scrollPort = rootRef.value?.closest(".app-main");
+  for (const el of [
+    rootRef.value,
+    headerRef.value,
+    contentRef.value,
+    detailsRef.value,
+    metadataRef.value,
+    scrollPort,
+  ]) {
+    if (el) layoutObserver.observe(el);
+  }
+}
+
+async function refreshLyricPanelHeight() {
+  await nextTick();
+  measureLyricPanelHeight();
+  observeLayoutTargets();
+}
+
+// 曲目切换会新建元信息节点（标题换行高度不同），重新测量并观察。
+watch(
+  () => player.currentSong?.id,
+  () => {
+    void refreshLyricPanelHeight();
+  },
+);
+
 function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") {
     e.preventDefault();
@@ -33,21 +118,31 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("resize", measureLyricPanelHeight);
+  // 首次测量等布局完成；之后由 ResizeObserver 跟踪窗口尺寸、页头与元信息变化。
+  await refreshLyricPanelHeight();
+  if (typeof ResizeObserver === "undefined") return;
+  layoutObserver = new ResizeObserver(() => measureLyricPanelHeight());
+  observeLayoutTargets();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("resize", measureLyricPanelHeight);
+  layoutObserver?.disconnect();
+  layoutObserver = null;
 });
 </script>
 
 <template>
   <section
+    ref="rootRef"
     class="now-playing"
     :aria-label="player.currentSong ? '正在播放' : '播放器'"
   >
-    <header class="now-playing__header">
+    <header ref="headerRef" class="now-playing__header">
       <div class="now-playing__eyebrow">
         <span v-if="player.currentSong">正在播放</span>
       </div>
@@ -63,6 +158,7 @@ onBeforeUnmount(() => {
     </header>
 
     <section
+      ref="contentRef"
       class="now-playing__content"
       :aria-label="player.currentSong ? '当前歌曲' : '播放器'"
     >
@@ -87,9 +183,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="now-playing__details">
+      <div ref="detailsRef" class="now-playing__details">
         <template v-if="player.currentSong">
-          <div class="now-playing__metadata">
+          <div ref="metadataRef" class="now-playing__metadata">
             <h1 class="now-playing__title">
               {{ player.currentSong.name }}
             </h1>
@@ -100,9 +196,18 @@ onBeforeUnmount(() => {
             </p>
           </div>
 
-          <div class="now-playing__lyrics">
-            <LyricPanel :panel-height="360" :line-height="40" />
-          </div>
+          <!-- 歌词区用 section 承载 h2 语义：歌词卡内部的 h3「歌词」作为它的小节
+               标题，标题层级变成 h1（歌曲名）→ h2（当前歌词）→ h3，不再跳级。 -->
+          <section
+            class="now-playing__lyrics"
+            aria-labelledby="now-playing-lyrics-heading"
+          >
+            <h2 id="now-playing-lyrics-heading" class="sr-only">当前歌词</h2>
+            <LyricPanel
+              :panel-height="lyricPanelHeight"
+              :line-height="40"
+            />
+          </section>
         </template>
 
         <!-- 空态：说明为什么没有内容，并给出下一步可做的事。 -->
@@ -157,7 +262,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 0.65rem;
   color: var(--color-text-secondary);
-  font-size: 0.72rem;
+  /* Micro 11px 是 DESIGN 声明的最小可读字号；0.72rem（11.52px）不在阶梯上。 */
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -270,7 +376,8 @@ onBeforeUnmount(() => {
   overflow: hidden;
   margin: 0;
   color: var(--color-text-secondary);
-  font-size: 0.95rem;
+  /* Weight-Not-Size Rule：正文上限 14px，层级靠字重/文字色区分。 */
+  font-size: 0.875rem;
   font-weight: 450;
   line-height: 1.5;
   text-overflow: ellipsis;
@@ -287,7 +394,7 @@ onBeforeUnmount(() => {
 .now-playing__empty-hint {
   margin: 0;
   color: var(--color-text-secondary);
-  font-size: 0.95rem;
+  font-size: 0.875rem;
   font-weight: 450;
   line-height: 1.5;
 }
@@ -311,7 +418,9 @@ onBeforeUnmount(() => {
   box-shadow: none;
 }
 
-@media (max-height: 700px) and (min-width: 821px) {
+/* 高度缓解不按宽度设门：512 CSS 高的验收基线正好是 768 宽，旧门
+   `and (min-width: 821px)` 让它永远不触发。所有宽度在矮窗下都压缩。 */
+@media (max-height: 700px) {
   .now-playing__header {
     padding-top: 1rem;
   }

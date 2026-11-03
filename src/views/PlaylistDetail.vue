@@ -6,7 +6,7 @@
 import { computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
-import LyricPanel from "@/components/LyricPanel.vue";
+import LyricAside from "@/components/LyricAside.vue";
 import SkeletonCard from "@/components/SkeletonCard.vue";
 import InlineError from "@/components/InlineError.vue";
 import {
@@ -116,11 +116,8 @@ onMounted(() => void load());
           <h1 class="text-2xl font-semibold mb-2 truncate">
             {{ detail.playlist.name }}
           </h1>
-          <div class="text-sm text-text-secondary">
-            {{ detail.playlist.trackCount }} 首歌
-            <span v-if="detail.playlist.creator">
-              · {{ detail.playlist.creator }}
-            </span>
+          <div v-if="detail.playlist.creator" class="text-sm text-text-secondary">
+            由 {{ detail.playlist.creator }} 创建
           </div>
         </div>
       </header>
@@ -132,7 +129,7 @@ onMounted(() => void load());
       >
         <p class="text-sm text-text-secondary">这个歌单还没有歌曲</p>
         <p class="mt-1 text-xs text-text-tertiary">
-          在网易云音乐里收藏歌曲后，会出现在这里。
+          在网易云音乐里往这个歌单添加歌曲后，会出现在这里。
         </p>
       </div>
 
@@ -144,13 +141,7 @@ onMounted(() => void load());
       >
         <SongList :songs="detail.songs" :show-index="true" />
         <!-- 无当前歌曲时不渲染空歌词卡：避免占位大块空白，单列时列表独占整行。 -->
-        <aside
-          v-if="player.currentSong"
-          class="detail-lyric self-start sticky top-4"
-          aria-label="当前歌词"
-        >
-          <LyricPanel />
-        </aside>
+        <LyricAside v-if="player.currentSong" />
       </div>
     </template>
   </div>
@@ -159,7 +150,9 @@ onMounted(() => void load());
 <style scoped>
 /* 两栏布局：有当前歌曲时右侧歌词卡；无当前歌曲时列表独占整行。 */
 .detail-layout {
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  /* 歌词列 clamp(280px, 34%, 320px)：宽容器触顶 320px（DESIGN 理想卡宽），
+     窄到 34% 不足 280px 时守 DESIGN 的下限，剩余宽度全部留给列表。 */
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 34%, 320px);
   /* DESIGN：内容 + 歌词卡两栏间距 2rem（原先 gap-4 偏紧）。 */
   gap: 2rem;
 }
@@ -168,10 +161,10 @@ onMounted(() => void load());
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* 容器查询：用页面自身可用宽度（窗口减去侧栏与内边距）决定两栏还是单栏。
-   生产最小窗（960×640、侧栏展开）内容宽 656px：两栏 + 列表容器的
-   34rem 断点会隐藏专辑列、把宽度让给标题，所以仍保留歌词卡；
-   只有当容器窄到列表列连隐藏专辑后都不够用时（<38rem）才单列堆叠。 */
+/* 容器查询：阈值 38rem（比每日推荐的 44rem 低）。歌单详情可能有数百首歌，
+   单列会把歌词卡排到列表末尾、在默认窗里等于丢掉侧栏歌词，所以只要列表列
+   还放得下就保留两栏；仅当容器窄到列表连隐藏专辑后都挤不下（<38rem）才堆叠。
+   生产最小窗 960×640（侧栏展开内容宽 656px）因此仍保留右侧歌词卡。 */
 .detail-page {
   width: 100%;
   max-width: 1440px;
@@ -185,11 +178,12 @@ onMounted(() => void load());
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .detail-lyric {
-    position: relative;
-    top: auto;
-    justify-self: center;
+  /* 单列态：歌词卡回到普通流、居中并限宽 34rem。
+     卡片本体只负责纸面与两栏时的 sticky，布局归页面。 */
+  .detail-layout :deep(.lyric-aside) {
+    position: static;
     width: min(100%, 34rem);
+    justify-self: center;
   }
 }
 </style>

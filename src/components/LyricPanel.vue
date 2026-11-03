@@ -2,7 +2,9 @@
 // 歌词面板（阶段3 升级版）。
 //   - 弹簧物理滚动：useSpringScroll 跟踪 activeLineIndex
 //   - 卡拉 OK 逐字渐变：每个 YRC token 独立计算并渲染字内进度
-//   - 行间距离模糊：距当前 3 行外开始模糊
+//   - 逐字重绘按「量化进度」记忆：33ms 桶下每帧只重渲染真正跨过 1% 的 1–2 个字
+//     （见 charPct / KaraokeChar；视觉与每帧写满 20–40 个字时一致）
+//   - 行间层级只用 distance-1/2/3 三档墨色（不再逐行 blur，见下）
 //   - 减少动效：弹簧退化为直接平移，跳过 rAF
 //   - 点击某行歌词 → audioPlayer.seek(行 time)
 //
@@ -10,13 +12,27 @@
 //   - 不再硬锁 height: lineHeight，而是用 min-height + line-height: 1.6
 //   - 偏移量通过 ResizeObserver 测量每行实际高度累加，不再假设等高
 //   - 当前行每个字符单 span（background-clip:text 渐变擦色），换行后仍按演唱顺序染色
-//   - 超长行允许换行，并由 ResizeObserver 把真实高度计入滚动定位
+//   - 当前行按词分组：词级 wrapper 内放逐字 span，英文只在词间断行（不断词），
+//     中文仍按字换行；超长行允许换行，并由 ResizeObserver 把真实高度计入滚动定位
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  defineComponent,
+  h,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useLyric } from "@/composables/useLyric";
 import { useSpringValue } from "@/composables/useSpringScroll";
 import { usePlayerStore } from "@/stores/player";
 import { createKaraokeFrameProjector } from "@/lyrics/lyricFrame";
+import type { ProjectedKaraokeToken } from "@/lyrics/lyricFrame";
+import { groupKaraokeTokensIntoWords } from "@/lyrics/karaokeWords";
+import type { KaraokeWordGroup } from "@/lyrics/karaokeWords";
+import { langForLyric } from "@/utils/lyricScript";
 import {
   buildLyricHeightPrefix,
   getLyricRenderRange,
@@ -104,12 +120,19 @@ function setLineRef(el: Element | { $el?: Element } | null, idx: number) {
     }
     return;
   }
+  // 同一 index 已是同一节点：Vue 会在每次 patch 后重新调用函数 ref，而当前行
+  // 每帧（30fps）都会因 --char-pct 重算而被 patch。这里必须在任何布局读取之前
+  // 提前返回，否则 offsetHeight 紧跟同帧的自定义属性写入，等于每帧一次强制同步
+  // 布局（read-after-write layout thrashing）。行高变化的唯一权威来源是下面的
+  // ResizeObserver（borderBoxSize，不触发强制布局）。
+  if (prev === target) return;
   // 同一 index 换成了新节点：旧节点也要解除观察（表项马上被覆盖）
-  if (prev && prev !== target) ro?.unobserve(prev);
+  if (prev) ro?.unobserve(prev);
   observedEls.set(idx, target);
-  // 同步一次初值,让首屏 targetY 不至于 0
-  if (lineHeights.value[idx] !== target.offsetHeight) {
-    lineHeights.value[idx] = target.offsetHeight;
+  // 仅首次观察读一次 offsetHeight，让首屏 targetY 不至于为 0。
+  const firstHeight = target.offsetHeight;
+  if (lineHeights.value[idx] !== firstHeight) {
+    lineHeights.value[idx] = firstHeight;
   }
   ro?.observe(target);
 }
@@ -203,6 +226,13 @@ const targetY = computed(() => {
 
 const { value: springY, snap: snapSpringY } = useSpringValue(targetY);
 
+/** 只在弹簧真正追赶目标时提示合成层（will-change）。
+ *  绝大多数换行走 snap（瞬间到位），常驻 will-change 会让整层在静止时也
+ *  长期保留合成层，并阻止引擎在换行之间释放它。 */
+const springAnimating = computed(
+  () => !reduceMotion && springY.value !== targetY.value,
+);
+
 const translateY = computed(() =>
   reduceMotion ? targetY.value : springY.value,
 );
@@ -217,17 +247,10 @@ watch(
   },
 );
 
-// 只对当前视口附近的行做 GPU blur。远行本来不可见，继续保留 filter 会让
-// 浏览器为整首歌词创建昂贵的离屏图层；跳过它不影响行高测量或弹簧定位。
-// 2026-08: 收窄到距离 <= 4、最大 1px，减少常驻 blur 渲染目标数量。
-function filterFor(idx: number): string {
-  const cur = activeLineIndex.value;
-  if (cur < 0 || idx === cur) return "none";
-  const absoluteDistance = Math.abs(idx - cur);
-  if (absoluteDistance > 4) return "none";
-  const dist = Math.max(0, absoluteDistance - 3);
-  return dist > 0 ? `blur(${Math.min(1, dist * 0.5).toFixed(2)}px)` : "none";
-}
+// 2026-11：删掉逐行 filter: blur()。它最多只作用在距离 4 的行（0.5px），
+// 但每次换行都会为这些行新建/销毁一个滤镜渲染表面（且处在 mask-image 视口与
+// 合成层里）；DESIGN 的层级本来就由 distance-1/2/3 的墨色阶梯承担，模糊是多余的
+// 第二套深度机制。
 
 // 仅用于视觉层级：把距离封顶在 3，避免远端歌词在换行时反复更新 DOM。
 function visualDistanceFor(idx: number): number {
@@ -257,8 +280,72 @@ const renderedKaraokeFrame = computed(() =>
   karaokeFrameProjector.project(karaokeTokens.value, karaokeProgressMs.value)
 );
 
+// 卡拉 OK 当前行按词分组：词级 wrapper 内仍是逐字 span，擦色时间轴不变。
+// 逐帧投影复用同一个 token 数组，所以用数组身份缓存分组结果，避免每帧重建。
+let karaokeGroupsSource: readonly ProjectedKaraokeToken[] = [];
+let karaokeGroupsCache: KaraokeWordGroup<ProjectedKaraokeToken>[] = [];
+const karaokeWordGroups = computed(() => {
+  const tokens = renderedKaraokeFrame.value.tokens;
+  if (tokens !== karaokeGroupsSource) {
+    karaokeGroupsSource = tokens;
+    karaokeGroupsCache = groupKaraokeTokensIntoWords(tokens);
+  }
+  return karaokeGroupsCache;
+});
+
+/** 量化后的擦色百分比（整数 0–100）。
+ *
+ *  #11：父级每 33ms 重渲染一次（进度桶），但任一时刻只有 1–2 个字符的进度
+ *  真的在变，其余字符不是已唱（100%）就是未唱（0%）。把百分比量化成整数后，
+ *  子组件 KaraokeChar 的 props 只在「真的跨过 1% 台阶」时变化：未变的字符
+ *  不重新渲染、不重写 --char-pct、也不重绘字形，每帧写入量从 20–40 个字符
+ *  降到 1–2 个。1% 台阶最多 0.5% 字宽（15px 字约 0.075px），视觉不变；
+ *  33ms 桶保持不变，擦色节奏与改造前一致。 */
+function charPct(token: ProjectedKaraokeToken): number {
+  const progress = Math.min(1, Math.max(0, token.progress));
+  return Math.round(progress * 100);
+}
+
+/**
+ * 卡拉 OK 单个擦色字符（#11）。
+ *
+ * 为什么是独立组件而不是给 <span> 加 v-memo：字符渲染在「组」的嵌套 v-for
+ * 里，而 Vue 的 v-memo 只在「v-memo 与 v-for 同元素」时才生成按项的 memo
+ * 缓存；放在嵌套 v-for 的内部元素上时缓存槽被所有迭代共用，可能复用别的组
+ * 的 vnode。独立组件靠 Vue 的 props 等值比较（shouldUpdateComponent）做
+ * 逐字记忆：父级重渲染时只有 char / pct 变化的字符会重新渲染。
+ * DOM 结构与改造前一致（仍是 <span class="lyric-char" style="--char-pct: N%">字</span>），
+ * 唯一差别是百分比取整数（见 charPct，≤0.5% 字宽误差）。
+ */
+const KaraokeChar = defineComponent({
+  name: "KaraokeChar",
+  props: {
+    char: { type: String, required: true },
+    pct: { type: Number, required: true },
+  },
+  setup(props) {
+    return () =>
+      h(
+        "span",
+        { class: "lyric-char", style: { "--char-pct": `${props.pct}%` } },
+        props.char,
+      );
+  },
+});
+
 function onLineClick(timeMs: number) {
   seekTo(timeMs / 1000);
+}
+
+/** 歌词行按钮的无障碍名称：说明点击会跳到这一句，并带上翻译。 */
+function lineAriaLabel(
+  text: string | undefined,
+  translation: string | undefined,
+): string {
+  if (!text) return "跳转到这一句";
+  return translation
+    ? `跳转到歌词：${text}（翻译：${translation}）`
+    : `跳转到歌词：${text}`;
 }
 
 const hasSong = computed(() => player.currentSong !== null);
@@ -319,10 +406,12 @@ const hasSong = computed(() => player.currentSong !== null);
     </div>
     <div
       v-else-if="!hasLyric"
-      class="flex items-center justify-center text-text-secondary text-sm"
+      class="lyric-empty"
       :style="{ height: `${lyricViewportHeight}px` }"
     >
-      这首歌没有提供歌词
+      <!-- 空态要说明「为什么没有」并给出下一步，而不是一句孤立灰字。 -->
+      <p class="lyric-empty__title">这首歌没有提供歌词</p>
+      <p class="lyric-empty__hint">换一首歌播放后，这里会显示同步歌词</p>
     </div>
 
     <!-- 歌词内容（视口 + 弹簧平移） -->
@@ -332,7 +421,8 @@ const hasSong = computed(() => player.currentSong !== null);
       :style="{ height: `${lyricViewportHeight}px` }"
     >
       <div
-        class="absolute left-0 right-0 will-change-transform"
+        class="absolute left-0 right-0"
+        :class="{ 'lyric-scroll-animating': springAnimating }"
         :style="{ transform: `translate3d(0, ${translateY}px, 0)` }"
       >
         <div
@@ -349,7 +439,6 @@ const hasSong = computed(() => player.currentSong !== null);
             line.translation,
             idx === activeLineIndex,
             visualDistanceFor(idx),
-            filterFor(idx),
             idx === activeLineIndex ? karaokeProgressMs : 0,
           ]"
           :ref="(el) => setLineRef(el, idx)"
@@ -365,28 +454,53 @@ const hasSong = computed(() => player.currentSong !== null);
             },
           ]"
           :aria-current="idx === activeLineIndex ? 'true' : undefined"
-          :style="{ filter: filterFor(idx) }"
+          :aria-label="lineAriaLabel(line.text, line.translation)"
+          :lang="langForLyric(line.text)"
           @click="onLineClick(line.time)"
         >
-          <!-- 当前行：每字符单 span + background-clip:text 渐变擦色（替代双层 clip-path，光栅成本减半），可自然换行。 -->
+          <!-- 当前行：每字符单 span + background-clip:text 渐变擦色（替代双层 clip-path，光栅成本减半）。
+               分组渲染：西文词包一层不可断的词级 wrapper（英文不断词），CJK 单字照常按字换行，
+               空白作为普通文本空格提供词间断点。 -->
           <template v-if="idx === activeLineIndex && renderedKaraokeFrame.tokens.length > 0">
-            <span class="lyric-karaoke" dir="auto" aria-hidden="true">
-              <span
-                v-for="(token, i) in renderedKaraokeFrame.tokens"
-                :key="i"
-                class="lyric-char"
-                :style="{ '--char-pct': `${(token.progress * 100).toFixed(2)}%` }"
-              >{{ token.char }}</span>
+            <span
+              class="lyric-karaoke"
+              dir="auto"
+              :lang="langForLyric(line.text)"
+              aria-hidden="true"
+            >
+              <template v-for="(group, gi) in karaokeWordGroups" :key="gi">
+                <!-- 空白组：普通文本（不套 inline-block），换行点落在词与词之间。 -->
+                <template v-if="group.isSpace">{{ group.tokens.map((token) => token.char).join("") }}</template>
+                <!-- 西文词：词级 wrapper 整词不断行，内部仍逐字擦色。 -->
+                <span v-else-if="group.nowrap" class="lyric-word">
+                  <KaraokeChar
+                    v-for="(token, ti) in group.tokens"
+                    :key="ti"
+                    :char="token.char"
+                    :pct="charPct(token)"
+                  />
+                </span>
+                <!-- CJK：单字直接渲染，仍按字换行。 -->
+                <template v-else>
+                  <KaraokeChar
+                    v-for="(token, ti) in group.tokens"
+                    :key="ti"
+                    :char="token.char"
+                    :pct="charPct(token)"
+                  />
+                </template>
+              </template>
             </span>
-            <span class="sr-only">{{ line.text }}</span>
+            <span class="sr-only" :lang="langForLyric(line.text)">{{ line.text }}</span>
           </template>
-          <span v-else-if="line.text">{{ line.text }}</span>
+          <span v-else-if="line.text" :lang="langForLyric(line.text)">{{ line.text }}</span>
           <span v-else>·</span>
           <!-- 翻译：当前行及邻近行显示，小字号半透明 -->
           <span
             v-if="line.translation"
             class="lyric-translation"
             :class="{ 'is-active-translation': idx === activeLineIndex }"
+            :lang="langForLyric(line.translation)"
           >{{ line.translation }}</span>
         </button>
         <div
@@ -431,6 +545,37 @@ const hasSong = computed(() => player.currentSong !== null);
   max-width: 62%;
   /* 右上元信息 12px：ash，对四个纸面 5.74:1 起（旧 48% mix 实测 2.79:1）。 */
   color: var(--color-text-tertiary);
+}
+
+/* 歌词空态：说明原因 + 下一步；文字守住 ≥70% 墨色下限（DESIGN 歌词行最低一档），
+   仍是同一张浅纸上的正文，不引入深色面板或描边来「显得有事发生」。 */
+.lyric-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  box-sizing: border-box;
+  padding: 0 0.5rem;
+  text-align: center;
+}
+
+.lyric-empty__title {
+  margin: 0;
+  /* 邻近行一档（90% 炭墨，raised 卡上约 9.3:1），高于 70% 墨的歌词行下限；
+     字号守 14px 上限（Weight-Not-Size：空态不是歌词行，不借用 0.975rem）。 */
+  color: color-mix(in srgb, var(--color-text-primary) 90%, transparent);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.lyric-empty__hint {
+  margin: 0;
+  /* 70% 炭墨：DESIGN 歌词行的最低一档，raised 卡上约 5.4:1。 */
+  color: color-mix(in srgb, var(--color-text-primary) 70%, transparent);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 /* 歌词失败态：标题说明原因、提示恢复方式，后端原文只在展开后出现。 */
@@ -523,8 +668,11 @@ const hasSong = computed(() => player.currentSong !== null);
   padding-top: 0.25rem;
   padding-bottom: 0.25rem;
   white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  /* 英文按词换行：word-break: normal 不再逐字符断词（旧 overflow-wrap: anywhere
+     会把 when 拆成 wh / en）；只有真正超长且不可断的词才用 break-word 兜底。
+     中文没有空格，normal 下仍按字正常换行。 */
+  word-break: normal;
+  overflow-wrap: break-word;
   border-radius: 6px;
   /* 远行（距离 ≥3）：最低一档，最暗染色纸 4.95:1（≥ DESIGN 4.65 正文下限）。 */
   color: color-mix(in srgb, var(--color-text-primary) 70%, transparent);
@@ -534,7 +682,6 @@ const hasSong = computed(() => player.currentSong !== null);
   text-align: left;
   transition:
     color 0.28s linear,
-    filter 0.3s linear,
     background-color 0.2s ease;
 }
 
@@ -551,6 +698,13 @@ const hasSong = computed(() => player.currentSong !== null);
   background-color: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
 
+/* 焦点环用设计系统的 2px 陶土 outline（DESIGN 组件规则），不再落到浏览器
+   UA 的淡蓝环。用 -2px 内嵌偏移：歌词视口有上下渐隐 mask，外扩的环会被裁掉。 */
+.lyric-line:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
 .lyric-line.is-active {
   /* 当前行：实底炭墨 + 600 字重 + accent 洗色，保持最强层级（12.99:1 起）。 */
   color: var(--color-text-primary);
@@ -560,19 +714,29 @@ const hasSong = computed(() => player.currentSong !== null);
     transparent 78%
   );
   font-weight: 600;
-  filter: none !important;
 }
 
 .lyric-line.is-active.has-karaoke {
   color: transparent;
 }
 
-/* 每个字符各自擦色，inline-block 字符之间仍可自然换行。 */
+/* 每个字符各自擦色；按词分组后，词内字符由 .lyric-word 兜住，不再逐字符断行。 */
 .lyric-karaoke {
   display: inline;
   white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  /* 与 .lyric-line 同一策略：按词换行，不逐字符断词。 */
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* 词级 wrapper（卡拉 OK 当前行按词换行）。
+   整词 shrink-to-fit 成一个原子内联盒：词宽够放时整词不可断，断点只落在词与词
+   之间的空格文本上；只有单词本身宽过卡片时才被 max-width 收住，退回到字间换行，
+   因此长行换行后不会横向溢出、也不会缩小字号。内部逐字 .lyric-char 的擦色不受影响。 */
+.lyric-word {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
 }
 
 /* 卡拉OK擦色：每字符单 span，用 background-clip:text 渐变硬停实现字内擦除。
@@ -585,6 +749,10 @@ const hasSong = computed(() => player.currentSong !== null);
 .lyric-char {
   display: inline-block;
   white-space: pre;
+  /* 逐字擦色会按帧改写 --char-pct 并重绘字形：把每个字的重绘范围收在自身盒内，
+     避免重绘溢出到同一行的其他字/行（布局、样式、绘制三重 containment）。
+     只影响渲染作用域，不改变字形与渐变视觉。 */
+  contain: layout style paint;
   color: transparent;
   -webkit-text-fill-color: transparent;
   background-image: linear-gradient(
@@ -604,7 +772,9 @@ const hasSong = computed(() => player.currentSong !== null);
   );
 }
 
-.will-change-transform {
+/* 弹簧只在面板高度变化等少数场景真正运行：仅在追赶目标时提示合成层，
+   静止时不再常驻保留（否则整层合成层一直活着，还会挡住引擎回收）。 */
+.lyric-scroll-animating {
   will-change: transform;
 }
 

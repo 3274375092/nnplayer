@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 骨架屏卡片。
 //   - 列表型 / 网格型两种 variant
-//   - 使用 tailwind 的 animate-shimmer 配合渐变背景实现"微光闪烁"效果
+//   - 微光用 ::after 上的 transform 扫光实现（合成器属性，不动 background-position）
 //
 // 用法：
 //   <SkeletonCard v-for="i in 8" :key="i" variant="grid" />
@@ -51,25 +51,35 @@ withDefaults(defineProps<Props>(), {
 </template>
 
 <style scoped>
-/* 微光闪烁背景：跟随当前主题的文字明度生成层级。 */
+/* 骨架底色 + 一条用 transform 扫过的微光带。
+   旧实现动画 background-position（纯 paint，48 个格子会每秒重新栅格化上千次）；
+   现在高光放在 ::after 上只动 transform，交给合成器。 */
 .skeleton {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--color-text-primary) 5%, transparent) 0%,
-    color-mix(in srgb, var(--color-text-primary) 10%, transparent) 50%,
-    color-mix(in srgb, var(--color-text-primary) 5%, transparent) 100%
-  );
-  background-size: 800px 100%;
-  animation: shimmer 1.6s linear infinite;
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
 }
 
-/* 单独定义动画（避免被 Tailwind purge） */
-@keyframes shimmer {
-  0% {
-    background-position: -400px 0;
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%,
+    transparent 100%
+  );
+  animation: skeleton-sweep 1.6s linear infinite;
+}
+
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100%);
   }
-  100% {
-    background-position: 400px 0;
+  to {
+    transform: translateX(100%);
   }
 }
 </style>

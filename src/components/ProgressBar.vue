@@ -29,6 +29,9 @@ const ratio = computed(() => {
   return Math.max(0, Math.min(100, (localValue.value / props.max) * 100));
 });
 
+/** 已播段用 scaleX 表达进度：0–1 的合成器属性，不再逐帧改 width。 */
+const ratioScale = computed(() => (ratio.value / 100).toFixed(4));
+
 const maxValue = computed(() =>
   Number.isFinite(props.max) && props.max > 0 ? props.max : 0,
 );
@@ -108,20 +111,24 @@ function onKey(e: KeyboardEvent) {
 
 <template>
   <div
-    class="progress-bar relative h-3 group cursor-pointer"
+    class="progress-bar relative h-3 cursor-pointer"
     @mouseenter="hovering = true"
     @mouseleave="hovering = false"
   >
     <div
       class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-track rounded-full overflow-hidden"
     />
+    <!-- 已播段：整宽元素 + scaleX（合成器属性）。渐变随整体缩放压缩，
+         视觉与原来的 width:% 一致，但不再触发宽度过渡/重排。 -->
     <div
-      class="absolute top-1/2 -translate-y-1/2 h-1 rounded-full transition-[width] duration-75 ease-linear"
-      :style="{ background: 'linear-gradient(90deg, var(--color-accent), var(--color-accent-secondary))', width: ratio + '%' }"
+      class="progress-fill absolute inset-x-0 top-1/2 h-1 rounded-full"
+      :style="{ transform: `translateY(-50%) scaleX(${ratioScale})` }"
     />
+    <!-- 交互盒放大到 24px 高（WCAG 2.5.8）：输入框绝对定位、不参与行高，
+         视觉 4px 轨道仍由上面的自绘元素居中承载。 -->
     <input
       type="range"
-      class="progress-range absolute inset-0 w-full h-full cursor-pointer"
+      class="progress-range"
       :min="0"
       :max="max"
       step="0.1"
@@ -133,16 +140,20 @@ function onKey(e: KeyboardEvent) {
       @change="onChange"
       @keydown="onKey"
     />
+    <!-- 滑块轴与轨道等宽：translateX 的百分比因此等于轨道百分比，
+         滑块位置不再用 left 布局属性。 -->
     <div
-      class="progress-thumb absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-thumb rounded-full pointer-events-none transition-all duration-150 ease-[cubic-bezier(0.32,0.72,0,1)]"
-      :class="dragging ? 'opacity-100 scale-110' : 'opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100'"
-      :style="{
-        left: `calc(${ratio}% - 5px)`,
-      }"
-    />
+      class="progress-thumb-anchor"
+      :style="{ transform: `translateX(${ratio}%)` }"
+    >
+      <div
+        class="progress-thumb"
+        :class="{ 'is-dragging': dragging }"
+      />
+    </div>
     <div
       v-if="dragging || hovering"
-      class="progress-tooltip absolute -top-9 px-2.5 py-1 bg-glass text-xs text-text-primary rounded-lg pointer-events-none whitespace-nowrap backdrop-blur-xl"
+      class="progress-tooltip absolute -top-9 px-2.5 py-1 bg-glass text-xs text-text-primary rounded-lg pointer-events-none whitespace-nowrap"
       :style="{ left: `calc(${ratio}% - 24px)` }"
     >
       {{ fmtDuration(localValue) }}
@@ -152,8 +163,20 @@ function onKey(e: KeyboardEvent) {
 
 <style scoped>
 /* 原生 range 的外观全部收起，进度与滑块由上方自绘元素承担；
-   键盘聚焦时把 input 显示出来，只露出 2px 陶土焦点环。 */
+   键盘聚焦时把 input 显示出来，只露出 2px 陶土焦点环。
+   命中框 24px 高（视觉轨道 4px），绝对定位、不撑高行：所在进度行仍是 12px。
+   #9 几何（窄窗 74px 播放条，中央列 40+8+12=60 居中）：进度行 55–67，
+   命中框 49–73，完整落在条内；圆心 61 ↔ 播放键圆心 27 = 34px ≥ 20+12 = 32px，
+   目标本身即 24px（不再依赖 WCAG 2.5.8 的间距例外）。
+   见 PlayerBarFloating 的窄窗契约与 tests/playerBarGeometry.test.mjs。 */
 .progress-range {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 24px;
+  transform: translateY(-50%);
+  cursor: pointer;
   -webkit-appearance: none;
   appearance: none;
   border: 0;
@@ -163,10 +186,11 @@ function onKey(e: KeyboardEvent) {
   outline: none;
 }
 
+/* 环内嵌 2px，保持 24px 交互盒里可见，不外扩压到上方传输按钮。 */
 .progress-range:focus-visible {
   opacity: 1;
   outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
   border-radius: 999px;
 }
 
@@ -196,15 +220,57 @@ function onKey(e: KeyboardEvent) {
   background: transparent;
 }
 
-/* 键盘聚焦时也把滑块露出来，方便确认当前位置。 */
-.progress-bar:has(.progress-range:focus-visible) .progress-thumb {
-  opacity: 1;
-  transform: translateY(-50%) scale(1);
+/* 已播段：整宽 + scaleX，从左边增长；75ms 线性只是把低频 timeupdate
+   的台阶抹平，作用在合成器属性上，不产生布局。 */
+.progress-fill {
+  transform-origin: left center;
+  background: linear-gradient(
+    90deg,
+    var(--color-accent),
+    var(--color-accent-secondary)
+  );
+  transition: transform 75ms linear;
 }
 
-/* 滑块与时间气泡只用 DESIGN 的两种纸面阴影，不再借用 Tailwind shadow-lg。 */
+/* 滑块轴与轨道等宽；translateX 的百分比相对自身宽度 = 相对轨道宽度。 */
+.progress-thumb-anchor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: transform 75ms linear;
+}
+
+/* 纸色 10px 滑块：Raised 阴影之外再加 1px 陶土描边作为对比边界
+   （纸色 vs 纸面仅 1.04:1，悬停/聚焦时靠这圈边界才读得出位置）。 */
 .progress-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-thumb);
   box-shadow: var(--shadow-raised);
+  transform: translate(-50%, -50%) scale(0.75);
+  opacity: 0;
+  transition:
+    transform 150ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 150ms ease;
+}
+
+/* 悬停整条进度（含放大后的输入盒，:hover 命中祖先）或键盘聚焦时露出滑块。 */
+.progress-bar:hover .progress-thumb,
+.progress-bar:has(.progress-range:focus-visible) .progress-thumb {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* 拖拽中放大：选择器比上面的 :hover 规则更靠后，保证拖动时不被覆盖。 */
+.progress-bar .progress-thumb.is-dragging {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.1);
 }
 
 .progress-tooltip {

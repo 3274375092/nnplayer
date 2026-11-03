@@ -8,16 +8,16 @@ export interface AudioQualityOption {
   value: AudioQuality;
   /** 完整标签（菜单项） */
   label: string;
-  /** 短标签（播放条徽标） */
+  /** 短标签（播放条徽标）：只表达档位，不出现裸码率 */
   shortLabel: string;
   /** 说明（菜单项副文本） */
   hint: string;
 }
 
 export const AUDIO_QUALITY_OPTIONS: readonly AudioQualityOption[] = [
-  { value: "standard", label: "标准", shortLabel: "128K", hint: "128kbps MP3" },
-  { value: "higher", label: "较高", shortLabel: "192K", hint: "192kbps MP3" },
-  { value: "exhigh", label: "极高", shortLabel: "320K", hint: "320kbps MP3" },
+  { value: "standard", label: "标准", shortLabel: "标准", hint: "128kbps MP3" },
+  { value: "higher", label: "较高", shortLabel: "较高", hint: "192kbps MP3" },
+  { value: "exhigh", label: "极高", shortLabel: "极高", hint: "320kbps MP3" },
   { value: "lossless", label: "无损", shortLabel: "无损", hint: "FLAC 无损压缩" },
   { value: "hires", label: "Hi-Res", shortLabel: "Hi-Res", hint: "高解析度 FLAC" },
   { value: "jymaster", label: "超清母带", shortLabel: "母带", hint: "母带级音质，最高档" },

@@ -155,7 +155,7 @@ function runAction() {
               <code class="notice-detail-code">{{ current.detail }}</code>
             </details>
             <p v-if="pendingCount > 0" class="notice-pending">
-              另有 {{ pendingCount }} 条提示，关闭这条后继续显示
+              还有 {{ pendingCount }} 条提示，关闭这条后显示下一条。
             </p>
           </div>
           <div class="notice-actions">
