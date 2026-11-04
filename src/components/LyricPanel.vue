@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 歌词面板（阶段3 升级版）。
-//   - 弹簧物理滚动：useSpringScroll 跟踪 activeLineIndex
+//   - 弹簧物理滚动：滚动领先卡拉OK 200ms 完成，换行时高亮落在已居中的行上；
+//     大跨度跳转（点击远端歌词/拖进度/切歌）直接定位
 //   - 卡拉 OK 逐字渐变：每个 YRC token 独立计算并渲染字内进度
 //   - 逐字重绘按「量化进度」记忆：33ms 桶下每帧只重渲染真正跨过 1% 的 1–2 个字
 //     （见 charPct / KaraokeChar；视觉与每帧写满 20–40 个字时一致）
@@ -214,9 +215,30 @@ const reduceMotion =
   typeof window !== "undefined" &&
   window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-// 期望的 translateY：让 activeLineIndex 行垂直居中
-const targetY = computed(() => {
+// 滚动领先量：在下一行时间戳到来之前 SCROLL_LEAD_MS 就开始把面板滚到下一行，
+// 让「滚到中心」先于「卡拉OK 开始擦色」完成——否则新行一边往上滑、逐字擦色
+// 一边已经开始，看起来就是滚动和卡拉OK对不上。取 200ms：普通歌曲一行 2–4s，
+// 足够完成一次 36–40px 的弹簧位移；行距极密的说唱段仍是连续追赶，不会突兀。
+const SCROLL_LEAD_MS = 200;
+
+/** 视觉滚动的目标行：正常等于 activeLineIndex；当本行剩余时间不足 SCROLL_LEAD_MS
+ *  时提前指向下一行（卡拉OK 仍严格按 activeLineIndex 的时间轴走）。
+ *  暂停时不预滚：当前行保持在中心，恢复播放后恢复领先。 */
+const scrollIndex = computed(() => {
   const idx = activeLineIndex.value;
+  if (idx < 0) return idx;
+  if (!player.audioState.playing) return idx;
+  const cur = lines.value[idx];
+  const next = lines.value[idx + 1];
+  if (!cur || !next) return idx;
+  const lineDuration = next.time - cur.time;
+  const remaining = lineDuration - progressMs.value;
+  return remaining <= SCROLL_LEAD_MS ? idx + 1 : idx;
+});
+
+// 期望的 translateY：让 scrollIndex 行垂直居中（滚动先行、卡拉OK 后到）
+const targetY = computed(() => {
+  const idx = scrollIndex.value;
   if (idx < 0) return 0;
   const prefix = heightPrefix.value;
   const offset = prefix[idx];
@@ -224,11 +246,15 @@ const targetY = computed(() => {
   return lyricViewportHeight.value / 2 - cur / 2 - offset;
 });
 
-const { value: springY, snap: snapSpringY } = useSpringValue(targetY);
+// 弹簧参数：接近临界阻尼（ζ≈0.99），一行位移约 0.28s 软着陆。
+// 默认 170/26 对「换行」这种 36–40px 的短位移太慢（≈0.5s 才停稳），会让人感觉
+// 歌词总在追；调硬后既有加速度的柔软感，又能在 200ms 领先窗口内基本归位。
+const { value: springY, snap: snapSpringY } = useSpringValue(targetY, {
+  stiffness: 450,
+  damping: 42,
+});
 
-/** 只在弹簧真正追赶目标时提示合成层（will-change）。
- *  绝大多数换行走 snap（瞬间到位），常驻 will-change 会让整层在静止时也
- *  长期保留合成层，并阻止引擎在换行之间释放它。 */
+/** 只在弹簧真正追赶目标时提示合成层（will-change），静止时让引擎回收。 */
 const springAnimating = computed(
   () => !reduceMotion && springY.value !== targetY.value,
 );
@@ -237,13 +263,26 @@ const translateY = computed(() =>
   reduceMotion ? targetY.value : springY.value,
 );
 
-// 行切换瞬间直接 snap 滚动到新行中心，与卡拉OK 归零同步，
-// 避免弹簧追赶期间新行先在偏下位置出现再滑到中心造成的换行闪回。
-// 不用 reduceMotion 判断：减少动效时 targetY 本就同步，snap 也是同步效果。
+/** 滚动动画：相邻行走弹簧平滑滚动（DESIGN「弹簧退化为直接定位」只在
+ *  prefers-reduced-motion 时成立）。只有这几类「大跳」才瞬间到位：
+ *  - 首行 / 切歌（prev < 0，此时上一行没有可衔接的位置）；
+ *  - 点击远端歌词或拖动进度条后跨度超过 2.5 行——长距离弹簧会变成一大段
+ *    快速滑动再急停，反而不如直接定位干净；
+ *  - reduce-motion。
+ *  行高被 ResizeObserver 修正的跳变仍由上面的 lineHeights watcher snap，
+ *  避免量测抖动触发一次可见的「追赶」。 */
+const MAX_ANIMATED_JUMP_LINES = 2.5;
 watch(
-  activeLineIndex,
-  () => {
-    snapSpringY(targetY.value);
+  scrollIndex,
+  (next, prev) => {
+    const jumpPx = Math.abs(targetY.value - springY.value);
+    const tooFar = jumpPx > props.lineHeight * MAX_ANIMATED_JUMP_LINES;
+    if (reduceMotion || next < 0 || prev == null || prev < 0 || tooFar) {
+      snapSpringY(targetY.value);
+      return;
+    }
+    // 其余情况不动 springY：target 变化由 useSpringValue 自己的 watch 启动 rAF，
+    // 从当前速度/位置继续追赶；快速连行时会自然连成一段连续滚动。
   },
 );
 
@@ -394,7 +433,7 @@ const hasSong = computed(() => player.currentSong !== null);
       <button
         v-if="error.retryable"
         type="button"
-        class="px-3 py-1 rounded-md bg-surface-soft hover:bg-surface-strong"
+        class="btn btn-ghost"
         @click="retry"
       >
         重试
@@ -587,7 +626,9 @@ const hasSong = computed(() => player.currentSong !== null);
 
 .lyric-error-title {
   margin: 0;
-  color: var(--color-accent);
+  /* 与页内错误（InlineError）同一套：14px/600 炭墨标题，不再用强调色当正文。 */
+  color: var(--color-text-primary);
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -660,6 +701,7 @@ const hasSong = computed(() => player.currentSong !== null);
    （#f2e5bc）最差值 4.95 / 6.64 / 8.93:1，raised 卡上 5.4 / 7.5 / 10.4:1；
    当前行再叠加 600 字重与 accent 洗色。 */
 .lyric-line {
+  position: relative;
   display: block;
   width: 100%;
   min-height: v-bind(lineHeight + 'px');
@@ -708,12 +750,31 @@ const hasSong = computed(() => player.currentSong !== null);
 .lyric-line.is-active {
   /* 当前行：实底炭墨 + 600 字重 + accent 洗色，保持最强层级（12.99:1 起）。 */
   color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* accent 洗色放在独立伪元素上并按 opacity 过渡：background-image 的渐变无法
+   直接补间，换行时洗色会硬切；淡入 220ms 与行间墨色 0.28s 的色阶过渡同步，
+   换行时高亮「亮起来」而不是闪一下。z-index:-1 让洗色位于本行文字之下，
+   面板本身是透明底（isolation:isolate），不会掉到面板背景后面。 */
+.lyric-line::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 6px;
+  pointer-events: none;
   background: linear-gradient(
     90deg,
     color-mix(in srgb, var(--color-accent) 8%, transparent),
     transparent 78%
   );
-  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+
+.lyric-line.is-active::before {
+  opacity: 1;
 }
 
 .lyric-line.is-active.has-karaoke {
