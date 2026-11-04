@@ -21,12 +21,14 @@ const ACCENT_HUE_FOLD_TOP = 26;
 const TERRACOTTA_HUE = 20;
 /** 背景/环境光色相向陶土靠拢的比例，保留封面差异但纸面始终暖。 */
 const AMBIENT_HUE_PULL = 0.68;
-/** 纸面派生的表面参数：侧栏是 5% 墨色叠在纸色上，raised 是卡片纸混白。
- *  这两组值必须与 styles.css 的 `--color-surface-soft` / `--color-raised`
- *  公式一致，否则推导会静默校验一个不再存在的合成面。 */
-const RAISED_NEUTRAL = "#ffffff";
-const RAISED_CARD_WEIGHT = 0.42;
-const SURFACE_SOFT_ALPHA = 0.05;
+/** 纸面派生的表面参数，必须与 styles.css 的同名公式一致，否则推导会静默
+ *  校验一个不再存在的合成面：侧栏是 5% 墨色叠纸色（--color-surface-soft），
+ *  行/卡片 hover 是 6% 墨色叠纸色（--color-surface-strong，alpha 的取舍见
+ *  accessibleTintedSurface），raised 是卡片纸混白。 */
+export const RAISED_NEUTRAL = "#ffffff";
+export const RAISED_CARD_WEIGHT = 0.42;
+export const SURFACE_SOFT_ALPHA = 0.05;
+export const SURFACE_STRONG_ALPHA = 0.06;
 const ACCENT_SUBTLE_ALPHA = 0.12;
 /** 强调色文字叠在 accent-subtle 洗色上的下限（比纸面强调色再留一点渲染余量）。 */
 const ACCENT_ON_SUBTLE_MIN_CONTRAST = 4.65;
@@ -316,9 +318,16 @@ function ambientStrength(color: HSL, offset = 0): number {
 }
 
 /**
- * 背景染色要同时守住纸面与纸面上的侧栏（surface-soft 叠纸色）：侧栏比纸面深
- * 5% 墨色，是三级正文真正落座的地方，染色按较暗的那一层校验。
- * 余量高于 4.65:1，覆盖 CSS 渐变在 sRGB 中插值的小幅亮度波动。
+ * 背景染色要同时守住纸面、纸面上的侧栏（surface-soft 叠纸色）与行/卡片 hover
+ * 面（surface-strong 叠纸色）：侧栏叠 5% 墨色、hover 面叠 6% 墨色，三级正文与
+ * 强调色都真正落座在后者上。染色按这几层里较暗的一层校验，下限 4.65:1 吸收
+ * 十六进制量化与渲染的小幅亮度波动。
+ *
+ * hover 面的 6% 是刻意取舍：纸面改为封面染色纸（f48b16b）后，9% 的 hover 面
+ * 会把可读染色压到最大通道差仅 6/255（均值 5.2），封面染色基本不可见；6% 仍保证
+ * hover 上三级正文 ≥4.65:1、强调色/次强调色 ≥4.6:1，同时把染色保留在
+ * 15/255 左右（v0.5.3 基线 18/255 的约 83%，均值 12.4 对基线 13.9）。
+ * 这两个 alpha 必须与 styles.css 的 surface-soft / surface-strong 公式同步。
  */
 function accessibleTintedSurface(
   base: string,
@@ -327,11 +336,16 @@ function accessibleTintedSurface(
 ): string {
   let strength = clamp(initialStrength, 0, 1);
   let color = mixHex(base, tint, strength);
-  const sidebarOf = (value: string) =>
-    mixHex(value, GRUVBOX_LIGHT_THEME.foreground, SURFACE_SOFT_ALPHA);
+  const inkOverlay = (value: string, alpha: number) =>
+    mixHex(value, GRUVBOX_LIGHT_THEME.foreground, alpha);
+  const paintedSurfaces = (value: string) => [
+    value,
+    inkOverlay(value, SURFACE_SOFT_ALPHA),
+    inkOverlay(value, SURFACE_STRONG_ALPHA),
+  ];
 
   while (
-    [color, sidebarOf(color)].some((surface) =>
+    paintedSurfaces(color).some((surface) =>
       THEME_TEXT_COLORS.some(
         (textColor) =>
           contrastRatio(textColor, surface) < TINTED_SURFACE_MIN_CONTRAST,
@@ -463,6 +477,8 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
     background,
     // 侧栏（surface-soft 叠纸色）是激活导航/播放中图标落座的表面，也参与下限。
     mixHex(background, GRUVBOX_LIGHT_THEME.foreground, SURFACE_SOFT_ALPHA),
+    // 行/卡片 hover（surface-strong 叠纸色）上歌名会切成强调色，是更暗的一面。
+    mixHex(background, GRUVBOX_LIGHT_THEME.foreground, SURFACE_STRONG_ALPHA),
     backgroundFrom,
     backgroundTo,
     GRUVBOX_LIGHT_THEME.card,

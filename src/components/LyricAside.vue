@@ -29,7 +29,7 @@ const asideRef = ref<HTMLElement | null>(null);
 const panelHeight = ref(PANEL_MAX_HEIGHT);
 let resizeObserver: ResizeObserver | null = null;
 
-/** 按「首屏可见高度 − 卡片顶边 − 卡片开销」推导面板高度，太小则守下限。 */
+/** 按「首屏可见高度 − 卡片自然顶边 − 卡片开销」推导面板高度，太小则守下限。 */
 function measurePanelHeight() {
   const el = asideRef.value;
   if (!el) return;
@@ -37,7 +37,16 @@ function measurePanelHeight() {
   if (!port) return;
   const portRect = port.getBoundingClientRect();
   const asideRect = el.getBoundingClientRect();
-  const topOffset = Math.max(16, asideRect.top - portRect.top);
+  // sticky 卡片的实时 rect.top 只反映「贴顶后」的位置（恒为滚动视口顶 + 16），
+  // 与文档滚动量无关：若卡片在页面已滚动时挂载，会把 topOffset 量成 16、把面板
+  // 撑到接近上限，用户滚回顶部后卡片又被视口底缘切掉。改用布局偏移（滚动容器
+  // 内容坐标）：rect.top - portRect.top + scrollTop。未贴顶时正好还原自然位置；
+  // 已贴顶时得到自然位置的上界（只会更保守地收窄面板），因此测量结果与当前
+  // 滚动位置无关，重算仍只由 .app-main 的 ResizeObserver 触发。
+  const topOffset = Math.max(
+    16,
+    asideRect.top - portRect.top + port.scrollTop,
+  );
   const available = Math.round(
     port.clientHeight - topOffset - CARD_VERTICAL_CHROME,
   );

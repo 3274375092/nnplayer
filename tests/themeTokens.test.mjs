@@ -26,6 +26,10 @@ const {
   DEFAULT_THEME_SEED,
   DYNAMIC_THEME_CSS_VARIABLES,
   GRUVBOX_LIGHT_THEME,
+  RAISED_CARD_WEIGHT,
+  RAISED_NEUTRAL,
+  SURFACE_SOFT_ALPHA,
+  SURFACE_STRONG_ALPHA,
   contrastRatio,
   deriveCoverTheme,
   hslToHex,
@@ -147,19 +151,31 @@ function assertWarmPaper(hex, label) {
 
 /**
  * 应用真实绘制的纸面：页面与侧栏都以 `--color-bg` 为底（styles.css / App.vue），
- * 侧栏再叠 5% 墨色，raised 由卡片纸混白。三档背景渐变（bg-from/bg-to）与
- * 中层 canvas 都已从 CSS 与 token 层移除，这里校验的是真正绘制的表面。
+ * 侧栏再叠 surface-soft 墨色，行/卡片 hover 再叠 surface-strong 墨色，raised
+ * 由卡片纸混白。三档背景渐变（bg-from/bg-to）与中层 canvas 都已从 CSS 与 token
+ * 层移除，这里校验的是真正绘制的表面；alpha 直接取自主题模块的导出常量，
+ * 保证测试复算与推导用的是同一份单源值。
  */
 function paintedPaperSurfaces(background) {
   const surfaceSoft = mixHex(
     background,
     GRUVBOX_LIGHT_THEME.foreground,
-    0.05,
+    SURFACE_SOFT_ALPHA,
   );
-  const raised = mixHex("#ffffff", GRUVBOX_LIGHT_THEME.card, 0.42);
+  const surfaceStrong = mixHex(
+    background,
+    GRUVBOX_LIGHT_THEME.foreground,
+    SURFACE_STRONG_ALPHA,
+  );
+  const raised = mixHex(
+    RAISED_NEUTRAL,
+    GRUVBOX_LIGHT_THEME.card,
+    RAISED_CARD_WEIGHT,
+  );
   return {
     background,
     sidebar: surfaceSoft,
+    strong: surfaceStrong,
     card: GRUVBOX_LIGHT_THEME.card,
     cardHover: GRUVBOX_LIGHT_THEME.cardHover,
     raised,
@@ -184,7 +200,7 @@ function accentSubtleBackdrops({
     return color;
   };
   const surfaces = paintedPaperSurfaces(background);
-  const raised = mixHex("#ffffff", card, 0.42);
+  const raised = mixHex(RAISED_NEUTRAL, card, RAISED_CARD_WEIGHT);
   return {
     sidebar: wash(surfaces.sidebar),
     overlaySidebar: wash(background),
@@ -330,6 +346,96 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
   ]) {
     assertWarmHue(ambient, "static ambient default", ACCENT_HUE_MIN, WARM_INPUT_HUE_MAX);
   }
+});
+
+test("CSS derived surfaces stay single-sourced from themeTokens.ts", async () => {
+  // 这些常量让推导复算 styles.css 的合成面；只改一边时推导会静默校验一个
+  // 不再存在的表面（v0.5.1 的 canvas 单源守卫被删后的回退），这里反向锁住公式。
+  const app = await readFile(
+    new URL("../src/App.vue", import.meta.url),
+    "utf8",
+  );
+  const assertAlphaUnit = (constant, label) =>
+    assert.ok(
+      Number.isFinite(constant) && constant > 0 && constant < 1,
+      `${label} must stay a positive alpha below 1`,
+    );
+
+  assertAlphaUnit(SURFACE_SOFT_ALPHA, "SURFACE_SOFT_ALPHA");
+  assertAlphaUnit(SURFACE_STRONG_ALPHA, "SURFACE_STRONG_ALPHA");
+  assertAlphaUnit(RAISED_CARD_WEIGHT, "RAISED_CARD_WEIGHT");
+
+  const surfaceSoft = styles.match(
+    /--color-surface-soft:\s*color-mix\(in srgb,\s*var\(--color-text-primary\)\s+(\d+(?:\.\d+)?)%,\s*transparent\)/,
+  );
+  assert.ok(
+    surfaceSoft,
+    "styles.css must derive --color-surface-soft from var(--color-text-primary)",
+  );
+  assert.equal(
+    Number(surfaceSoft[1]) / 100,
+    SURFACE_SOFT_ALPHA,
+    "--color-surface-soft must use the SURFACE_SOFT_ALPHA ink mix",
+  );
+
+  const surfaceStrong = styles.match(
+    /--color-surface-strong:\s*color-mix\(in srgb,\s*var\(--color-text-primary\)\s+(\d+(?:\.\d+)?)%,\s*transparent\)/,
+  );
+  assert.ok(
+    surfaceStrong,
+    "styles.css must derive --color-surface-strong from var(--color-text-primary)",
+  );
+  assert.equal(
+    Number(surfaceStrong[1]) / 100,
+    SURFACE_STRONG_ALPHA,
+    "--color-surface-strong must use the SURFACE_STRONG_ALPHA ink mix",
+  );
+
+  const raised = styles.match(
+    /--color-raised:\s*color-mix\(in srgb,\s*var\(--color-card\)\s+(\d+(?:\.\d+)?)%,\s*(#[0-9a-f]{3}(?:[0-9a-f]{3})?)\)/i,
+  );
+  assert.ok(
+    raised,
+    "styles.css must derive --color-raised from var(--color-card) mixed with white",
+  );
+  assert.equal(
+    Number(raised[1]) / 100,
+    RAISED_CARD_WEIGHT,
+    "--color-raised must use the RAISED_CARD_WEIGHT card mix",
+  );
+  const expandHex = (hex) =>
+    hex.length === 4
+      ? `#${hex
+          .slice(1)
+          .split("")
+          .map((channel) => channel + channel)
+          .join("")}`
+      : hex;
+  assert.equal(
+    expandHex(raised[2]).toLowerCase(),
+    RAISED_NEUTRAL.toLowerCase(),
+    "--color-raised must mix toward the RAISED_NEUTRAL white",
+  );
+
+  // 中层 canvas 已从绘制链移除：若样式或组件重新引入，纸面单源会再次分叉。
+  const tree = await readSourceTree(new URL("../src/", import.meta.url));
+  for (const file of tree) {
+    assert.ok(
+      !file.text.includes("--color-canvas"),
+      `${file.path} must not reference the removed --color-canvas token`,
+    );
+  }
+  // 纸底只由 --color-bg 绘制：窗口（body）与主题根（.theme-root）必须同步染同一张纸。
+  assert.match(
+    styles,
+    /body\s*\{[^}]*background:\s*var\(--color-bg\)\s*;/,
+    "body must paint the themed paper with var(--color-bg)",
+  );
+  assert.match(
+    app,
+    /\.theme-root\s*\{[^}]*background:\s*var\(--color-bg\)\s*;/,
+    ".theme-root must paint the themed paper with var(--color-bg)",
+  );
 });
 
 test("dead theme tokens are gone from the dynamic write path", () => {

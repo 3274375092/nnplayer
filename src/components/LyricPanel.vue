@@ -39,6 +39,10 @@ import {
   getLyricRenderRange,
   getLyricVirtualPadding,
 } from "@/lyrics/lyricViewport";
+import {
+  computeLyricSnapLimitPx,
+  computeScrollIndex,
+} from "@/lyrics/lyricScroll";
 
 const props = withDefaults(
   defineProps<{
@@ -208,33 +212,52 @@ onBeforeUnmount(() => {
   ro = null;
   releaseRealtimeUpdates?.();
   releaseRealtimeUpdates = null;
+  reduceMotionQuery?.removeEventListener("change", onReduceMotionChange);
+  reduceMotionQuery = null;
 });
 
-// 减少动效时直接同步，不走弹簧
-const reduceMotion =
+// 减少动效时直接同步，不走弹簧。必须是响应式 ref：用户在应用运行期间打开
+// 系统的「减少动效」后，styles.css 的全局规则会把 CSS 过渡压到 0.01ms，
+// 这里的弹簧也必须立即退化为直接定位，否则两套动效语义不一致。
+const reduceMotion = ref(
   typeof window !== "undefined" &&
-  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true,
+);
+let reduceMotionQuery: MediaQueryList | null = null;
 
-// 滚动领先量：在下一行时间戳到来之前 SCROLL_LEAD_MS 就开始把面板滚到下一行，
-// 让「滚到中心」先于「卡拉OK 开始擦色」完成——否则新行一边往上滑、逐字擦色
-// 一边已经开始，看起来就是滚动和卡拉OK对不上。取 200ms：普通歌曲一行 2–4s，
-// 足够完成一次 36–40px 的弹簧位移；行距极密的说唱段仍是连续追赶，不会突兀。
-const SCROLL_LEAD_MS = 200;
+function onReduceMotionChange(event: MediaQueryListEvent) {
+  reduceMotion.value = event.matches;
+}
 
-/** 视觉滚动的目标行：正常等于 activeLineIndex；当本行剩余时间不足 SCROLL_LEAD_MS
- *  时提前指向下一行（卡拉OK 仍严格按 activeLineIndex 的时间轴走）。
- *  暂停时不预滚：当前行保持在中心，恢复播放后恢复领先。 */
-const scrollIndex = computed(() => {
-  const idx = activeLineIndex.value;
-  if (idx < 0) return idx;
-  if (!player.audioState.playing) return idx;
-  const cur = lines.value[idx];
-  const next = lines.value[idx + 1];
-  if (!cur || !next) return idx;
-  const lineDuration = next.time - cur.time;
-  const remaining = lineDuration - progressMs.value;
-  return remaining <= SCROLL_LEAD_MS ? idx + 1 : idx;
+onMounted(() => {
+  reduceMotionQuery =
+    window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
+  if (!reduceMotionQuery) return;
+  // setup 快照到 mount 之间系统设置可能已变化，以挂载时的查询结果为准。
+  reduceMotion.value = reduceMotionQuery.matches;
+  reduceMotionQuery.addEventListener("change", onReduceMotionChange);
 });
+
+/**
+ * 每行起始时间（ms，与 lines 同源）：只在 Lyric Timeline 整表替换后重算，
+ * 避免把 lines 映射成时间数组的执行落到每帧的 scrollIndex 计算里。
+ */
+const lineStartMs = computed(() => lines.value.map((line) => line.time));
+
+/**
+ * 视觉滚动的目标行（见 @/lyrics/lyricScroll）：正常等于 activeLineIndex；
+ * 本行剩余时间不足 SCROLL_LEAD_MS 时提前指向下一行（卡拉 OK 仍严格按
+ * activeLineIndex 的时间轴走，领先只影响视觉滚动目标，不改变 Lyric Frame）。
+ * 暂停时不预滚：当前行保持在中心，恢复播放后恢复领先。
+ */
+const scrollIndex = computed(() =>
+  computeScrollIndex({
+    activeLineIndex: activeLineIndex.value,
+    lineStartMs: lineStartMs.value,
+    progressMs: progressMs.value,
+    playing: player.audioState.playing,
+  }),
+);
 
 // 期望的 translateY：让 scrollIndex 行垂直居中（滚动先行、卡拉OK 后到）
 const targetY = computed(() => {
@@ -254,13 +277,18 @@ const { value: springY, snap: snapSpringY } = useSpringValue(targetY, {
   damping: 42,
 });
 
+// 运行中开启「减少动效」：立即把弹簧定位到当前目标，避免残留在半路的位移。
+watch(reduceMotion, (enabled) => {
+  if (enabled) snapSpringY(targetY.value);
+});
+
 /** 只在弹簧真正追赶目标时提示合成层（will-change），静止时让引擎回收。 */
 const springAnimating = computed(
-  () => !reduceMotion && springY.value !== targetY.value,
+  () => !reduceMotion.value && springY.value !== targetY.value,
 );
 
 const translateY = computed(() =>
-  reduceMotion ? targetY.value : springY.value,
+  reduceMotion.value ? targetY.value : springY.value,
 );
 
 /** 滚动动画：相邻行走弹簧平滑滚动（DESIGN「弹簧退化为直接定位」只在
@@ -269,15 +297,30 @@ const translateY = computed(() =>
  *  - 点击远端歌词或拖动进度条后跨度超过 2.5 行——长距离弹簧会变成一大段
  *    快速滑动再急停，反而不如直接定位干净；
  *  - reduce-motion。
+ *  「2.5 行」按 heightPrefix（与 targetY 同源）的实际行高换算：带翻译的
+ *  行约 57px，阈值约 142px；未测量的行由 buildLyricHeightPrefix 填入
+ *  props.lineHeight，首帧仍等价于旧的 90px。
  *  行高被 ResizeObserver 修正的跳变仍由上面的 lineHeights watcher snap，
  *  避免量测抖动触发一次可见的「追赶」。 */
-const MAX_ANIMATED_JUMP_LINES = 2.5;
 watch(
   scrollIndex,
   (next, prev) => {
     const jumpPx = Math.abs(targetY.value - springY.value);
-    const tooFar = jumpPx > props.lineHeight * MAX_ANIMATED_JUMP_LINES;
-    if (reduceMotion || next < 0 || prev == null || prev < 0 || tooFar) {
+    const tooFar =
+      jumpPx >
+      computeLyricSnapLimitPx(
+        heightPrefix.value,
+        lines.value.length,
+        next,
+        props.lineHeight,
+      );
+    if (
+      reduceMotion.value ||
+      next < 0 ||
+      prev == null ||
+      prev < 0 ||
+      tooFar
+    ) {
       snapSpringY(targetY.value);
       return;
     }

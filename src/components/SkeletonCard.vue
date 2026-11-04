@@ -21,14 +21,15 @@ withDefaults(defineProps<Props>(), {
 
 <template>
   <!-- 网格型：镜像 SongListItem 的歌单卡片（整幅 18px 圆角封面 + 标题/元信息）。
-       标题占位沿用 .playlist-title 的 min-height: 2.7em：真实卡片即使只有一行标题
-       也会预留两行高度，否则加载完成时整行卡片会突然长高。 -->
-  <div v-if="variant === 'grid'" aria-hidden="true">
+       标题占位沿用 .playlist-title 的 min-height: 2.7em（text-sm 让 em 与真实标题
+       同基：2×14px×1.35 = 37.8px，即真实标题的两行高度）；根节点补 pb-0.5、
+       元信息行用 h-4（真实 text-xs 行高 16px），加载完成时卡片高度不变。 -->
+  <div v-if="variant === 'grid'" class="pb-0.5" aria-hidden="true">
     <div class="skeleton aspect-square w-full rounded-[18px]" />
-    <div class="mt-3 min-h-[2.7em]">
+    <div class="mt-3 min-h-[2.7em] text-sm">
       <div class="skeleton h-3.5 w-3/4 rounded" />
     </div>
-    <div class="skeleton mt-1 h-3 w-1/2 rounded" />
+    <div class="skeleton mt-1 h-4 w-1/2 rounded" />
   </div>
 
   <!-- 列表型：镜像 SongList（小节头 + 列头 + 60px 行），加载完成后不跳位 -->
@@ -38,20 +39,22 @@ withDefaults(defineProps<Props>(), {
       <div class="skeleton h-9 w-[108px] rounded-md" />
     </div>
 
+    <!-- 列头高度由 py-2 + h-4 占位条（16px）得出 32px，与真实列头
+         （py-2 + text-xs 行高 16px）一致；不再写死 h-[34px] 造成 2px 跳位。 -->
     <div
-      class="skeleton-list__header grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 h-[34px] items-center"
+      class="skeleton-list__header grid grid-cols-[var(--song-list-columns)] gap-3 px-3 py-2 items-center"
     >
-      <div class="skeleton h-3 w-8 rounded" />
+      <div class="skeleton h-4 w-8 rounded" />
       <div></div>
-      <div class="skeleton h-3 w-10 rounded" />
-      <div class="skeleton song-skeleton-album h-3 w-10 rounded" />
-      <div class="skeleton h-3 w-6 justify-self-end rounded" />
+      <div class="skeleton h-4 w-10 rounded" />
+      <div class="skeleton song-skeleton-album h-4 w-10 rounded" />
+      <div class="skeleton h-4 w-6 justify-self-end rounded" />
     </div>
 
     <div
       v-for="i in rows"
       :key="i"
-      class="skeleton-list__row grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 h-[60px] items-center"
+      class="skeleton-list__row grid grid-cols-[var(--song-list-columns)] gap-3 px-3 h-[var(--song-list-row-height)] items-center"
     >
       <div class="skeleton mx-auto h-3 w-4 rounded" />
       <div class="skeleton h-10 w-10 rounded-md" />
@@ -66,41 +69,11 @@ withDefaults(defineProps<Props>(), {
 </template>
 
 <style scoped>
-/* 骨架底色 + 一条用 transform 扫过的微光带。
-   旧实现动画 background-position（纯 paint，48 个格子会每秒重新栅格化上千次）；
-   现在高光放在 ::after 上只动 transform，交给合成器。 */
-.skeleton {
-  position: relative;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
-}
-
-.skeleton::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%,
-    transparent 100%
-  );
-  animation: skeleton-sweep 1.6s linear infinite;
-}
-
-@keyframes skeleton-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(100%);
-  }
-}
-
 /* 列表骨架以自身容器宽度为准镜像 SongList 的列策略：窄于 34rem 时隐藏专辑列
    并把宽度让给标题/时长，加载完成时列集合不会翻转。容器查询与 SongList.vue
-   的 `@container song-list (max-width: 34rem)` 同阈值、同列值。 */
+   的 `@container song-list (max-width: 34rem)` 同阈值；宽/窄列模板共用
+   styles.css `:root` 的 --song-list-columns / --song-list-columns-narrow。
+   （.skeleton 底色/微光是全局 utility，见 styles.css。） */
 .skeleton-list {
   container-name: skeleton-song-list;
   container-type: inline-size;
@@ -109,7 +82,7 @@ withDefaults(defineProps<Props>(), {
 @container skeleton-song-list (max-width: 34rem) {
   .skeleton-list__header,
   .skeleton-list__row {
-    grid-template-columns: 36px 40px minmax(0, 1fr) 52px;
+    grid-template-columns: var(--song-list-columns-narrow);
   }
 
   .song-skeleton-album {

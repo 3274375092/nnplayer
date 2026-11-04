@@ -126,6 +126,10 @@ function onKey(e: KeyboardEvent) {
   }
   // 阻止原生 range 的 0.1s/步与 PageUp 滚动页面，统一走上面的步进语义。
   e.preventDefault();
+  // 已处理的键盘 seek 要让预览失效：指针可能仍停在轨道上（点击后未移开），
+  // 若继续用 hoverRatio 预览，滑块与气泡会停在指针位置，看起来键盘操作没生效。
+  // 清零后以实际进度为准；下一次 pointermove 会重新建立指针预览。
+  hoverRatio.value = null;
   if (max === 0) return;
   const clamped = Math.max(0, Math.min(max, next));
   if (clamped === current) return;

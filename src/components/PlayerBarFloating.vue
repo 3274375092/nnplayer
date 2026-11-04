@@ -202,8 +202,10 @@ function positionQualityMenu() {
     qualityMenuOpen.value = false;
     return;
   }
-  // footer 自带 overflow:hidden + transform，会裁剪子浮层，
-  // 菜单 Teleport 到 body 后按按钮位置向上弹出、右缘对齐。
+  // footer 上的 transform: translateX(-50%) 会让条内 position: fixed 以 footer
+  // 为包含块，菜单留在条内就会相对条而不是视口定位、整体错位；所以菜单
+  // Teleport 到 body（与 overflow 无关，播放条现已是 overflow: visible），
+  // 再按按钮位置向上弹出、右缘对齐。
   // 底边对齐「播放条顶缘上方 8px」而不是按钮自身顶缘：音质按钮在条内，
   // 只让开按钮时菜单页脚会压住悬浮播放条上缘（13-quality-menu 实测约 10px），
   // 与队列抽屉/遮罩让开播放条的空间约定不一致。
@@ -522,7 +524,8 @@ function openNowPlaying() {
     </div>
   </footer>
 
-  <!-- 音质菜单：Teleport 到 body，避免被 footer 的 overflow:hidden 裁剪。 -->
+  <!-- 音质菜单：Teleport 到 body——footer 的 transform 会成为 position: fixed
+       的包含块，菜单留在条内会错位（播放条 overflow 已是 visible，不是裁剪问题）。 -->
   <Teleport to="body">
     <div v-if="qualityMenuOpen">
       <div

@@ -226,6 +226,15 @@ function goSearch(kw?: string) {
 }
 
 function hideSuggest() {
+  // 收起建议浮层时同时作废防抖与在途请求：否则「输入后 300ms 内按 Tab/点击外部」
+  // 或「建议请求仍在途中就离开搜索框」时，稍后到期的请求/响应会无条件把浮层
+  // 重新弹出（absolute z-30），盖住刚获得焦点的侧栏导航。所有收起入口
+  // （Tab/Escape、点击外部、焦点离开、提交搜索、路由切换、窄窗浮层收起）共用。
+  if (debounceTimer) {
+    window.clearTimeout(debounceTimer);
+    debounceTimer = undefined;
+  }
+  inFlightSeq += 1;
   showSuggest.value = false;
   suggestError.value = false;
   highlightIndex.value = -1;
@@ -315,11 +324,12 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 function onDocClick(e: MouseEvent) {
-  if (!showSuggest.value) return;
+  // 折叠态/弹层态没有桌面搜索框：外部点击由浮层遮罩自己处理。
   if (!searchBoxRef.value) return;
-  if (!searchBoxRef.value.contains(e.target as Node)) {
-    hideSuggest();
-  }
+  if (searchBoxRef.value.contains(e.target as Node)) return;
+  // 点击搜索框外部即视为放弃建议：无论浮层是否已显示都收起并作废待发/在途请求，
+  // 否则「输入后 300ms 内点击别处」时，稍后到期的防抖仍会把浮层弹出来。
+  hideSuggest();
 }
 
 /**
@@ -329,9 +339,10 @@ function onDocClick(e: MouseEvent) {
  * onDocClick 处理。
  */
 function onSearchFocusOut(e: FocusEvent) {
-  if (!showSuggest.value) return;
   const next = e.relatedTarget as Node | null;
   if (!next || searchBoxRef.value?.contains(next)) return;
+  // 焦点确实离开搜索框：即使建议尚未显示（防抖/请求在途）也要收起并作废，
+  // 否则迟到的响应会把浮层重新弹出、盖住刚获得焦点的导航项。
   hideSuggest();
 }
 

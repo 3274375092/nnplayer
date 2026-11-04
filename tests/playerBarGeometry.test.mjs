@@ -57,11 +57,16 @@ function readPx(rule, property, label) {
   return Number(match[1]);
 }
 
+/** 取出源码里第一个 @media (max-width: 768px) 块的内容（不含外层花括号）。 */
+function readNarrowBlock(source) {
+  const block = source.match(/@media \(max-width: 768px\) \{([\s\S]*?)\n\}/);
+  assert.ok(block, "找不到 @media (max-width: 768px) 块");
+  return block[1];
+}
+
 /** 断言 @media (max-width: 768px) 块内出现了给定声明。 */
 function assertInNarrowBlock(source, pattern, label) {
-  const block = source.match(/@media \(max-width: 768px\) \{[\s\S]*?\n\}/);
-  assert.ok(block, "找不到 @media (max-width: 768px) 块");
-  assert.match(block[0], pattern, label);
+  assert.match(readNarrowBlock(source), pattern, label);
 }
 
 // =============== 契约常量 ===============
@@ -127,6 +132,30 @@ test("播放条允许纵向溢出（浮动气泡），横向仍由网格收缩�
     playerBarSource,
     /grid-template-columns:\s*\n\s*minmax\(0, 1fr\)/,
     "播放条横向仍必须是可收缩的三列网格",
+  );
+});
+
+test("窄窗三列左右保持 minmax(0, 1fr)，第三列不允许回退成 max-content", () => {
+  // 回归点：窄窗若把右列改回 max-content，520–768px 区间播放键与进度行会
+  // 整体偏离内容壳中线（768 CSS 实测右移 126.8px），本次修复就是删掉它。
+  // 基础规则也必须是左右对称的 1fr，否则窄窗规则只是继承同样的偏移。
+  const baseBar = readRule(playerBarSource, ".player-bar-grid");
+  assert.match(
+    baseBar,
+    /grid-template-columns:\s*\n\s*minmax\(0, 1fr\)\s*\n\s*clamp\(236px, 44%, 320px\)\s*\n\s*minmax\(0, 1fr\);/,
+    "基础三列必须是 minmax(0,1fr) / clamp(236px, 44%, 320px) / minmax(0,1fr)",
+  );
+  const narrowBlock = readNarrowBlock(playerBarSource);
+  const narrowBar = readRule(narrowBlock, ".player-bar-grid");
+  assert.match(
+    narrowBar,
+    /grid-template-columns:\s*minmax\(0, 1fr\)\s+clamp\([^)]*\)\s+minmax\(0, 1fr\);/,
+    "窄窗三列必须左右对称：minmax(0,1fr) / clamp(...) / minmax(0,1fr)",
+  );
+  assert.doesNotMatch(
+    narrowBlock,
+    /max-content/,
+    "窄窗块内不允许再出现 max-content（会让播放键偏离内容壳中线）",
   );
 });
 
@@ -196,6 +225,37 @@ test("源码注释记录了 34 ≥ 20 + 12 的间距算术（防止只改数字�
     /34px\s*≥\s*20\+12\s*=\s*32px/,
     "ProgressBar.vue 必须记录命中框与播放键的间距算术",
   );
+});
+
+test("进度气泡底边 = 进度条上方 60px（Floating 层探出播放条上缘）", () => {
+  // 气泡若留在条内会压住传输控件行，所以 bottom = 进度条高度（100%）+ 60px，
+  // 在 76/74px 两档下都落在播放条顶缘上方约 5px（见 ProgressBar 注释）。
+  assert.match(
+    progressBarSource,
+    /bottom:\s*['"]calc\(100% \+ 60px\)['"]/,
+    "ProgressBar 气泡必须 bottom: calc(100% + 60px)",
+  );
+});
+
+test("音质菜单锚定播放条顶缘上方 8px（footer transform 使其必须 Teleport）", () => {
+  // footer 上有 transform: translateX(-50%)，条内 position: fixed 会以 footer
+  // 为包含块；菜单 Teleport 到 body 后必须自己算锚点：取播放条根节点顶缘，
+  // 底边落在「条顶上方 8px」（与队列抽屉/遮罩让开播放条的空间约定一致）。
+  assert.match(
+    playerBarSource,
+    /closest<HTMLElement>\("\.player-bar-grid"\)/,
+    "音质菜单必须锚定播放条根节点（.player-bar-grid）的顶缘",
+  );
+  assert.match(
+    playerBarSource,
+    /const anchorTop = bar\?\.getBoundingClientRect\(\)\.top \?\? rect\.top;/,
+    "音质菜单锚点缺失时必须回退到触发按钮顶缘",
+  );
+  const anchorOffset = playerBarSource.match(
+    /window\.innerHeight - anchorTop \+ (\d+)/,
+  );
+  assert.ok(anchorOffset, "音质菜单底边必须用「视口高 − 播放条顶」计算");
+  assert.equal(Number(anchorOffset[1]), 8, "音质菜单底边 = 播放条顶缘上方 8px");
 });
 
 // =============== 消费者（预留高度 / 队列内缩 / 页面留白） ===============

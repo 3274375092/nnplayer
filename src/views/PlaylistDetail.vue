@@ -186,6 +186,15 @@ onMounted(() => void load());
   box-shadow: var(--shadow-raised);
 }
 
+/* 与 LyricAside.vue 的隐藏规则逐条对齐：窄窗 / 单列时加载态也不渲染这张占位卡，
+   否则它会在数据到达后突然消失，看起来像多出来一张卡，与「加载完成只换内容」
+   的注释不符。 */
+@media (max-width: 768px) {
+  .skeleton-aside {
+    display: none;
+  }
+}
+
 /* 容器查询：阈值 38rem（比每日推荐的 44rem 低）。歌单详情可能有数百首歌，
    单列会把歌词卡排到列表末尾、在默认窗里等于丢掉侧栏歌词，所以只要列表列
    还放得下就保留两栏；仅当容器窄到列表连隐藏专辑后都挤不下（<38rem）才堆叠。
@@ -203,5 +212,8 @@ onMounted(() => void load());
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .skeleton-aside {
+    display: none;
+  }
 }
 </style>

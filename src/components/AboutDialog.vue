@@ -28,6 +28,7 @@ import type {
   Update as UpdaterUpdate,
 } from "@tauri-apps/plugin-updater";
 import { isUnsupportedPlatformError } from "@/utils/updateErrors";
+import { nextInstallAction, type UpdateStatus } from "@/utils/updateFlow";
 import { downloadPercent } from "@/utils/updateProgress";
 
 const props = defineProps<{
@@ -43,19 +44,6 @@ const emit = defineEmits<{
 const FALLBACK_VERSION = __APP_VERSION__;
 const REPO_URL = "https://github.com/3274375092/nnplayer";
 const RELEASES_URL = `${REPO_URL}/releases/latest`;
-
-type UpdateStatus =
-  | "idle"
-  | "checking"
-  | "latest"
-  | "available"
-  | "downloading"
-  | "installing"
-  | "download-error"
-  | "install-error"
-  | "installed"
-  | "unsupported"
-  | "error";
 
 const SHORTCUTS = [
   { label: "播放 / 暂停", keys: ["Ctrl", "Alt", "P"] },
@@ -91,14 +79,15 @@ const updateSummary = computed(() => {
       return `已是最新版本（v${version.value}）`;
     case "available":
       return `发现新版本 v${latestVersion.value}（当前 v${version.value}）`;
+    // 高频变化的百分比不进 live region：由进度条旁的 aria-hidden 数字与
+    // progressbar 的 aria-valuetext 表达，避免读屏被逐条播报淹没。
     case "downloading":
-      return downloadProgress.value === null
-        ? "正在下载更新…"
-        : `正在下载更新… ${downloadProgress.value}%`;
+      return "正在下载更新…";
     case "installing":
       return "正在安装更新，可能需要管理员授权…";
     case "download-error":
-      return "下载更新失败，请检查网络后重试。";
+      // 失败可能来自签名校验/超时/本地 I/O，不臆断网络原因；只给恢复动作。
+      return "下载更新失败，请重试或前往发布页手动下载。";
     case "install-error":
       return "安装更新失败，请重试或前往发布页手动安装。";
     case "installed":
@@ -139,20 +128,23 @@ const showReleaseAction = computed(
 const releaseActionLabel = computed(() =>
   updateStatus.value === "available" ? "打开发布页" : "查看发布页",
 );
-const canInstall = computed(
-  () =>
-    pendingUpdate.value !== null &&
-    (updateStatus.value === "available" ||
-      updateStatus.value === "download-error" ||
-      updateStatus.value === "install-error"),
+/** 主按钮的下一步动作由纯模块 updateFlow 决定，组件只负责执行。 */
+const installAction = computed(() =>
+  nextInstallAction(updateStatus.value, {
+    hasHandle: pendingUpdate.value !== null,
+    downloaded: updateDownloaded.value,
+  }),
 );
+const canInstall = computed(() => installAction.value !== "none");
 const canRestart = computed(() => updateStatus.value === "installed");
 const installButtonLabel = computed(() => {
-  switch (updateStatus.value) {
-    case "download-error":
-      return "重试下载";
-    case "install-error":
+  switch (installAction.value) {
+    case "install":
       return "重试安装";
+    case "download":
+      return updateStatus.value === "download-error"
+        ? "重试下载"
+        : "下载并安装";
     default:
       return "下载并安装";
   }
@@ -206,10 +198,12 @@ async function checkUpdates() {
   ) {
     return;
   }
+  // 先同步置位 checking，再走任何异步：closePendingUpdate() 内部有 close() 的
+  // IPC 往返，若期间再次点击会绕过上面的守卫，并发 check() 并泄漏 Update 句柄。
+  updateStatus.value = "checking";
+  downloadProgress.value = null;
   updateActionError.value = "";
   await closePendingUpdate();
-  downloadProgress.value = null;
-  updateStatus.value = "checking";
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
     // 10s 超时：网络卡住时不让「正在检查…」无限挂着。
@@ -284,11 +278,12 @@ async function installUpdate() {
   if (!update || busyUpdate.value) return;
   updateActionError.value = "";
   // 下载成功但安装失败：已下载的包还在 Update 句柄里，只重试安装。
-  if (updateStatus.value === "install-error" && updateDownloaded.value) {
+  const action = installAction.value;
+  if (action === "install") {
     await installDownloaded(update);
     return;
   }
-  await downloadUpdate(update);
+  if (action === "download") await downloadUpdate(update);
 }
 
 /** 安装完成后重启；Windows 的 NSIS 安装器会自行重启，不会走到这里。 */
@@ -498,17 +493,25 @@ onBeforeUnmount(() => {
                 </p>
                 <div
                   v-if="updateStatus === 'downloading' && downloadProgress !== null"
-                  class="about-update-progress"
+                  class="about-update-progress-row"
                   role="progressbar"
                   aria-label="更新下载进度"
                   :aria-valuenow="downloadProgress ?? 0"
                   aria-valuemin="0"
                   aria-valuemax="100"
+                  :aria-valuetext="`已下载 ${downloadProgress ?? 0}%`"
                 >
-                  <div
-                    class="about-update-progress-bar"
-                    :style="downloadProgressStyle"
-                  ></div>
+                  <div class="about-update-progress">
+                    <div
+                      class="about-update-progress-bar"
+                      :style="downloadProgressStyle"
+                    ></div>
+                  </div>
+                  <!-- 高频百分比放在 live region 之外并对读屏隐藏；
+                       进度本身由 progressbar 的 aria-valuetext 表达。 -->
+                  <span class="about-update-percent" aria-hidden="true">
+                    {{ downloadProgress ?? 0 }}%
+                  </span>
                 </div>
                 <p class="about-note">
                   检查只查询版本；下载并安装会调用系统安装程序，Linux 上可能需要管理员授权，安装完成后自动重启。
@@ -810,12 +813,27 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 
-.about-update-progress {
-  height: 4px;
+.about-update-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 6px;
+}
+
+.about-update-progress {
+  flex: 1 1 auto;
+  height: 4px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--color-surface-soft, var(--color-card-hover));
+}
+
+.about-update-percent {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .about-update-progress-bar {

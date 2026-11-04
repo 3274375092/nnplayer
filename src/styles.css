@@ -28,12 +28,20 @@
   /* 由结构色派生的通用表面，封面换色时仍保持浅色层级。 */
   --color-glass: color-mix(in srgb, var(--color-bg) 94%, transparent);
   --color-surface-soft: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
-  --color-surface-strong: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+  /* hover 面：6% 墨色（比侧栏深一档）。9% 会逼着封面染色压到近乎无色；
+     6% 仍守住 hover 上的三级正文/强调色下限（见 themeTokens.ts 的 strong 面校验）。 */
+  --color-surface-strong: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   --color-track: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
   --color-thumb: #f9f5d7;
   --color-raised: color-mix(in srgb, var(--color-card) 42%, #fff);
   --shadow-raised: 0 4px 16px rgb(60 56 54 / 6%);
   --shadow-floating: 0 12px 36px rgb(60 56 54 / 12%), 0 2px 6px rgb(60 56 54 / 5%);
+
+  /* 歌曲列表几何：真实列表（SongList）与加载骨架（SkeletonCard）共用同一组值，
+     改列宽/行高只改这里，避免两份硬编码各自漂移。 */
+  --song-list-columns: 40px 44px minmax(0, 1fr) 160px 72px;
+  --song-list-columns-narrow: 36px 40px minmax(0, 1fr) 52px;
+  --song-list-row-height: 60px;
 }
 
 html,
@@ -156,6 +164,41 @@ input[type="number"]::-webkit-outer-spin-button {
   }
   .input::placeholder {
     color: var(--color-text-tertiary);
+  }
+
+  /* 骨架占位条：底色 + 一条用 transform 扫过的微光带。
+     旧实现动画 background-position（纯 paint，48 个格子会每秒重新栅格化上千次）；
+     现在高光放在 ::after 上只动 transform，交给合成器。
+     全局声明而不是某个组件的 scoped 样式：PlaylistDetail 的页头/歌词列占位与
+     SkeletonCard 共用 class="skeleton"，scoped 选择器编译后带 data-v 属性，
+     匹配不到别的组件里的元素（旧的 scoped 副本因此对详情页完全失效）。 */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  }
+
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%,
+      transparent 100%
+    );
+    animation: skeleton-sweep 1.6s linear infinite;
+  }
+}
+
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
   }
 }
 

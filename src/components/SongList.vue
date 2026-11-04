@@ -84,6 +84,8 @@ watch(
 );
 
 const VIRTUAL_THRESHOLD = 160;
+/** 行高与 styles.css `:root` 的 --song-list-row-height 同源（虚拟滚动在 JS 里
+ *  做算术，必须取数值；改行高时两处一起改，加载骨架才不会跳位）。 */
 const ROW_HEIGHT = 60;
 const OVERSCAN_ROWS = 8;
 const INITIAL_ROWS = 24;
@@ -295,7 +297,7 @@ function playLabel(song: Song) {
 
     <div
       v-if="showIndex"
-      class="song-list-header grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium"
+      class="song-list-header grid grid-cols-[var(--song-list-columns)] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium"
     >
       <div class="text-center">序号</div>
       <div></div>
@@ -312,7 +314,7 @@ function playLabel(song: Song) {
       <li
         v-for="{ song, index: idx } in visibleSongs"
         :key="`${song.id}:${idx}`"
-        class="song-row song-list-row group relative grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md transition-all duration-150 items-center"
+        class="song-row song-list-row group relative grid grid-cols-[var(--song-list-columns)] gap-3 px-3 py-2.5 h-[var(--song-list-row-height)] rounded-md transition-all duration-150 items-center"
         :class="{
           'bg-accent-subtle': currentId === song.id,
           // 当前行 hover 不能被墨色 hover 覆盖：暂停态的当前行没有逐字/脉冲，
@@ -446,6 +448,7 @@ function playLabel(song: Song) {
 }
 
 /* 容器查询：列表自己的宽度（不是窗口宽度）决定列数，这是唯一的列策略判据。
+   列模板/行高与加载骨架共用 styles.css `:root` 的 --song-list-*（改一处两边同步）。
    固定列 40+44+160+72 + 4×12 间距 = 364px（加行内边距 24px 共 388px），
    容器窄于 34rem（544px）时标题列会被压到不可读，此时去掉专辑列，
    把宽度还给标题/艺人；768 CSS 下列表容器 ≈674px，专辑列正常显示。 */
@@ -457,7 +460,7 @@ function playLabel(song: Song) {
 @container song-list (max-width: 34rem) {
   .song-list-header,
   .song-list-row {
-    grid-template-columns: 36px 40px minmax(0, 1fr) 52px;
+    grid-template-columns: var(--song-list-columns-narrow);
   }
 
   .song-list-album {
@@ -477,15 +480,15 @@ function playLabel(song: Song) {
   container-type: normal;
 }
 
-/* 与 @container 的两个分支逐字一致，保证冻结期间视觉不跳变。 */
+/* 与 @container 的两个分支共用同一组变量，保证冻结期间视觉不跳变。 */
 .song-list-root--pinned-wide .song-list-header,
 .song-list-root--pinned-wide .song-list-row {
-  grid-template-columns: 40px 44px 1fr 160px 72px;
+  grid-template-columns: var(--song-list-columns);
 }
 
 .song-list-root--pinned-narrow .song-list-header,
 .song-list-root--pinned-narrow .song-list-row {
-  grid-template-columns: 36px 40px minmax(0, 1fr) 52px;
+  grid-template-columns: var(--song-list-columns-narrow);
 }
 
 /* 专辑列的显隐也必须固定，否则 @container 失效后仍会按基础类显示。 */
