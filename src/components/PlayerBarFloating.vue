@@ -204,10 +204,15 @@ function positionQualityMenu() {
   }
   // footer 自带 overflow:hidden + transform，会裁剪子浮层，
   // 菜单 Teleport 到 body 后按按钮位置向上弹出、右缘对齐。
+  // 底边对齐「播放条顶缘上方 8px」而不是按钮自身顶缘：音质按钮在条内，
+  // 只让开按钮时菜单页脚会压住悬浮播放条上缘（13-quality-menu 实测约 10px），
+  // 与队列抽屉/遮罩让开播放条的空间约定不一致。
+  const bar = qualityButtonRef.value?.closest<HTMLElement>(".player-bar-grid");
+  const anchorTop = bar?.getBoundingClientRect().top ?? rect.top;
   qualityMenuStyle.value = {
     // 宽度与定位使用同一常量，避免样式类与实际宽度漂移。
     width: `${QUALITY_MENU_WIDTH}px`,
-    bottom: `${window.innerHeight - rect.top + 10}px`,
+    bottom: `${Math.round(window.innerHeight - anchorTop + 8)}px`,
     left: `${Math.max(8, rect.right - QUALITY_MENU_WIDTH)}px`,
   };
 }
@@ -355,7 +360,7 @@ function openNowPlaying() {
         <Music2
           v-else
           :size="20"
-          :stroke-width="1.5"
+          :stroke-width="1.75"
           class="text-text-tertiary"
         />
       </button>
@@ -383,7 +388,7 @@ function openNowPlaying() {
           :aria-label="`播放模式：${modeLabel}，点击切换为${nextModeLabel}`"
           @click="player.togglePlayMode"
         >
-          <component :is="modeIcon" :size="16" :stroke-width="1.6" />
+          <component :is="modeIcon" :size="16" :stroke-width="1.75" />
         </button>
         <button
           type="button"
@@ -392,7 +397,7 @@ function openNowPlaying() {
           aria-label="上一首"
           @click="player.prev"
         >
-          <SkipBack :size="17" :stroke-width="1.6" />
+          <SkipBack :size="17" :stroke-width="1.75" />
         </button>
         <button
           type="button"
@@ -414,11 +419,11 @@ function openNowPlaying() {
           <LoaderCircle
             v-if="player.audioState.loading"
             :size="17"
-            :stroke-width="1.7"
+            :stroke-width="1.75"
             class="animate-spin"
           />
-          <Pause v-else-if="player.audioState.playing" :size="17" :stroke-width="1.7" />
-          <Play v-else :size="17" :stroke-width="1.7" class="ml-0.5" />
+          <Pause v-else-if="player.audioState.playing" :size="17" :stroke-width="1.75" />
+          <Play v-else :size="17" :stroke-width="1.75" class="ml-0.5" />
         </button>
         <button
           type="button"
@@ -427,7 +432,7 @@ function openNowPlaying() {
           aria-label="下一首"
           @click="player.next"
         >
-          <SkipForward :size="17" :stroke-width="1.6" />
+          <SkipForward :size="17" :stroke-width="1.75" />
         </button>
         <!-- 与左侧「播放模式」等宽的不可见占位：让 40px 播放键保持在内容壳中线。 -->
         <span class="player-icon-spacer" aria-hidden="true"></span>
@@ -492,10 +497,10 @@ function openNowPlaying() {
           <VolumeX
             v-if="player.audioState.muted"
             :size="15"
-            :stroke-width="1.6"
+            :stroke-width="1.75"
             aria-hidden="true"
           />
-          <Volume2 v-else :size="15" :stroke-width="1.5" aria-hidden="true" />
+          <Volume2 v-else :size="15" :stroke-width="1.75" aria-hidden="true" />
         </button>
         <input
           type="range"
@@ -595,7 +600,9 @@ function openNowPlaying() {
   height: 76px;
   padding: 0 18px;
   gap: 16px;
-  overflow: hidden;
+  /* 进度气泡是 Floating 层，需要探出播放条上缘；内部没有任何元素依赖这里裁剪
+     （封面自裁剪、播放键脉冲最大 64px < 条高）。 */
+  overflow: visible;
   transform: translateX(-50%);
   border: 0;
   border-radius: 8px;
@@ -891,11 +898,13 @@ function openNowPlaying() {
   box-shadow: none;
 }
 
-/* 窄窗只隐藏音量，音质胶囊必须保留：右列按胶囊实际宽度计入网格，
-   避免 521–768px 区间把胶囊挤出内容盒被裁切。 */
+/* 窄窗只隐藏音量，音质胶囊必须保留。左右两列同为 1fr（胶囊靠 justify-self
+   贴右），中央列才真正落在内容壳中线上；旧实现右列用 max-content，520–768px
+   区间播放键与进度行会整体右移（实测 768 CSS：播放键圆心 542.8，壳中线 416）。
+   最窄 520px 时左列仍有约 92px，足够容纳 48px 封面，右列 ≥92px 容得下胶囊。 */
 @media (max-width: 768px) {
   .player-bar-grid {
-    grid-template-columns: minmax(0, 1fr) clamp(200px, 42%, 280px) max-content;
+    grid-template-columns: minmax(0, 1fr) clamp(200px, 42%, 280px) minmax(0, 1fr);
   }
 
   .player-extras {

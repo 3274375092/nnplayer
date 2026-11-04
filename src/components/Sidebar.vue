@@ -286,6 +286,12 @@ function onEnter() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  if (e.key === "Tab") {
+    // 焦点离开输入框：建议浮层必须收起，否则会继续盖住接下来获得焦点的
+    // 侧栏导航（绝对定位 z-30），焦点环被压在浮层下面。
+    hideSuggest();
+    return;
+  }
   if (!showSuggest.value || suggestions.value.length === 0) {
     if (e.key === "Escape") hideSuggest();
     return;
@@ -314,6 +320,19 @@ function onDocClick(e: MouseEvent) {
   if (!searchBoxRef.value.contains(e.target as Node)) {
     hideSuggest();
   }
+}
+
+/**
+ * 焦点离开搜索框时收起建议（鼠标点外部本来由 onDocClick 兜底，这里补键盘 Tab /
+ * 程序化 focus 的路径）。relatedTarget 为空表示焦点落到了非可聚焦区域（例如
+ * 建议行本身），此时不能抢先收起：建议行还要收到 click；真正的「点外部」由
+ * onDocClick 处理。
+ */
+function onSearchFocusOut(e: FocusEvent) {
+  if (!showSuggest.value) return;
+  const next = e.relatedTarget as Node | null;
+  if (!next || searchBoxRef.value?.contains(next)) return;
+  hideSuggest();
 }
 
 function onSuggestionClick(idx: number) {
@@ -678,7 +697,7 @@ onBeforeUnmount(() => {
           v-else
           ref="aboutButtonRef"
           type="button"
-          class="flex h-10 w-10 items-center justify-center rounded-xl text-accent transition-colors hover:bg-accent-subtle"
+          class="flex h-10 w-10 items-center justify-center rounded-xl text-accent transition-colors hover:bg-card-hover"
           title="关于 nnplayer"
           aria-label="关于 nnplayer"
           @click="openAbout"
@@ -688,7 +707,7 @@ onBeforeUnmount(() => {
         <button
           v-if="!compact"
           type="button"
-          class="text-text-tertiary hover:text-text-primary transition-colors p-1"
+          class="flex h-9 w-9 items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-card-hover transition-colors"
           :aria-label="narrowViewport ? '收起侧栏' : '折叠侧栏'"
           :title="narrowViewport ? '收起侧栏' : '折叠侧栏'"
           @click="toggleCollapsed"
@@ -702,6 +721,7 @@ onBeforeUnmount(() => {
         v-if="!compact"
         ref="searchBoxRef"
         class="mb-4 relative shrink-0"
+        @focusout="onSearchFocusOut"
       >
         <form @submit.prevent="onEnter">
           <input
@@ -748,7 +768,7 @@ onBeforeUnmount(() => {
               :id="optionId(SUGGEST_LIST_ID, idx)"
               role="option"
               :aria-selected="highlightIndex === idx"
-              class="px-3 py-2 cursor-pointer flex items-center gap-2 text-sm transition-colors"
+              class="px-3 py-2 cursor-pointer rounded-md flex items-center gap-2 text-sm transition-colors"
               :class="
                 highlightIndex === idx
                   ? 'bg-accent-subtle text-text-primary'
@@ -781,7 +801,7 @@ onBeforeUnmount(() => {
         <button
           ref="searchButtonRef"
           type="button"
-          class="w-10 h-10 rounded-xl bg-card-hover text-text-tertiary hover:text-text-primary hover:bg-accent-subtle flex items-center justify-center transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          class="w-10 h-10 rounded-xl bg-card-hover text-text-tertiary hover:text-text-primary hover:bg-surface-strong flex items-center justify-center transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
           :aria-label="'打开搜索'"
           title="打开搜索"
           @click="openSearchModal"
@@ -854,11 +874,11 @@ onBeforeUnmount(() => {
                     :id="optionId(SUGGEST_MODAL_LIST_ID, idx)"
                     role="option"
                     :aria-selected="highlightIndex === idx"
-                    class="px-3 py-2 cursor-pointer rounded-btn flex items-center gap-2 text-sm"
+                    class="px-3 py-2 cursor-pointer rounded-md flex items-center gap-2 text-sm transition-colors"
                     :class="
                       highlightIndex === idx
                         ? 'bg-accent-subtle text-text-primary'
-                        : 'hover:bg-card-hover'
+                        : 'text-text-secondary hover:bg-card-hover'
                     "
                     @mouseenter="highlightIndex = idx"
                     @click="onSuggestionClick(idx)"
@@ -934,30 +954,25 @@ onBeforeUnmount(() => {
       </nav>
 
       <!-- 底部按钮区 -->
-      <div
-        :class="[
-          'mt-auto pt-4 flex flex-col gap-1 shrink-0',
-          compact ? 'px-0' : 'px-1',
-        ]"
-      >
+      <div class="mt-auto pt-4 flex flex-col gap-1 shrink-0">
         <button
           type="button"
           :class="[
             'flex items-center h-10 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-card-hover transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
-            compact ? 'justify-center px-2' : 'px-3 gap-2',
+            compact ? 'justify-center px-2' : 'px-4 gap-3',
           ]"
           title="播放队列"
           :aria-label="'播放队列'"
           @click="openQueue"
         >
-          <ListMusic :size="16" :stroke-width="1.75" class="shrink-0" />
+          <ListMusic :size="16" :stroke-width="1.75" class="w-5 shrink-0" />
           <span v-if="!compact">播放队列</span>
         </button>
         <button
           type="button"
           :class="[
             'flex items-center h-10 rounded-xl text-sm transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
-            compact ? 'justify-center px-2' : 'px-3 gap-2',
+            compact ? 'justify-center px-2' : 'px-4 gap-3',
             desktopLyricsStore.isOpen
               ? 'text-accent-on-subtle bg-accent-subtle'
               : 'text-text-secondary hover:text-text-primary hover:bg-card-hover',
@@ -967,7 +982,7 @@ onBeforeUnmount(() => {
           :aria-pressed="desktopLyricsStore.isOpen"
           @click="openDesktopLyrics"
         >
-          <Pin :size="16" :stroke-width="1.75" class="shrink-0" />
+          <Pin :size="16" :stroke-width="1.75" class="w-5 shrink-0" />
           <span v-if="!compact">桌面歌词</span>
           <span
             v-if="!compact"
@@ -983,7 +998,7 @@ onBeforeUnmount(() => {
           v-if="compact"
           ref="expandButtonRef"
           type="button"
-          class="flex items-center justify-center h-10 rounded-xl text-sm text-text-tertiary hover:text-text-primary hover:bg-accent-subtle transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          class="flex h-9 w-9 self-center items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-card-hover transition-colors"
           title="展开侧栏"
           aria-label="展开侧栏"
           @click="toggleCollapsed"

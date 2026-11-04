@@ -300,7 +300,7 @@ async function submitCookie() {
       <p v-if="loginHint" class="text-xs text-text-secondary mb-5">
         {{ loginHint }}
       </p>
-      <div v-else class="mb-4"></div>
+      <div v-else class="mb-5"></div>
 
       <!-- Tab 切换 -->
       <div role="tablist" aria-label="登录方式" class="flex gap-1 mb-6 rounded-xl bg-surface-soft p-1">
@@ -377,7 +377,7 @@ async function submitCookie() {
         </div>
         <button
           v-if="!qrError"
-          class="btn btn-ghost mt-3 text-xs"
+          class="btn btn-ghost mt-3"
           type="button"
           :disabled="qrLoading"
           @click="loadQr"
@@ -502,7 +502,7 @@ async function submitCookie() {
           />
           <button
             type="button"
-            class="btn btn-ghost shrink-0 px-3 text-xs"
+            class="btn btn-ghost shrink-0 px-3"
             :disabled="!isValidPhone(phone) || countdown > 0 || captchaSending"
             @click="sendCaptcha"
           >
@@ -597,7 +597,7 @@ async function submitCookie() {
           </div>
           <button
             type="button"
-            class="btn btn-ghost w-full mt-2 text-xs"
+            class="btn btn-ghost w-full mt-2"
             :disabled="!cookieRaw.includes('MUSIC_U')"
             :aria-describedby="
               !cookieRaw.includes('MUSIC_U') ? 'login-cookie-help' : undefined
@@ -614,7 +614,7 @@ async function submitCookie() {
 
 <style scoped>
 .login-panel {
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--color-raised);
   box-shadow: var(--shadow-floating);
 }

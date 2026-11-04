@@ -82,8 +82,23 @@ onMounted(() => void load());
           <div class="skeleton h-3 w-1/3 rounded" />
         </div>
       </header>
-      <div aria-hidden="true">
+      <div
+        aria-hidden="true"
+        class="grid mobile-stack detail-layout"
+        :class="{ 'detail-layout--solo': !player.currentSong }"
+      >
         <SkeletonCard variant="list" :rows="8" />
+        <!-- 与加载后的两栏同构：有当前歌曲时详情页带歌词列，占位也保留同一列，
+             否则列表容器宽度会在数据到达瞬间翻转（专辑列显隐 / 行宽跳变）。 -->
+        <div v-if="player.currentSong" class="skeleton-aside">
+          <div class="skeleton h-3.5 w-12 rounded" />
+          <div
+            v-for="i in 7"
+            :key="i"
+            class="skeleton mt-3 h-3 rounded"
+            :class="i % 3 === 0 ? 'w-2/3' : 'w-full'"
+          />
+        </div>
       </div>
       <p class="sr-only" role="status">正在加载歌单…</p>
     </template>
@@ -161,6 +176,16 @@ onMounted(() => void load());
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 加载态的歌词列占位：与 LyricAside 同一张 raised 纸卡量级（16px 内边距 +
+   Raised 阴影），加载完成时只换内容、不换骨架。 */
+.skeleton-aside {
+  align-self: start;
+  padding: 1rem;
+  border-radius: 8px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
+}
+
 /* 容器查询：阈值 38rem（比每日推荐的 44rem 低）。歌单详情可能有数百首歌，
    单列会把歌词卡排到列表末尾、在默认窗里等于丢掉侧栏歌词，所以只要列表列
    还放得下就保留两栏；仅当容器窄到列表连隐藏专辑后都挤不下（<38rem）才堆叠。
@@ -178,12 +203,5 @@ onMounted(() => void load());
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* 单列态：歌词卡回到普通流、居中并限宽 34rem。
-     卡片本体只负责纸面与两栏时的 sticky，布局归页面。 */
-  .detail-layout :deep(.lyric-aside) {
-    position: static;
-    width: min(100%, 34rem);
-    justify-self: center;
-  }
 }
 </style>

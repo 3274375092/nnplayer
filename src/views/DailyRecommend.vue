@@ -119,7 +119,7 @@ onMounted(() => void load());
       />
       <!-- 无当前歌曲时不渲染空歌词卡：空态不值得占首屏，单列堆叠时
            歌词卡也始终排在歌曲列表之后（容器查询里不再用 order 提前）。 -->
-      <LyricAside v-if="player.currentSong" :panel-height="320" />
+      <LyricAside v-if="player.currentSong" />
     </div>
   </div>
 </template>
@@ -135,7 +135,7 @@ onMounted(() => void load());
 
 .daily-header {
   position: relative;
-  margin-bottom: 1.75rem;
+  margin-bottom: 1.5rem;
   padding: 0.35rem 0 0.15rem;
 }
 
@@ -153,9 +153,10 @@ onMounted(() => void load());
   display: flex;
   align-items: center;
   margin: 0.7rem 0 0;
-  /* 78% 墨色：最暗染色纸端点 6.26:1，仍低于标题但不越 4.5:1 下限。 */
+  /* 78% 墨色：最暗染色纸端点 6.26:1，仍低于标题但不越 4.5:1 下限。
+     字号用 DESIGN 的 Label 12px；0.78rem（12.48px）不在字阶上。 */
   color: color-mix(in srgb, var(--color-text-primary) 78%, transparent);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 450;
 }
 
@@ -201,12 +202,5 @@ onMounted(() => void load());
     width: min(100%, 34rem);
     justify-self: center;
   }
-}
-
-@media (max-height: 640px) {
-  .daily-header {
-    margin-bottom: 1.25rem;
-  }
-
 }
 </style>

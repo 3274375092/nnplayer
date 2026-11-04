@@ -65,7 +65,7 @@ defineEmits<{
         <ChevronRight :size="18" :stroke-width="1.75" />
       </span>
     </span>
-    <span class="playlist-title mt-3 block px-0.5 text-sm font-semibold leading-[1.35] tracking-[-0.01em] text-text-primary">{{ playlistName }}</span>
+    <span class="playlist-title mt-3 block px-0.5 text-sm font-semibold leading-[1.35] text-text-primary">{{ playlistName }}</span>
     <span class="mt-1 block truncate px-0.5 text-xs text-tertiary transition-colors duration-200 group-hover:text-text-secondary group-focus-visible:text-text-secondary">
       {{ playlist.trackCount }} 首
       <span v-if="playlist.creator"> · {{ playlist.creator }}</span>

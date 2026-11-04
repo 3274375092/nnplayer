@@ -253,8 +253,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
-  padding: 1.35rem clamp(1.25rem, 3vw, 2.25rem) 0.75rem;
+  /* 与 .now-playing__content 同宽同内边距：页头标签与关闭按钮和封面/歌词列
+     共用一条版心，宽窗下不再比内容多探出 20–25px。 */
+  width: min(100%, 74rem);
+  margin-inline: auto;
+  padding: 1.35rem clamp(1.4rem, 5vw, 4rem) 0.75rem;
 }
 
 .now-playing__eyebrow {
@@ -274,7 +277,7 @@ onBeforeUnmount(() => {
   height: 2.5rem;
   place-items: center;
   border: 0;
-  border-radius: 0.35rem;
+  border-radius: 0.375rem;
   color: var(--color-text-secondary);
   background: var(--color-raised);
   box-shadow: var(--shadow-raised);

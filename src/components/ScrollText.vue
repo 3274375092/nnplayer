@@ -21,6 +21,8 @@ const containerRef = ref<HTMLElement | null>(null);
 const textRef = ref<HTMLElement | null>(null);
 const offset = ref(0);
 const needScroll = ref(false);
+/** 跑马灯位移终点（正值：scrollWidth - clientWidth）；0 = 无需滚动。 */
+const maxOffset = ref(0);
 
 // 减少动效时直接截断
 const reduceMotion =
@@ -35,6 +37,12 @@ function measure() {
   if (!c || !t) return;
   // text 实际宽度 > 容器宽度时需要滚动
   needScroll.value = t.scrollWidth > c.clientWidth + 1;
+  // 终点是「文字右缘贴到容器右缘」，即 scrollWidth - clientWidth。
+  // 旧实现把 max 取成 -scrollWidth，会在每轮末尾把整段文字送出容器、
+  // 留下一整槽空白后才瞬跳回起点。
+  maxOffset.value = needScroll.value
+    ? Math.max(0, t.scrollWidth - c.clientWidth)
+    : 0;
   if (!needScroll.value) offset.value = 0;
 }
 
@@ -56,9 +64,8 @@ function startScroll() {
     if (!last) last = t;
     const dt = (t - last) / 1000;
     last = t;
-    const max = -(textRef.value?.scrollWidth ?? 0);
     offset.value -= props.speed * dt;
-    if (offset.value < max) offset.value = 0; // 滚到底回 0 循环
+    if (offset.value < -maxOffset.value) offset.value = 0; // 滚到字尾贴右缘后回 0 循环
     raf = requestAnimationFrame(tick);
   };
   raf = requestAnimationFrame(tick);

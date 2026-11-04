@@ -12,19 +12,59 @@
 //   最小窗里「列表旁仍能看到歌词卡」）。
 // 内边距由卡片承担，卡内的 LyricPanel 清零自带内边距（它在正在播放页仍是裸面板，
 // 保留自己的 p-4），避免 16px 叠成 32px。
+//
+// 高度：三页同构的卡此前分别写 320 / 400 / 400，同一张卡在详情/搜索里 432px 高，
+// 在默认 960×640 窗里首屏底部会被滚动视口切掉一截。这里按所在滚动视口的真实高度
+// 推导面板高度（卡 = 面板 + 32px 内边距），夹在 280–400，三页共用同一规则。
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import LyricPanel from "@/components/LyricPanel.vue";
 
-withDefaults(
-  defineProps<{
-    /** 传递给 LyricPanel 的容器高度（px）；卡片高度随面板高度走 */
-    panelHeight?: number;
-  }>(),
-  { panelHeight: 400 },
-);
+/** 面板高度下限/上限（DESIGN 未规定高度；320 是宽容器下的理想观感）。 */
+const PANEL_MIN_HEIGHT = 280;
+const PANEL_MAX_HEIGHT = 400;
+/** 卡片自身纵向开销：上下内边距 32 + 与视口底缘的呼吸 16。 */
+const CARD_VERTICAL_CHROME = 48;
+
+const asideRef = ref<HTMLElement | null>(null);
+const panelHeight = ref(PANEL_MAX_HEIGHT);
+let resizeObserver: ResizeObserver | null = null;
+
+/** 按「首屏可见高度 − 卡片顶边 − 卡片开销」推导面板高度，太小则守下限。 */
+function measurePanelHeight() {
+  const el = asideRef.value;
+  if (!el) return;
+  const port = el.closest(".app-main") as HTMLElement | null;
+  if (!port) return;
+  const portRect = port.getBoundingClientRect();
+  const asideRect = el.getBoundingClientRect();
+  const topOffset = Math.max(16, asideRect.top - portRect.top);
+  const available = Math.round(
+    port.clientHeight - topOffset - CARD_VERTICAL_CHROME,
+  );
+  const next = Math.min(
+    PANEL_MAX_HEIGHT,
+    Math.max(PANEL_MIN_HEIGHT, available),
+  );
+  if (next !== panelHeight.value) panelHeight.value = next;
+}
+
+onMounted(() => {
+  measurePanelHeight();
+  if (typeof ResizeObserver === "undefined") return;
+  const port = asideRef.value?.closest(".app-main");
+  if (!port) return;
+  resizeObserver = new ResizeObserver(() => measurePanelHeight());
+  resizeObserver.observe(port);
+});
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+});
 </script>
 
 <template>
-  <aside class="lyric-aside" aria-label="当前歌词">
+  <aside ref="asideRef" class="lyric-aside" aria-label="当前歌词">
     <LyricPanel :panel-height="panelHeight" />
   </aside>
 </template>

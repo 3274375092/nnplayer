@@ -362,11 +362,11 @@ defineExpose({
           <button
             ref="closeButtonRef"
             type="button"
-            class="queue-icon-button w-8 h-8 rounded-full bg-surface-soft hover:bg-surface-strong flex items-center justify-center transition-all duration-200 active:scale-95"
+            class="queue-icon-button w-9 h-9 rounded-md bg-transparent text-text-secondary hover:bg-surface-soft hover:text-text-primary flex items-center justify-center transition-all duration-200 active:scale-95"
             aria-label="关闭队列"
             @click="open = false"
           >
-            <X :size="14" :stroke-width="1.5" class="text-text-secondary" aria-hidden="true" />
+            <X :size="18" :stroke-width="1.75" aria-hidden="true" />
           </button>
         </header>
 
@@ -432,7 +432,7 @@ defineExpose({
               <Play
                 v-if="isCurrent(item.absIndex)"
                 :size="12"
-                :stroke-width="2"
+                :stroke-width="1.75"
                 class="text-accent mx-auto"
                 :class="{ 'animate-pulse-fade': player.audioState.playing }"
               />
@@ -477,7 +477,6 @@ defineExpose({
                 <button
                   type="button"
                   class="queue-row-action queue-move"
-                  tabindex="-1"
                   :data-queue-index="item.absIndex"
                   data-queue-move="up"
                   :disabled="!canMove(item.absIndex, -1)"
@@ -490,7 +489,6 @@ defineExpose({
                 <button
                   type="button"
                   class="queue-row-action queue-move"
-                  tabindex="-1"
                   :data-queue-index="item.absIndex"
                   data-queue-move="down"
                   :disabled="!canMove(item.absIndex, 1)"
@@ -506,7 +504,7 @@ defineExpose({
                   :aria-label="`从队列移除 ${item.song.name}`"
                   @click.stop="remove(item.absIndex)"
                 >
-                  <X :size="14" :stroke-width="1.5" aria-hidden="true" />
+                  <X :size="14" :stroke-width="1.75" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -535,7 +533,7 @@ defineExpose({
             class="btn btn-ghost queue-footer-button text-xs rounded-xl"
             @click="playAll"
           >
-            <Play :size="14" :stroke-width="1.5" class="mr-1" aria-hidden="true" />
+            <Play :size="14" :stroke-width="1.75" class="mr-1" aria-hidden="true" />
             <!-- 以当前曲（含）为起点重建/截断队列，不再用容易被读成“继续播放”的「从当前播放」。 -->
             {{ player.index >= 0 ? "从这首歌开始" : "播放全部" }}
           </button>
@@ -545,7 +543,7 @@ defineExpose({
             class="btn btn-ghost queue-footer-button text-xs text-text-tertiary hover:text-accent-on-subtle rounded-xl ml-auto"
             @click="clear"
           >
-            <Trash :size="14" :stroke-width="1.5" class="mr-1" aria-hidden="true" />清空待播
+            <Trash :size="14" :stroke-width="1.75" class="mr-1" aria-hidden="true" />清空待播
           </button>
         </footer>
       </aside>

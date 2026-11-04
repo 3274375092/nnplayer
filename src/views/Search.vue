@@ -210,12 +210,5 @@ onBeforeUnmount(() => {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* 单列态：歌词卡回到普通流、居中并限宽 34rem。
-     卡片本体只负责纸面与两栏时的 sticky，布局归页面。 */
-  .search-layout :deep(.lyric-aside) {
-    position: static;
-    width: min(100%, 34rem);
-    justify-self: center;
-  }
 }
 </style>

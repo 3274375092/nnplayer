@@ -112,6 +112,13 @@ input[type="number"]::-webkit-outer-spin-button {
   .btn:disabled:active {
     transform: none;
   }
+  /* DESIGN「Focus」：2px 陶土 outline、偏移 2px，forced-colors 下仍可见。
+     .btn 是所有页面的主操作（播放全部 / 登录 / 重试 / 空态 CTA），
+     此前只有输入框和自定义控件有焦点环，.btn 落回浏览器默认环。 */
+  .btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
   .btn-primary {
     @apply bg-accent active:scale-[0.97];
     color: var(--color-on-accent);

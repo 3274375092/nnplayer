@@ -23,6 +23,8 @@ const PAGE_STEP = 10;
 const dragging = ref(false);
 const localValue = ref(props.value);
 const hovering = ref(false);
+/** 悬停指针在轨道上的比例（0–1）；null = 无指针预览（键盘/离开）。 */
+const hoverRatio = ref<number | null>(null);
 
 const ratio = computed(() => {
   if (!props.max || props.max <= 0) return 0;
@@ -31,6 +33,28 @@ const ratio = computed(() => {
 
 /** 已播段用 scaleX 表达进度：0–1 的合成器属性，不再逐帧改 width。 */
 const ratioScale = computed(() => (ratio.value / 100).toFixed(4));
+
+/** 悬停时滑块与时间气泡跟随指针预览落点，而不是停在当前播放位置：
+ *  进度条是「跳到某处」的控件，气泡必须回答「点下去会到哪」。 */
+const previewRatio = computed(() => {
+  if (dragging.value || hoverRatio.value === null) return ratio.value;
+  return Math.max(0, Math.min(100, hoverRatio.value * 100));
+});
+
+/** 气泡读数：悬停显示落点时间，拖动显示拖动值，其余显示当前进度。 */
+const previewValue = computed(() => {
+  if (dragging.value || hoverRatio.value === null) return localValue.value;
+  return Math.max(0, Math.min(maxValue.value, hoverRatio.value * maxValue.value));
+});
+
+function onPointerMove(e: PointerEvent) {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  if (rect.width <= 0) return;
+  hoverRatio.value = Math.max(
+    0,
+    Math.min(1, (e.clientX - rect.left) / rect.width),
+  );
+}
 
 const maxValue = computed(() =>
   Number.isFinite(props.max) && props.max > 0 ? props.max : 0,
@@ -112,8 +136,10 @@ function onKey(e: KeyboardEvent) {
 <template>
   <div
     class="progress-bar relative h-3 cursor-pointer"
+    :class="{ 'progress-bar--disabled': maxValue <= 0 }"
     @mouseenter="hovering = true"
-    @mouseleave="hovering = false"
+    @pointermove="onPointerMove"
+    @mouseleave="hovering = false; hoverRatio = null"
   >
     <div
       class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-track rounded-full overflow-hidden"
@@ -141,10 +167,10 @@ function onKey(e: KeyboardEvent) {
       @keydown="onKey"
     />
     <!-- 滑块轴与轨道等宽：translateX 的百分比因此等于轨道百分比，
-         滑块位置不再用 left 布局属性。 -->
+         滑块位置不再用 left 布局属性。悬停时跟随指针预览落点。 -->
     <div
       class="progress-thumb-anchor"
-      :style="{ transform: `translateX(${ratio}%)` }"
+      :style="{ transform: `translateX(${previewRatio}%)` }"
     >
       <div
         class="progress-thumb"
@@ -152,11 +178,15 @@ function onKey(e: KeyboardEvent) {
       />
     </div>
     <div
-      v-if="dragging || hovering"
-      class="progress-tooltip absolute -top-9 px-2.5 py-1 bg-glass text-xs text-text-primary rounded-lg pointer-events-none whitespace-nowrap"
-      :style="{ left: `calc(${ratio}% - 24px)` }"
+      v-if="maxValue > 0 && (dragging || (hovering && hoverRatio !== null))"
+      class="progress-tooltip absolute px-2.5 py-1 bg-glass text-xs text-text-primary rounded-lg pointer-events-none whitespace-nowrap"
+      :style="{
+        left: `${previewRatio}%`,
+        bottom: 'calc(100% + 60px)',
+        transform: 'translateX(-50%)',
+      }"
     >
-      {{ fmtDuration(localValue) }}
+      {{ fmtDuration(previewValue) }}
     </div>
   </div>
 </template>
@@ -273,7 +303,19 @@ function onKey(e: KeyboardEvent) {
   transform: translate(-50%, -50%) scale(1.1);
 }
 
+/* 气泡浮在播放条上方：播放条 76/74px 内进度行只占底部 12px，气泡若留在条内
+   会压住传输控件行（实测 28% 处即与播放键光环相撞）。底边 = 进度条底 −(12+60)，
+   在 76px 与 74px 两档下都落在播放条顶缘上方约 5px（气泡是 Floating 层，
+   DESIGN Elevation）。播放条已改为 overflow: visible 让气泡可以探出条外。 */
 .progress-tooltip {
   box-shadow: var(--shadow-floating);
+}
+
+.progress-bar--disabled {
+  cursor: default;
+}
+
+.progress-bar--disabled .progress-thumb {
+  display: none;
 }
 </style>

@@ -10,6 +10,7 @@
 //   6. Esc 只收起工具条，不销毁窗口；强退出只保留工具条关闭按钮
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Lock, Minus, Plus, Rows3, Sun, Unlock, X } from "@lucide/vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { useDesktopLyricsBridge } from "@/composables/useDesktopLyricsBridge";
@@ -751,7 +752,7 @@ function onFontSizeChange(delta: number) {
         @click="onFontSizeChange(-2)"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <Minus :size="16" :stroke-width="2" aria-hidden="true" />
       </button>
 
       <span class="w-8 text-center tabular-nums">{{ prefs.fontSize }}px</span>
@@ -765,7 +766,7 @@ function onFontSizeChange(delta: number) {
         @click="onFontSizeChange(2)"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <Plus :size="16" :stroke-width="2" aria-hidden="true" />
       </button>
 
       <!-- 分隔线 -->
@@ -777,7 +778,7 @@ function onFontSizeChange(delta: number) {
            工具条整块通过 [data-toolbar] 从窗口拖动中排除，原生滑块拖动不受影响。 -->
       <div class="opacity-control">
         <span class="opacity-icon" aria-hidden="true">
-          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          <Sun :size="16" :stroke-width="2" aria-hidden="true" />
         </span>
         <input
           type="range"
@@ -808,7 +809,7 @@ function onFontSizeChange(delta: number) {
         @click="prefs.showPrevNext = !prefs.showPrevNext"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round"><line x1="5" y1="7" x2="19" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="5" y1="17" x2="19" y2="17"/></svg>
+        <Rows3 :size="16" :stroke-width="2" aria-hidden="true" />
       </button>
 
       <span class="w-px h-3.5 bg-white/20"></span>
@@ -824,9 +825,9 @@ function onFontSizeChange(delta: number) {
         @mousedown.stop
       >
         <!-- Lock icon when locked -->
-        <svg v-if="prefs.locked" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <Lock v-if="prefs.locked" :size="16" :stroke-width="2" aria-hidden="true" />
         <!-- Unlock icon when unlocked -->
-        <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+        <Unlock v-else :size="16" :stroke-width="2" aria-hidden="true" />
       </button>
 
       <!-- 分隔线 -->
@@ -841,7 +842,7 @@ function onFontSizeChange(delta: number) {
         @click="onClose"
         @mousedown.stop
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <X :size="16" :stroke-width="2" aria-hidden="true" />
       </button>
     </div>
   </div>

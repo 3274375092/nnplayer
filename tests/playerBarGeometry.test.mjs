@@ -116,11 +116,18 @@ test("24px 进度命中框完整落在 74px 条内（49–73）", () => {
   assert.match(range, /transform:\s*translateY\(-50%\);/);
 });
 
-test("播放条 overflow 不会再裁掉命中框 / 播放键", () => {
-  // 浮动条本身保留 overflow: hidden（横向网格不能被撑破），命中框完全在条内，
-  // 所以裁切不再影响命中区。这里同时守住「条高 ≥ 中央列高」。
+test("播放条允许纵向溢出（浮动气泡），横向仍由网格收缩约束", () => {
+  // 播放条必须 overflow: visible：进度预览气泡是 Floating 层，停在条内会压住
+  // 传输控件行，只能探出条顶（DESIGN Elevation）。横向不会溢出——三列分别是
+  // minmax(0,1fr) / clamp(...) / minmax(0,1fr)，左右列内容都带 min-w-0，
+  // 封面由自身 overflow:hidden 裁剪，播放键脉冲 64px < 条高 76px。
   const bar = readRule(playerBarSource, ".player-bar-grid");
-  assert.match(bar, /overflow:\s*hidden;/);
+  assert.match(bar, /overflow:\s*visible;/);
+  assert.match(
+    playerBarSource,
+    /grid-template-columns:\s*\n\s*minmax\(0, 1fr\)/,
+    "播放条横向仍必须是可收缩的三列网格",
+  );
 });
 
 test("几何算术：24px 目标 + 34px ≥ 20 + 12 的 WCAG 2.5.8 间距", () => {

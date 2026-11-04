@@ -270,10 +270,14 @@ function playLabel(song: Song) {
       'song-list-root--pinned-narrow': pinnedGrid === 'narrow',
     }"
   >
-    <div class="flex items-center justify-between gap-3 px-3 mb-4">
-      <h2 class="text-base font-semibold text-text-primary">
-        {{ title ?? "歌曲列表" }}
-        <span class="text-xs text-text-tertiary ml-2 font-normal tabular-nums">
+    <!-- 区块头与页面标题同一条左缘（不再额外缩进 12px），列头与行仍保留 px-3：
+         数据列与行 hover 底色共用同一条内边距，表格不贴页边。 -->
+    <div class="flex items-center justify-between gap-3 px-0 mb-4">
+      <h2 class="song-list-heading min-w-0 text-base font-semibold text-text-primary">
+        <span>{{ title ?? "歌曲列表" }}</span>
+        <!-- 计数整体换行：宽列表里与标题同排，窄列表（960 下带歌词卡的详情/搜索）
+             整块落到第二行，不会把「首」单独折行成孤字。 -->
+        <span class="song-list-heading__count text-xs text-text-tertiary font-normal tabular-nums">
           <template v-if="totalCount !== undefined && totalCount > songs.length">
             找到 {{ totalCount }} 首，显示前 {{ songs.length }} 首
           </template>
@@ -293,7 +297,7 @@ function playLabel(song: Song) {
       v-if="showIndex"
       class="song-list-header grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2 text-xs text-text-tertiary font-medium"
     >
-      <div>序号</div>
+      <div class="text-center">序号</div>
       <div></div>
       <div>标题</div>
       <div v-if="showAlbum" class="song-list-album">专辑</div>
@@ -308,9 +312,12 @@ function playLabel(song: Song) {
       <li
         v-for="{ song, index: idx } in visibleSongs"
         :key="`${song.id}:${idx}`"
-        class="song-row song-list-row group relative grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md hover:bg-surface-strong transition-all duration-150 items-center"
+        class="song-row song-list-row group relative grid grid-cols-[40px_44px_1fr_160px_72px] gap-3 px-3 py-2.5 h-[60px] rounded-md transition-all duration-150 items-center"
         :class="{
           'bg-accent-subtle': currentId === song.id,
+          // 当前行 hover 不能被墨色 hover 覆盖：暂停态的当前行没有逐字/脉冲，
+          // 洗色是它唯一的「当前」提示（DESIGN：当前行整行铺 terracotta-wash）。
+          'hover:bg-surface-strong': currentId !== song.id,
         }"
         :aria-posinset="idx + 1"
         :aria-setsize="songs.length"
@@ -396,6 +403,19 @@ function playLabel(song: Song) {
 </template>
 
 <style scoped>
+/* 区块标题 + 计数：默认同排；列表列窄到放不下时，计数整块换到第二行
+   （white-space: nowrap 禁止在「50 首」中间断行，避免出现孤字「首」）。 */
+.song-list-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.5rem;
+}
+
+.song-list-heading__count {
+  white-space: nowrap;
+}
+
 .virtual-song-list {
   overflow-anchor: none;
 }

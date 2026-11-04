@@ -173,7 +173,7 @@ function runAction() {
               aria-label="关闭提示"
               @click="close"
             >
-              <X :size="14" :stroke-width="2" aria-hidden="true" />
+              <X :size="14" :stroke-width="1.75" aria-hidden="true" />
             </button>
           </div>
         </section>

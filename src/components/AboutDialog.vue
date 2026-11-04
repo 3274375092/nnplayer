@@ -429,7 +429,7 @@ onBeforeUnmount(() => {
                 :disabled="busyUpdate"
                 @click="requestClose"
               >
-                <X :size="16" :stroke-width="2" aria-hidden="true" />
+                <X :size="18" :stroke-width="1.75" aria-hidden="true" />
               </button>
             </header>
 
@@ -669,8 +669,8 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
   border: 0;
   border-radius: 6px;
@@ -687,7 +687,7 @@ onBeforeUnmount(() => {
 
 .about-close:disabled {
   cursor: default;
-  opacity: 0.4;
+  opacity: 0.5;
 }
 
 .about-close:disabled:hover {
@@ -716,11 +716,11 @@ onBeforeUnmount(() => {
 }
 
 .about-section-title {
-  margin: 0 0 6px;
-  color: var(--color-text-tertiary);
-  font-size: 12px;
+  margin: 0 0 8px;
+  color: var(--color-text-primary);
+  font-size: 14px;
   font-weight: 600;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .about-shortcuts {
@@ -839,7 +839,7 @@ onBeforeUnmount(() => {
 
 .about-action:disabled {
   cursor: default;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 .about-error {
