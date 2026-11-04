@@ -8,7 +8,7 @@
 
 [下载最新版](https://github.com/3274375092/nnplayer/releases/latest) · [English](./README.en.md) · [提交问题](https://github.com/3274375092/nnplayer/issues)
 
-![Version](https://img.shields.io/badge/version-0.5.1-E85D3A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.2-E85D3A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
 
@@ -57,7 +57,7 @@
 - **Fedora/RHEL**：`sudo dnf install ./nnplayer*.rpm`
 - **AppImage**：`chmod +x nnplayer*.AppImage && ./nnplayer*.AppImage`
 
-关于弹层里的「检查更新」会读取 GitHub Releases 的 `latest.json`；Windows（NSIS）与 Linux（deb/rpm/AppImage）都在更新清单中。它只提示新版本并打开发布页，不会自动下载或安装。
+关于弹层里的「检查更新」会读取 GitHub Releases 的 `latest.json`；Windows（NSIS）与 Linux（deb/rpm/AppImage）都在更新清单中。发现新版本后可以直接在应用内下载并安装：Windows 走 NSIS 安装器，Linux AppImage 自替换，deb/rpm 会请求管理员授权；安装完成后自动重启。也可以从「查看发布页」手动下载。
 
 如果 Fedora/RHEL 没有自动安装依赖，可以执行：
 

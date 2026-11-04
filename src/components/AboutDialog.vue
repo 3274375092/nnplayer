@@ -1,13 +1,21 @@
 <script setup lang="ts">
 // 关于/帮助弹层：版本、非官方声明、全局快捷键、托盘驻留说明、检查更新、
 // 许可证与仓库链接。可发现性入口由 Sidebar 的品牌区提供。
-// - 只读查询更新（@tauri-apps/plugin-updater 动态 import），不自动下载/安装；
+// - 检查更新后由用户确认再下载安装；Linux deb/rpm 可能请求管理员授权；
 // - 外链统一经 tauri-plugin-opener 交给系统浏览器打开；
 // - dialog 语义 + Esc + Tab 焦点循环 + 关闭后焦点归还触发按钮。
 
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import {
   CircleCheck,
+  Download,
   ExternalLink,
   LoaderCircle,
   RefreshCw,
@@ -15,7 +23,12 @@ import {
 } from "@lucide/vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import type {
+  DownloadEvent,
+  Update as UpdaterUpdate,
+} from "@tauri-apps/plugin-updater";
 import { isUnsupportedPlatformError } from "@/utils/updateErrors";
+import { downloadPercent } from "@/utils/updateProgress";
 
 const props = defineProps<{
   open: boolean;
@@ -36,6 +49,11 @@ type UpdateStatus =
   | "checking"
   | "latest"
   | "available"
+  | "downloading"
+  | "installing"
+  | "download-error"
+  | "install-error"
+  | "installed"
   | "unsupported"
   | "error";
 
@@ -50,6 +68,14 @@ const version = ref(FALLBACK_VERSION);
 const versionLoaded = ref(false);
 const updateStatus = ref<UpdateStatus>("idle");
 const latestVersion = ref("");
+/** 当前可安装的更新句柄；check 成功后保留，安装失败时可重试。 */
+// Update 是带私有字段的 Tauri Resource，用 shallowRef 避免 Vue 深解包破坏类型。
+const pendingUpdate = shallowRef<UpdaterUpdate | null>(null);
+const downloadProgress = ref<number | null>(null);
+/** 安装包是否已下载完成：决定失败后是「重试下载」还是「重试安装」。 */
+const updateDownloaded = ref(false);
+/** 安装/重启动作失败时的固定区提示；外链错误仍用 externalError。 */
+const updateActionError = ref("");
 /** 外链打开失败时给出手动地址，不让按钮静默失效。 */
 const externalError = ref("");
 
@@ -65,6 +91,18 @@ const updateSummary = computed(() => {
       return `已是最新版本（v${version.value}）`;
     case "available":
       return `发现新版本 v${latestVersion.value}（当前 v${version.value}）`;
+    case "downloading":
+      return downloadProgress.value === null
+        ? "正在下载更新…"
+        : `正在下载更新… ${downloadProgress.value}%`;
+    case "installing":
+      return "正在安装更新，可能需要管理员授权…";
+    case "download-error":
+      return "下载更新失败，请检查网络后重试。";
+    case "install-error":
+      return "安装更新失败，请重试或前往发布页手动安装。";
+    case "installed":
+      return "更新已安装，请重启应用完成升级。";
     case "unsupported":
       return "当前平台不在更新清单中，请前往发布页查看最新版本。";
     case "error":
@@ -75,15 +113,54 @@ const updateSummary = computed(() => {
 });
 
 const checkingUpdate = computed(() => updateStatus.value === "checking");
-/** 失败类状态：通用错误与「当前平台未列入清单」共用一个发布页兜底入口。 */
+const busyUpdate = computed(
+  () =>
+    updateStatus.value === "downloading" ||
+    updateStatus.value === "installing",
+);
+/** 失败类状态：检查失败、平台缺失、下载/安装失败共用发布页兜底入口。 */
 const updateFailed = computed(
-  () => updateStatus.value === "error" || updateStatus.value === "unsupported",
+  () =>
+    updateStatus.value === "error" ||
+    updateStatus.value === "unsupported" ||
+    updateStatus.value === "download-error" ||
+    updateStatus.value === "install-error",
+);
+const updateHighlighted = computed(
+  () =>
+    updateStatus.value === "available" ||
+    updateStatus.value === "downloading" ||
+    updateStatus.value === "installing" ||
+    updateStatus.value === "installed",
 );
 const showReleaseAction = computed(
   () => updateStatus.value === "available" || updateFailed.value,
 );
 const releaseActionLabel = computed(() =>
   updateStatus.value === "available" ? "打开发布页" : "查看发布页",
+);
+const canInstall = computed(
+  () =>
+    pendingUpdate.value !== null &&
+    (updateStatus.value === "available" ||
+      updateStatus.value === "download-error" ||
+      updateStatus.value === "install-error"),
+);
+const canRestart = computed(() => updateStatus.value === "installed");
+const installButtonLabel = computed(() => {
+  switch (updateStatus.value) {
+    case "download-error":
+      return "重试下载";
+    case "install-error":
+      return "重试安装";
+    default:
+      return "下载并安装";
+  }
+});
+const downloadProgressStyle = computed(() =>
+  downloadProgress.value === null
+    ? undefined
+    : { width: `${downloadProgress.value}%` },
 );
 /** 已有检查结果后按钮改为「重新检查」，避免重复同一个动作却看不出状态。 */
 const checkButtonLabel = computed(() =>
@@ -107,9 +184,31 @@ async function loadVersion() {
   }
 }
 
-/** 只查询更新信息：不调用 download/downloadAndInstall，安装交给用户去发布页。 */
+/** 释放当前更新句柄；重试安装时不能提前释放，否则已下载的包会一起丢掉。 */
+async function closePendingUpdate() {
+  const update = pendingUpdate.value;
+  pendingUpdate.value = null;
+  updateDownloaded.value = false;
+  if (!update) return;
+  try {
+    await update.close();
+  } catch (e) {
+    console.warn("[about] 释放更新资源失败", e);
+  }
+}
+
+/** 只查询更新信息；下载与安装由 installUpdate 在用户确认后执行。 */
 async function checkUpdates() {
-  if (checkingUpdate.value) return;
+  if (
+    checkingUpdate.value ||
+    busyUpdate.value ||
+    updateStatus.value === "installed"
+  ) {
+    return;
+  }
+  updateActionError.value = "";
+  await closePendingUpdate();
+  downloadProgress.value = null;
   updateStatus.value = "checking";
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
@@ -120,12 +219,88 @@ async function checkUpdates() {
       updateStatus.value = "latest";
       return;
     }
+    pendingUpdate.value = update;
     latestVersion.value = update.version;
     updateStatus.value = "available";
   } catch (e) {
     console.warn("[about] 检查更新失败", e);
     // 平台条目缺失不是网络抖动：重试不会改变结果，文案与入口都要区分。
     updateStatus.value = isUnsupportedPlatformError(e) ? "unsupported" : "error";
+  }
+}
+
+/** 下载安装包；完成后立即进入安装。失败时保留句柄，允许重试。 */
+async function downloadUpdate(update: UpdaterUpdate) {
+  updateStatus.value = "downloading";
+  downloadProgress.value = null;
+  updateDownloaded.value = false;
+  let totalBytes = 0;
+  let receivedBytes = 0;
+
+  try {
+    await update.download(
+      (event: DownloadEvent) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength ?? 0;
+          receivedBytes = 0;
+          downloadProgress.value = downloadPercent(receivedBytes, totalBytes);
+          return;
+        }
+        if (event.event === "Progress") {
+          receivedBytes += event.data.chunkLength;
+          downloadProgress.value = downloadPercent(receivedBytes, totalBytes);
+          return;
+        }
+        downloadProgress.value = 100;
+      },
+      // 5 分钟：AppImage 体积较大，慢网络下也不能让「正在下载」无限挂着。
+      { timeout: 300_000 },
+    );
+    updateDownloaded.value = true;
+    await installDownloaded(update);
+  } catch (e) {
+    console.warn("[about] 下载更新失败", e);
+    downloadProgress.value = null;
+    updateStatus.value = "download-error";
+  }
+}
+
+/** 安装已下载的更新；Linux 上完成后需要主动重启进程。 */
+async function installDownloaded(update: UpdaterUpdate) {
+  updateStatus.value = "installing";
+  downloadProgress.value = 100;
+  try {
+    await update.install({ restartAfterInstall: true });
+    await restartApp();
+  } catch (e) {
+    console.warn("[about] 安装更新失败", e);
+    downloadProgress.value = null;
+    updateStatus.value = "install-error";
+  }
+}
+
+async function installUpdate() {
+  const update = pendingUpdate.value;
+  if (!update || busyUpdate.value) return;
+  updateActionError.value = "";
+  // 下载成功但安装失败：已下载的包还在 Update 句柄里，只重试安装。
+  if (updateStatus.value === "install-error" && updateDownloaded.value) {
+    await installDownloaded(update);
+    return;
+  }
+  await downloadUpdate(update);
+}
+
+/** 安装完成后重启；Windows 的 NSIS 安装器会自行重启，不会走到这里。 */
+async function restartApp() {
+  updateStatus.value = "installed";
+  try {
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  } catch (e) {
+    console.warn("[about] 重启应用失败", e);
+    updateActionError.value =
+      "更新已安装，但自动重启失败，请手动退出并重新打开 nnplayer。";
   }
 }
 
@@ -147,6 +322,8 @@ async function openExternal(url: string) {
 
 /** 关闭请求统一走这里：父组件收起弹层后由 watch 归还焦点。 */
 function requestClose() {
+  // 下载/安装过程中不允许收起弹层，避免用户以为操作已取消。
+  if (busyUpdate.value) return;
   emit("close");
 }
 
@@ -217,6 +394,7 @@ watch(
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onGlobalKeydown);
+  if (!busyUpdate.value) void closePendingUpdate();
 });
 </script>
 
@@ -246,8 +424,9 @@ onBeforeUnmount(() => {
                 ref="closeButtonRef"
                 type="button"
                 class="about-close"
-                title="关闭关于"
-                aria-label="关闭关于"
+                :title="busyUpdate ? '更新进行中，请稍候' : '关闭关于'"
+                :aria-label="busyUpdate ? '更新进行中，无法关闭' : '关闭关于'"
+                :disabled="busyUpdate"
                 @click="requestClose"
               >
                 <X :size="16" :stroke-width="2" aria-hidden="true" />
@@ -297,12 +476,19 @@ onBeforeUnmount(() => {
                   class="about-update-status"
                   :class="{
                     'about-update-status--error': updateFailed,
-                    'about-update-status--available': updateStatus === 'available',
+                    'about-update-status--available': updateHighlighted,
                   }"
                   role="status"
                 >
+                  <LoaderCircle
+                    v-if="busyUpdate"
+                    :size="14"
+                    :stroke-width="2"
+                    class="animate-spin about-status-icon"
+                    aria-hidden="true"
+                  />
                   <CircleCheck
-                    v-if="updateStatus === 'latest'"
+                    v-else-if="updateStatus === 'latest' || updateStatus === 'installed'"
                     :size="14"
                     :stroke-width="2"
                     class="about-status-icon"
@@ -310,14 +496,59 @@ onBeforeUnmount(() => {
                   />
                   {{ updateSummary }}
                 </p>
+                <div
+                  v-if="updateStatus === 'downloading' && downloadProgress !== null"
+                  class="about-update-progress"
+                  role="progressbar"
+                  aria-label="更新下载进度"
+                  :aria-valuenow="downloadProgress ?? 0"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <div
+                    class="about-update-progress-bar"
+                    :style="downloadProgressStyle"
+                  ></div>
+                </div>
                 <p class="about-note">
-                  只会查询 GitHub Releases 上的最新版本，不会自动下载或安装。
+                  检查只查询版本；下载并安装会调用系统安装程序，Linux 上可能需要管理员授权，安装完成后自动重启。
                 </p>
                 <div class="about-update-actions">
                   <button
+                    v-if="canInstall"
+                    type="button"
+                    class="btn btn-primary about-action"
+                    @click="installUpdate"
+                  >
+                    <RefreshCw
+                      v-if="updateStatus === 'download-error' || updateStatus === 'install-error'"
+                      :size="14"
+                      :stroke-width="2"
+                      aria-hidden="true"
+                    />
+                    <Download
+                      v-else
+                      :size="14"
+                      :stroke-width="2"
+                      aria-hidden="true"
+                    />
+                    {{ installButtonLabel }}
+                  </button>
+                  <button
+                    v-if="canRestart"
+                    type="button"
+                    class="btn btn-primary about-action"
+                    @click="restartApp"
+                  >
+                    <RefreshCw :size="14" :stroke-width="2" aria-hidden="true" />
+                    重启应用
+                  </button>
+                  <button
                     type="button"
                     class="btn btn-ghost about-action"
-                    :disabled="checkingUpdate"
+                    :disabled="
+                      checkingUpdate || busyUpdate || updateStatus === 'installed'
+                    "
                     @click="checkUpdates"
                   >
                     <LoaderCircle
@@ -338,11 +569,7 @@ onBeforeUnmount(() => {
                   <button
                     v-if="showReleaseAction"
                     type="button"
-                    :class="[
-                      'btn',
-                      'about-action',
-                      updateStatus === 'available' ? 'btn-primary' : 'btn-ghost',
-                    ]"
+                    class="btn btn-ghost about-action"
                     :title="`在浏览器中打开 ${RELEASES_URL}`"
                     @click="openExternal(RELEASES_URL)"
                   >
@@ -357,9 +584,13 @@ onBeforeUnmount(() => {
               </section>
             </div>
 
-            <!-- 外链失败提示放在固定区，不会随内容滚动而看不见。 -->
-            <p v-if="externalError" class="about-error about-error--fixed" role="alert">
-              {{ externalError }}
+            <!-- 外链/安装/重启失败提示放在固定区，不会随内容滚动而看不见。 -->
+            <p
+              v-if="externalError || updateActionError"
+              class="about-error about-error--fixed"
+              role="alert"
+            >
+              {{ externalError || updateActionError }}
             </p>
 
             <footer class="about-footer">
@@ -452,6 +683,16 @@ onBeforeUnmount(() => {
 .about-close:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-soft, var(--color-card-hover));
+}
+
+.about-close:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.about-close:disabled:hover {
+  color: var(--color-text-secondary);
+  background: transparent;
 }
 
 .about-body {
@@ -569,6 +810,21 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 
+.about-update-progress {
+  height: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-surface-soft, var(--color-card-hover));
+}
+
+.about-update-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width 0.2s ease;
+}
+
 .about-update-actions {
   display: flex;
   flex-wrap: wrap;
@@ -676,6 +932,7 @@ onBeforeUnmount(() => {
   .about-fade-enter-active,
   .about-fade-leave-active,
   .about-close,
+  .about-update-progress-bar,
   .about-link {
     transition: none;
   }

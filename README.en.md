@@ -8,7 +8,7 @@ A NetEase Cloud Music desktop player built with Tauri v2, Rust, Vue 3, and TypeS
 
 [Download latest release](https://github.com/3274375092/nnplayer/releases/latest) · [Report an issue](https://github.com/3274375092/nnplayer/issues)
 
-![Version](https://img.shields.io/badge/version-0.5.1-E85D3A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.2-E85D3A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2563EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)
 
@@ -50,7 +50,7 @@ Releases provide Windows x86_64 packages and Linux x86_64 packages: Debian `.deb
 - Fedora/RHEL: `sudo dnf install ./nnplayer*.rpm`
 - AppImage: `chmod +x nnplayer*.AppImage && ./nnplayer*.AppImage`
 
-The "Check for updates" action in the About dialog reads `latest.json` from GitHub Releases. Windows (NSIS) and Linux (deb/rpm/AppImage) are listed in the update manifest. It only reports a new version and opens the release page; it never downloads or installs automatically.
+The "Check for updates" action in the About dialog reads `latest.json` from GitHub Releases. Windows (NSIS) and Linux (deb/rpm/AppImage) are listed in the update manifest. When a new version is found, it can download and install it in place: Windows uses the NSIS installer, Linux AppImage replaces itself, and deb/rpm ask for administrator authorization; the app restarts after installation. A manual download link to the release page is also available.
 
 Linux requires GTK/WebKitGTK 4.1 and tray support. Package names may vary between distributions. GNOME Wayland users may need to enable the AppIndicator extension for the tray icon.
 
