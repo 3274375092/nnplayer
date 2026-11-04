@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 桌面歌词窗：极简，无 Sidebar/PlayerBarFloating/bg-bg -->
+  <!-- 桌面歌词窗：极简，无 Sidebar/PlayerBarFloating -->
   <router-view v-if="isDesktopLyrics" v-slot="{ Component }">
     <transition name="fade-slide" mode="out-in">
       <component :is="Component" />
@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
   </router-view>
 
   <!-- 主窗：完整布局 -->
-  <div v-else class="theme-root h-full flex bg-bg overflow-hidden">
+  <div v-else class="theme-root h-full flex overflow-hidden">
     <!-- 侧栏宽度过渡的开始/结束上报给 App：页面侧据此冻结容器查询（见 script）。 -->
     <Sidebar
       class="shrink-0 mobile-sidebar-hidden"
@@ -216,7 +216,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .theme-root {
   color: var(--color-text-primary);
-  background: var(--color-canvas);
+  background: var(--color-bg);
   /* 文字/结构色按设计固定，只有纸面背景随封面变化：不再继承式过渡 color，
      并把整窗 background-color 过渡压到 150ms（短于 200ms 主题 debounce），
      避免换歌时 600ms 整窗重绘 + 文档级继承色重算。 */

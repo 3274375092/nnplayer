@@ -21,12 +21,9 @@ const ACCENT_HUE_FOLD_TOP = 26;
 const TERRACOTTA_HUE = 20;
 /** 背景/环境光色相向陶土靠拢的比例，保留封面差异但纸面始终暖。 */
 const AMBIENT_HUE_PULL = 0.68;
-/** 与 styles.css 派生面一致的合成参数：把 accent-subtle 洗色复算成浏览器实色。
- *  canvas 的中性色与权重是单源契约：styles.css 的 `--color-canvas-neutral` /
- *  `--color-canvas-weight` 必须与这两个常量逐字一致（测试断言），否则推导会
- *  静默校验一个不再存在的合成面。 */
-export const CANVAS_NEUTRAL = "#f6f7f6";
-export const CANVAS_BACKGROUND_WEIGHT = 0.36;
+/** 纸面派生的表面参数：侧栏是 5% 墨色叠在纸色上，raised 是卡片纸混白。
+ *  这两组值必须与 styles.css 的 `--color-surface-soft` / `--color-raised`
+ *  公式一致，否则推导会静默校验一个不再存在的合成面。 */
 const RAISED_NEUTRAL = "#ffffff";
 const RAISED_CARD_WEIGHT = 0.42;
 const SURFACE_SOFT_ALPHA = 0.05;
@@ -319,8 +316,9 @@ function ambientStrength(color: HSL, offset = 0): number {
 }
 
 /**
- * 背景端点预留高于 4.65:1 的安全余量，覆盖 CSS 渐变在 sRGB 中插值时的
- * 小幅亮度波动，避免三级正文落到可读阈值以下。
+ * 背景染色要同时守住纸面与纸面上的侧栏（surface-soft 叠纸色）：侧栏比纸面深
+ * 5% 墨色，是三级正文真正落座的地方，染色按较暗的那一层校验。
+ * 余量高于 4.65:1，覆盖 CSS 渐变在 sRGB 中插值的小幅亮度波动。
  */
 function accessibleTintedSurface(
   base: string,
@@ -329,11 +327,15 @@ function accessibleTintedSurface(
 ): string {
   let strength = clamp(initialStrength, 0, 1);
   let color = mixHex(base, tint, strength);
+  const sidebarOf = (value: string) =>
+    mixHex(value, GRUVBOX_LIGHT_THEME.foreground, SURFACE_SOFT_ALPHA);
 
   while (
-    THEME_TEXT_COLORS.some(
-      (textColor) =>
-        contrastRatio(textColor, color) < TINTED_SURFACE_MIN_CONTRAST,
+    [color, sidebarOf(color)].some((surface) =>
+      THEME_TEXT_COLORS.some(
+        (textColor) =>
+          contrastRatio(textColor, surface) < TINTED_SURFACE_MIN_CONTRAST,
+      ),
     ) &&
     strength > 0
   ) {
@@ -346,7 +348,7 @@ function accessibleTintedSurface(
 
 /**
  * accent-subtle 是 12% 的透明洗色，真实底色由它叠在下面的派生面上决定：
- * 侧栏 = surface-soft 叠 canvas，窄窗侧栏浮层 = --color-bg，队列徽标 = 叠两次的
+ * 侧栏 = surface-soft 叠纸色，窄窗侧栏浮层 = --color-bg，队列徽标 = 叠两次的
  * raised 纸面。这里按 styles.css 的公式复算这几种合成色，供下限推导逐个校验。
  */
 function accentSubtleBackdrops(
@@ -360,13 +362,8 @@ function accentSubtleBackdrops(
     }
     return color;
   };
-  const canvas = mixHex(
-    CANVAS_NEUTRAL,
-    background,
-    CANVAS_BACKGROUND_WEIGHT,
-  );
   const surfaceSoft = mixHex(
-    canvas,
+    background,
     GRUVBOX_LIGHT_THEME.foreground,
     SURFACE_SOFT_ALPHA,
   );
@@ -464,6 +461,8 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
   const accentSaturation = clamp(s * 1.08 + 0.18, 0.6, 0.76);
   const accentSurfaces = [
     background,
+    // 侧栏（surface-soft 叠纸色）是激活导航/播放中图标落座的表面，也参与下限。
+    mixHex(background, GRUVBOX_LIGHT_THEME.foreground, SURFACE_SOFT_ALPHA),
     backgroundFrom,
     backgroundTo,
     GRUVBOX_LIGHT_THEME.card,

@@ -23,8 +23,6 @@ const theme = await import(
 );
 
 const {
-  CANVAS_BACKGROUND_WEIGHT,
-  CANVAS_NEUTRAL,
   DEFAULT_THEME_SEED,
   DYNAMIC_THEME_CSS_VARIABLES,
   GRUVBOX_LIGHT_THEME,
@@ -148,18 +146,19 @@ function assertWarmPaper(hex, label) {
 }
 
 /**
- * 应用真实绘制的纸面：`--color-canvas` 由 `--color-canvas-neutral` 与
- * `--color-canvas-weight` 混出（styles.css），侧栏再叠 5% 墨色，raised 由卡片纸混白。
- * 三档背景渐变（bg-from/bg-to）已从 CSS 与 token 层移除，这里改为校验真正绘制的
- * 表面，比校验一条不存在的渐变更严格。
+ * 应用真实绘制的纸面：页面与侧栏都以 `--color-bg` 为底（styles.css / App.vue），
+ * 侧栏再叠 5% 墨色，raised 由卡片纸混白。三档背景渐变（bg-from/bg-to）与
+ * 中层 canvas 都已从 CSS 与 token 层移除，这里校验的是真正绘制的表面。
  */
 function paintedPaperSurfaces(background) {
-  const canvas = mixHex(CANVAS_NEUTRAL, background, CANVAS_BACKGROUND_WEIGHT);
-  const surfaceSoft = mixHex(canvas, GRUVBOX_LIGHT_THEME.foreground, 0.05);
+  const surfaceSoft = mixHex(
+    background,
+    GRUVBOX_LIGHT_THEME.foreground,
+    0.05,
+  );
   const raised = mixHex("#ffffff", GRUVBOX_LIGHT_THEME.card, 0.42);
   return {
     background,
-    canvas,
     sidebar: surfaceSoft,
     card: GRUVBOX_LIGHT_THEME.card,
     cardHover: GRUVBOX_LIGHT_THEME.cardHover,
@@ -169,7 +168,7 @@ function paintedPaperSurfaces(background) {
 
 /**
  * 复算 accent-subtle 洗色在真实渲染里的合成色：accent-subtle 是 12% 透明层，
- * 侧栏 = surface-soft 叠 canvas，窄窗侧栏浮层 = 纸色，队列徽标 = 叠两次的 raised。
+ * 侧栏 = surface-soft 叠纸色，窄窗侧栏浮层 = 纸色，队列徽标 = 叠两次的 raised。
  * 公式与 styles.css 的派生面一致；测试独立复算，避免推导自证。
  */
 function accentSubtleBackdrops({
@@ -246,7 +245,6 @@ function assertThemeReadable(derived, label) {
 
   for (const surface of [
     background,
-    surfaces.canvas,
     surfaces.sidebar,
     GRUVBOX_LIGHT_THEME.card,
   ]) {
@@ -331,38 +329,6 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
     expected["--color-ambient-secondary"],
   ]) {
     assertWarmHue(ambient, "static ambient default", ACCENT_HUE_MIN, WARM_INPUT_HUE_MAX);
-  }
-});
-
-test("canvas neutral is single-sourced from styles.css", () => {
-  // 这次审计的根因：canvas 的中性色同时在 styles.css 与 themeTokens.ts 里硬编码，
-  // 只改一处时 accent-on-subtle 的推导会静默校验一个不再存在的合成面。
-  // 契约：CSS 声明两个变量，TS 常量与它们逐字一致，canvas 公式引用这两个变量。
-  const neutral = styles.match(/--color-canvas-neutral:\s*([^;]+);/i);
-  const weight = styles.match(/--color-canvas-weight:\s*([^;]+);/i);
-  assert.ok(neutral, "styles.css must declare --color-canvas-neutral");
-  assert.ok(weight, "styles.css must declare --color-canvas-weight");
-  assert.equal(
-    neutral[1].trim().toLowerCase(),
-    CANVAS_NEUTRAL,
-    "themeTokens.ts CANVAS_NEUTRAL must equal the CSS --color-canvas-neutral",
-  );
-  assert.equal(
-    weight[1].trim(),
-    `${CANVAS_BACKGROUND_WEIGHT * 100}%`,
-    "themeTokens.ts CANVAS_BACKGROUND_WEIGHT must equal the CSS --color-canvas-weight",
-  );
-  const canvas = styles.match(/--color-canvas:\s*([^;]+);/i);
-  assert.ok(canvas, "styles.css must declare --color-canvas");
-  for (const token of [
-    "var(--color-bg)",
-    "var(--color-canvas-neutral)",
-    "var(--color-canvas-weight)",
-  ]) {
-    assert.ok(
-      canvas[1].includes(token),
-      `--color-canvas must be mixed from ${token}, got: ${canvas[1].trim()}`,
-    );
   }
 });
 

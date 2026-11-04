@@ -244,7 +244,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   container-name: now-playing;
   container-type: inline-size;
-  background: var(--color-canvas);
+  background: var(--color-bg);
 }
 
 .now-playing__header {

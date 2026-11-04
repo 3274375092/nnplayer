@@ -31,12 +31,6 @@
   --color-surface-strong: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
   --color-track: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
   --color-thumb: #f9f5d7;
-  /* 画布的中性色与混合权重在这里单点声明：themeTokens.ts 的 accent-on-subtle
-     推导复刻同一组值（CANVAS_NEUTRAL / CANVAS_BACKGROUND_WEIGHT），改动必须
-     两边同步，themeTokens.test.mjs 会同时断言这三条声明。 */
-  --color-canvas-neutral: #f6f7f6;
-  --color-canvas-weight: 36%;
-  --color-canvas: color-mix(in srgb, var(--color-bg) var(--color-canvas-weight), var(--color-canvas-neutral));
   --color-raised: color-mix(in srgb, var(--color-card) 42%, #fff);
   --shadow-raised: 0 4px 16px rgb(60 56 54 / 6%);
   --shadow-floating: 0 12px 36px rgb(60 56 54 / 12%), 0 2px 6px rgb(60 56 54 / 5%);
@@ -59,7 +53,7 @@ body {
   line-height: 1.5;
   letter-spacing: 0;
   color: var(--color-text-primary);
-  background: var(--color-canvas);
+  background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
   transition: background-color 0.15s ease;
 }

@@ -24,10 +24,6 @@ colors:
   scrollbar-hover: "#7c6f64"
   thumb-paper: "#f9f5d7"
   accent-on-subtle: "#a03503"
-  # 画布中性色：与 --color-bg 按 36% 混合成 --color-canvas（styles.css 的
-  # --color-canvas-neutral / --color-canvas-weight 是唯一来源，themeTokens.ts
-  # 复刻同一组值做 accent-on-subtle 的对比度推导）。
-  canvas-neutral: "#f6f7f6"
   # 桌面歌词黑板层的白色阶梯：材质内唯一允许的白色透明度轴。只允许出现在
   # lyric-plate 层；以下 15 档即当前源码的全部取值，不要再新增未登记的档位。
   lyric-white: "#ffffff"
@@ -245,12 +241,11 @@ nnplayer 的界面像一台放在书桌上的暖灯收音机：底色是晒过�
 - **Scrollbar Stone** (#bdae93) / **Thumb Paper** (#f9f5d7) / **Scrollbar Hover** (#7c6f64): 滚动条轨道、滑块与悬停态颜色。
 
 派生表面（由结构色计算，不新增色值，不要在别处重复定义）：
-- `--color-bg`: 播放时由封面染色，但染色色相先折叠进暖色窗口并向陶土拉近约 68%，纸面始终保持暖调（红 > 绿 > 蓝）且对正文对比度 ≥ 4.65:1。染色区间的深/浅两端（旧 `--color-bg-from` / `--color-bg-to`，已不再单独绘制）仍参与强调色的对比度下限推导，保证任何染色结果都可读。
-- `--color-canvas`: `color-mix(in srgb, var(--color-bg) var(--color-canvas-weight), var(--color-canvas-neutral))`（36% 纸色 + 64% `canvas-neutral`）—— 应用最外层偏冷一档的纸灰，给内容区一点景深。中性色与权重只在 styles.css 声明一次，`themeTokens.ts` 复刻同一组值做对比度推导，测试同时断言两边一致。
+- `--color-bg`: 播放时由封面染色，但染色色相先折叠进暖色窗口并向陶土拉近约 68%，纸面始终保持暖调（红 > 绿 > 蓝）且对正文对比度 ≥ 4.65:1。它同时是窗口、侧栏与内容面的唯一纸底：封面换色时整窗（含侧栏轨道）一起变色。染色区间的深/浅两端（旧 `--color-bg-from` / `--color-bg-to`，已不再单独绘制）仍参与强调色的对比度下限推导，保证任何染色结果都可读；侧栏（surface-soft 叠纸色）也参与正文与强调色的下限循环。
 - `--color-glass`: `color-mix(in srgb, var(--color-bg) 94%, transparent)` —— 半透明纸面，用于需要透出底色的浮层。
 - `--color-raised`: `color-mix(in srgb, var(--color-card) 42%, #fff)` —— 即上文的 Raised Paper。
 - `--color-glow`: 暖色光晕（陶土-琥珀家族，来自收敛后的强调色），默认 14% 透明度，播放时升到 22%。
-- `--color-accent-on-subtle`: 强调色文字叠在 `accent-subtle` 洗色上时的专用色（激活导航文字、队列“播放中/已暂停”徽标）。由强调色保持色相/饱和度、压暗明度得到，不换成正文墨色；对侧栏（surface-soft 叠 canvas）、窄窗侧栏浮层（纸色）与队列双层洗色三种真实合成底的对比度均 ≥ 4.6:1（实现按 4.65:1 推导，留渲染余量）。
+- `--color-accent-on-subtle`: 强调色文字叠在 `accent-subtle` 洗色上时的专用色（激活导航文字、队列“播放中/已暂停”徽标）。由强调色保持色相/饱和度、压暗明度得到，不换成正文墨色；对侧栏（surface-soft 叠纸色）、窄窗侧栏浮层（纸色）与队列双层洗色三种真实合成底的对比度均 ≥ 4.6:1（实现按 4.65:1 推导，留渲染余量）。
 
 **The Paper-First Rule.** 所有界面表面必须是浅纸，且必须是暖纸（封面染色后仍保持红 > 绿 > 蓝）；不允许整块深色面板，也不做深色模式（唯一例外是桌面歌词的半透明深色文字底板，见 Components）。深度只能通过纸的明度、墨的透明度和暖灰阴影产生，不能通过换到黑底。
 
