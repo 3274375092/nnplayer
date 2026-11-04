@@ -15,6 +15,7 @@ import {
 } from "@lucide/vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isUnsupportedPlatformError } from "@/utils/updateErrors";
 
 const props = defineProps<{
   open: boolean;
@@ -30,7 +31,13 @@ const FALLBACK_VERSION = __APP_VERSION__;
 const REPO_URL = "https://github.com/3274375092/nnplayer";
 const RELEASES_URL = `${REPO_URL}/releases/latest`;
 
-type UpdateStatus = "idle" | "checking" | "latest" | "available" | "error";
+type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "latest"
+  | "available"
+  | "unsupported"
+  | "error";
 
 const SHORTCUTS = [
   { label: "播放 / 暂停", keys: ["Ctrl", "Alt", "P"] },
@@ -58,14 +65,26 @@ const updateSummary = computed(() => {
       return `已是最新版本（v${version.value}）`;
     case "available":
       return `发现新版本 v${latestVersion.value}（当前 v${version.value}）`;
+    case "unsupported":
+      return "当前平台不在更新清单中，请前往发布页查看最新版本。";
     case "error":
-      return "检查更新失败，请稍后重新检查。";
+      return "检查更新失败，请稍后重试，或前往发布页查看最新版本。";
     default:
       return "还没有检查更新。";
   }
 });
 
 const checkingUpdate = computed(() => updateStatus.value === "checking");
+/** 失败类状态：通用错误与「当前平台未列入清单」共用一个发布页兜底入口。 */
+const updateFailed = computed(
+  () => updateStatus.value === "error" || updateStatus.value === "unsupported",
+);
+const showReleaseAction = computed(
+  () => updateStatus.value === "available" || updateFailed.value,
+);
+const releaseActionLabel = computed(() =>
+  updateStatus.value === "available" ? "打开发布页" : "查看发布页",
+);
 /** 已有检查结果后按钮改为「重新检查」，避免重复同一个动作却看不出状态。 */
 const checkButtonLabel = computed(() =>
   checkingUpdate.value
@@ -105,7 +124,8 @@ async function checkUpdates() {
     updateStatus.value = "available";
   } catch (e) {
     console.warn("[about] 检查更新失败", e);
-    updateStatus.value = "error";
+    // 平台条目缺失不是网络抖动：重试不会改变结果，文案与入口都要区分。
+    updateStatus.value = isUnsupportedPlatformError(e) ? "unsupported" : "error";
   }
 }
 
@@ -276,7 +296,7 @@ onBeforeUnmount(() => {
                 <p
                   class="about-update-status"
                   :class="{
-                    'about-update-status--error': updateStatus === 'error',
+                    'about-update-status--error': updateFailed,
                     'about-update-status--available': updateStatus === 'available',
                   }"
                   role="status"
@@ -316,13 +336,17 @@ onBeforeUnmount(() => {
                     {{ checkButtonLabel }}
                   </button>
                   <button
-                    v-if="updateStatus === 'available'"
+                    v-if="showReleaseAction"
                     type="button"
-                    class="btn btn-primary about-action"
+                    :class="[
+                      'btn',
+                      'about-action',
+                      updateStatus === 'available' ? 'btn-primary' : 'btn-ghost',
+                    ]"
                     :title="`在浏览器中打开 ${RELEASES_URL}`"
                     @click="openExternal(RELEASES_URL)"
                   >
-                    打开发布页
+                    {{ releaseActionLabel }}
                     <ExternalLink
                       :size="13"
                       :stroke-width="2"

@@ -46,6 +46,9 @@ jobs:
       - name: Test theme token contrast
         run: pnpm test:theme
 
+      - name: Test updater manifest and error mapping
+        run: pnpm test:updater
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
