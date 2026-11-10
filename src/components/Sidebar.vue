@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isTauri } from "@tauri-apps/api/core";
 import {
@@ -20,8 +28,14 @@ import { useUserStore } from "@/stores/user";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
 import { useNoticeStore } from "@/stores/notice";
 import { describeAppError } from "@/utils/appErrors";
-import AboutDialog from "@/components/AboutDialog.vue";
-import QueueDrawer from "@/components/QueueDrawer.vue";
+// 关于弹层与队列抽屉是交互后才用到的重组件：异步加载让首屏 JS 只负责
+// 主界面，两个组件的解析/执行推迟到首帧之后（Tauri 下 chunk 从本地资源加载）。
+const AboutDialog = defineAsyncComponent(
+  () => import("@/components/AboutDialog.vue"),
+);
+const QueueDrawer = defineAsyncComponent(
+  () => import("@/components/QueueDrawer.vue"),
+);
 
 const router = useRouter();
 const route = useRoute();
@@ -509,12 +523,32 @@ function onModalKeydown(e: KeyboardEvent) {
   );
 }
 
-const queueDrawerRef = ref<InstanceType<typeof QueueDrawer> | null>(null);
+interface QueueDrawerHandle {
+  open: () => void;
+  close: () => void;
+}
+const queueDrawerRef = ref<QueueDrawerHandle | null>(null);
 function openQueue() {
   // 浮层与队列抽屉都是 modal：先收起浮层，避免两套焦点圈叠加。
   // restoreFocus=false：焦点交给刚打开的队列抽屉，别被抢回展开按钮。
   if (narrowExpanded.value) closeNarrowOverlay(false);
-  queueDrawerRef.value?.open();
+  const drawer = queueDrawerRef.value;
+  if (drawer) {
+    drawer.open();
+    return;
+  }
+  // 异步组件尚未挂载完成（极早期点击）：等 chunk 就绪并挂载后再打开，
+  // 不让首次点击落空。
+  void import("@/components/QueueDrawer.vue")
+    .then(async () => {
+      await nextTick();
+      queueDrawerRef.value?.open();
+    })
+    .catch((e) => {
+      // chunk 加载失败时这次点击无法打开抽屉；异步组件自身会按错误态不渲染，
+      // 这里只吞掉额外动态 import 的未处理拒绝，避免控制台 unhandled rejection。
+      console.warn("[sidebar] 队列抽屉加载失败", e);
+    });
 }
 async function openDesktopLyrics() {
   if (narrowExpanded.value) closeNarrowOverlay(false);

@@ -43,6 +43,9 @@ function playbackFailure(overrides = {}) {
     message: "",
     failCount: 1,
     stopped: false,
+    // 默认未跳歌、未自动重试：文案只有在显式声明跳歌时才允许说「已自动跳到下一首」。
+    advancedToNext: false,
+    retryCount: 0,
     recentSongNames: [],
     wasPlaying: true,
     ...overrides,
@@ -71,6 +74,97 @@ test("Ncm kind：接口暂时不可用，不直接展示后端原文", () => {
   // 用户可见标题不包含后端前缀。
   assert.doesNotMatch(described.title, /NCM API|Ncm/);
   assert.match(described.detail, /NCM API 错误: 503/);
+});
+
+test("RiskControl kind：风控说成「限制了请求」，可重试且不引导重新登录", () => {
+  const message =
+    "网易云限制了请求（风控）: 检测到您的网络环境存在风险，请稍后再试";
+  const described = describeAppError(backendError("RiskControl", message));
+  assert.equal(described.category, "api");
+  assert.equal(described.title, "网易云暂时限制了请求");
+  // 通用语境（页内错误也会复用）不说播放叙事。
+  assert.equal(
+    described.hint,
+    "网易云暂时拦截了这次请求；稍等几秒后重试通常可恢复。",
+  );
+  assert.doesNotMatch(described.hint, /已暂停自动切歌|播放已停|已自动跳到下一首/);
+  assert.equal(described.retryable, true);
+  assert.equal(described.relogin, false);
+  // 后端原文只进技术详情，标题里不出现「NCM API 错误」之类前缀。
+  assert.doesNotMatch(described.title, /NCM API|RiskControl/);
+  assert.match(described.detail, /RiskControl/);
+  assert.match(described.detail, /网络环境存在风险/);
+});
+
+test("无 kind 的风控原文：-460 / 网络环境存在风险不被误报成网络连接失败", () => {
+  // 「网络环境存在风险」含「网络」，必须在网络关键词之前识别为风控。
+  const described = describeAppError(
+    "NCM API 错误: 风控校验失败 (code=-460): 检测到您的网络环境存在风险，请稍后再试",
+  );
+  assert.equal(described.category, "api");
+  assert.equal(described.title, "网易云暂时限制了请求");
+  assert.match(described.detail, /-460/);
+
+  const plain = describeAppError("检测到您的网络环境存在风险，请稍后再试");
+  assert.equal(plain.category, "api");
+  assert.equal(plain.title, "网易云暂时限制了请求");
+});
+
+test("通用「请稍后再试」不抢其他分类：风控只认专属措辞与完整业务码", () => {
+  // 「请稍后再试」是限流/维护/校验失败的通用话术，不能单独触发「网易云限制了请求」。
+  const network = describeAppError("网络请求失败: 请求超时，请稍后再试");
+  assert.equal(network.category, "network");
+  assert.equal(network.title, "网络连接失败");
+
+  const invalid = describeAppError("参数无效: 手机号格式不正确，请稍后再试");
+  assert.equal(invalid.category, "input");
+  assert.equal(invalid.title, "填写的内容不符合要求");
+
+  const ncm = describeAppError("NCM API 错误: 服务繁忙，请稍后再试 (code=503)");
+  assert.equal(ncm.title, "音乐服务暂时不可用");
+
+  // 形似风控业务码的其他数字（-4600/-4601）不是 -460。
+  const otherCode = describeAppError(
+    "NCM API 错误: 请求失败 (code=-4600)",
+  );
+  assert.notEqual(otherCode.title, "网易云暂时限制了请求");
+  assert.equal(otherCode.title, "音乐服务暂时不可用");
+});
+
+test("风控口径拆分：页内错误不含播放叙事，播放失败通报才补「已暂停自动切歌」", () => {
+  const pageError = describeAppError(
+    backendError(
+      "RiskControl",
+      "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+    ),
+  );
+  assert.equal(
+    pageError.hint,
+    "网易云暂时拦截了这次请求；稍等几秒后重试通常可恢复。",
+  );
+  assert.doesNotMatch(pageError.hint, /已暂停自动切歌|播放已停|已自动跳到下一首/);
+
+  const playbackCopy = describePlaybackFailure(
+    playbackFailure({
+      kind: "RiskControl",
+      message: "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+      advancedToNext: false,
+    }),
+  );
+  assert.match(playbackCopy.hint, /已暂停自动切歌，避免连续失败。/);
+});
+
+test("Timeout 内部 kind：本地加载超时说成「加载超时」且可重试", () => {
+  const described = describeAppError(
+    backendError("Timeout", "获取播放地址超时（20 秒）"),
+  );
+  assert.equal(described.category, "network");
+  assert.equal(described.title, "加载超时");
+  assert.match(described.hint, /超时/);
+  assert.match(described.hint, /重试/);
+  assert.equal(described.retryable, true);
+  assert.equal(described.relogin, false);
+  assert.match(described.detail, /获取播放地址超时/);
 });
 
 test("Json kind：解析失败归为数据问题且可重试", () => {
@@ -271,6 +365,7 @@ test("播放装载失败：标题带歌名 + 原因类别，并说明已自动�
     playbackFailure({
       kind: "Network",
       message: "网络请求失败: 连接被拒绝",
+      advancedToNext: true,
     }),
   );
   assert.equal(described.title, "《晴天》播放失败：网络连接失败");
@@ -364,4 +459,115 @@ test("未知播放失败：不猜测原因，归为未知且保留详情", () =>
   );
   assert.equal(described.title, "《晴天》播放失败：操作没有完成");
   assert.equal(described.detail, "某个底层异常");
+});
+
+test("未自动跳歌（advancedToNext=false）：如实说播放停在当前歌曲，不谎称已跳歌", () => {
+  // 真实复现：超清母带触发 -460 风控，旧文案谎称「已自动跳到下一首」。
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "RiskControl",
+      message:
+        "网易云限制了请求（风控）: 检测到您的网络环境存在风险，请稍后再试",
+      advancedToNext: false,
+      retryCount: 1,
+    }),
+  );
+  assert.equal(described.title, "《晴天》播放失败：网易云暂时限制了请求");
+  // 播放语境才补「已暂停自动切歌」；随后接通用风控提示与重试次数。
+  assert.equal(
+    described.hint,
+    "播放已停在当前歌曲。已暂停自动切歌，避免连续失败。" +
+      "网易云暂时拦截了这次请求；稍等几秒后重试通常可恢复。（已自动重试 1 次）",
+  );
+  assert.doesNotMatch(described.hint, /已自动跳到下一首/);
+  assert.equal(described.retryable, true);
+  assert.equal(described.relogin, false);
+  assert.match(described.detail, /网络环境存在风险/);
+});
+
+test("自动跳歌（advancedToNext=true）才说「已自动跳到下一首」", () => {
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "Media",
+      message: "媒体解码失败（MEDIA_ERR_DECODE）",
+      advancedToNext: true,
+    }),
+  );
+  assert.match(described.hint, /^已自动跳到下一首。/);
+});
+
+test("retryCount>0：hint 写明引擎已自动重试的次数", () => {
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "Network",
+      message: "网络请求失败: 连接被重置",
+      advancedToNext: true,
+      retryCount: 2,
+    }),
+  );
+  assert.match(described.hint, /^已自动跳到下一首。/);
+  assert.match(described.hint, /（已自动重试 2 次）/);
+});
+
+test("未自动跳歌时重试次数同样可见（风控等不切歌的失败）", () => {
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "RiskControl",
+      message: "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+      advancedToNext: false,
+      retryCount: 1,
+    }),
+  );
+  assert.match(described.hint, /（已自动重试 1 次）/);
+  assert.doesNotMatch(described.hint, /已自动跳到下一首/);
+});
+
+test("Timeout 的播放失败：标题带歌名 + 加载超时，可重试", () => {
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "Timeout",
+      message: "获取播放地址超时（20 秒）",
+      advancedToNext: false,
+    }),
+  );
+  assert.equal(described.category, "network");
+  assert.equal(described.title, "《晴天》播放失败：加载超时");
+  assert.match(described.hint, /^播放已停在当前歌曲。/);
+  // 「已暂停自动切歌」只属于风控的播放叙事，其他 kind 保持现状。
+  assert.doesNotMatch(described.hint, /已暂停自动切歌/);
+  assert.match(described.hint, /重试会重新加载/);
+  assert.equal(described.retryable, true);
+});
+
+test("停止汇总 / 切档失败旧语义不回归：都不声称已跳歌", () => {
+  const stopped = describePlaybackFailure(
+    playbackFailure({
+      kind: "RiskControl",
+      message: "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+      failCount: 3,
+      stopped: true,
+      advancedToNext: false,
+      retryCount: 1,
+      recentSongNames: ["A", "B", "B"],
+    }),
+  );
+  assert.equal(stopped.title, "连续 3 次播放失败，已停止自动切换");
+  assert.match(stopped.hint, /^失败歌曲：《A》、《B》。/);
+  assert.match(stopped.hint, /（最后一首已自动重试 1 次）/);
+  assert.doesNotMatch(stopped.hint, /已自动跳到下一首/);
+
+  const reload = describePlaybackFailure(
+    playbackFailure({
+      stage: "reload",
+      kind: "RiskControl",
+      message: "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+      advancedToNext: false,
+    }),
+  );
+  assert.equal(
+    reload.title,
+    "《晴天》切换音质失败：网易云暂时限制了请求",
+  );
+  assert.match(reload.hint, /^播放已停止。/);
+  assert.doesNotMatch(reload.hint, /已自动跳到下一首/);
 });

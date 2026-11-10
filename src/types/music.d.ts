@@ -76,6 +76,8 @@ export interface AuthState {
 }
 
 // 后端错误结构
+// kind 与 Rust AppError 的序列化类别一一对应（error.rs）；
+// 引擎内部类别（Media / NoSource / Timeout 等）不是后端 kind，不在此联合里。
 export interface AppErrorPayload {
   kind:
     | "Unauthorized"
@@ -85,7 +87,8 @@ export interface AppErrorPayload {
     | "Io"
     | "Store"
     | "InvalidParam"
-    | "Internal";
+    | "Internal"
+    | "RiskControl";
   message: string;
 }
 

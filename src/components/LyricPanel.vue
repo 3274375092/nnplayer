@@ -89,12 +89,70 @@ const visibleRange = computed(() =>
   getLyricRenderRange(lines.value.length, activeLineIndex.value)
 );
 
-const visibleLines = computed(() => {
+/** 行内容派生值：读屏文案与语言判定只随 lines 变化，避免每次渲染对每行
+ * 重复执行最多 4 个正则（langForLyric）与字符串拼接。 */
+const lineMeta = computed(() =>
+  lines.value.map((line) => ({
+    ariaLabel: lineAriaLabel(line.text, line.translation),
+    lang: langForLyric(line.text),
+    translationLang: line.translation
+      ? langForLyric(line.translation)
+      : undefined,
+  })),
+);
+
+/** 每行与当前行的视觉距离（0–3）：只随 activeLineIndex/lines 数量变化，模板 O(1) 取用。 */
+const lineDistances = computed(() => {
+  const current = activeLineIndex.value;
+  const count = lines.value.length;
+  const result = new Array<number>(count);
+  for (let index = 0; index < count; index += 1) {
+    result[index] =
+      current < 0 ? 3 : Math.min(3, Math.abs(index - current));
+  }
+  return result;
+});
+
+interface LyricRow {
+  idx: number;
+  time: number;
+  text: string | undefined;
+  translation: string | undefined;
+  ariaLabel: string;
+  lang: string | undefined;
+  translationLang: string | undefined;
+  distance: number;
+  isActive: boolean;
+  tabIndex: number;
+}
+
+/** 模板行数据：把每行的 class/aria/tabindex 计算集中一次，避免模板里
+ * 每行重复调用多个函数（切歌时 120 行 × 多次调用的开销不可忽视）。 */
+const visibleRows = computed<LyricRow[]>(() => {
   const { start, end } = visibleRange.value;
-  return lines.value.slice(start, end).map((line, offset) => ({
-    line,
-    index: start + offset,
-  }));
+  const current = activeLineIndex.value;
+  const meta = lineMeta.value;
+  const distances = lineDistances.value;
+  const rows: LyricRow[] = [];
+  for (let idx = start; idx < end; idx += 1) {
+    const line = lines.value[idx];
+    const lineInfo = meta[idx];
+    if (!line || !lineInfo) continue;
+    const isActive = idx === current;
+    rows.push({
+      idx,
+      time: line.time,
+      text: line.text,
+      translation: line.translation,
+      ariaLabel: lineInfo.ariaLabel,
+      lang: lineInfo.lang,
+      translationLang: lineInfo.translationLang,
+      distance: distances[idx] ?? 3,
+      isActive,
+      tabIndex: Math.abs(idx - current) <= 2 ? 0 : -1,
+    });
+  }
+  return rows;
 });
 
 const heightPrefix = computed(() =>
@@ -140,6 +198,22 @@ function setLineRef(el: Element | { $el?: Element } | null, idx: number) {
     lineHeights.value[idx] = firstHeight;
   }
   ro?.observe(target);
+}
+
+/** 稳定的行 ref 回调：内联箭头会让 Vue 每次 patch 都为每行解绑/重绑 ref，
+ * 切歌时放大成 120 次额外回调；按 idx 缓存闭包后 ref 身份稳定。 */
+const lineRefHandlers = new Map<
+  number,
+  (el: Element | { $el?: Element } | null) => void
+>();
+function lineRefHandler(index: number) {
+  const cached = lineRefHandlers.get(index);
+  if (cached) return cached;
+  const handler = (el: Element | { $el?: Element } | null) => {
+    setLineRef(el, index);
+  };
+  lineRefHandlers.set(index, handler);
+  return handler;
 }
 
 function measureAll() {
@@ -208,6 +282,10 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  if (firstContentFallbackTimer !== null) {
+    clearTimeout(firstContentFallbackTimer);
+    firstContentFallbackTimer = null;
+  }
   ro?.disconnect();
   ro = null;
   releaseRealtimeUpdates?.();
@@ -334,13 +412,6 @@ watch(
 // 合成层里）；DESIGN 的层级本来就由 distance-1/2/3 的墨色阶梯承担，模糊是多余的
 // 第二套深度机制。
 
-// 仅用于视觉层级：把距离封顶在 3，避免远端歌词在换行时反复更新 DOM。
-function visualDistanceFor(idx: number): number {
-  const cur = activeLineIndex.value;
-  if (cur < 0) return 3;
-  return Math.min(3, Math.abs(idx - cur));
-}
-
 const karaokeFrameProjector = createKaraokeFrameProjector();
 // 卡拉OK擦色 30fps 节流：文字擦除在 30fps 与 60fps 下无肉眼差异，
 // 但能把逐字样式重算/重绘次数减半（逐字 clip/渐变是歌词渲染的大头）。
@@ -431,6 +502,49 @@ function lineAriaLabel(
 }
 
 const hasSong = computed(() => player.currentSong !== null);
+
+// 首播时媒体管线启动与 120 行歌词挂载会竞争主线程，拉长 time-to-first-sound。
+// 第一次拿到歌词时先保持「正在加载歌词…」，等播放真正开始（或 800ms 兜底）
+// 再挂载歌词内容；只延迟这一次，后续切歌由歌词预取保证即时换行。
+// 面板可能是在播放中途才挂载的（切页、暂停后回到正在播放页）：此时首声早已
+// 开始、也不会有 playing 变化事件，必须直接用当前播放进度开闸，否则每次挂载
+// 都会多显示 800ms 的假「正在加载歌词…」。
+const hasShownLyricContent = ref(
+  player.audioState.playing || player.audioState.currentTime > 0,
+);
+const firstContentFallback = ref(false);
+let firstContentFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+watch(
+  hasLyric,
+  (ready) => {
+    if (!ready || hasShownLyricContent.value || firstContentFallbackTimer) {
+      return;
+    }
+    firstContentFallbackTimer = setTimeout(() => {
+      firstContentFallbackTimer = null;
+      firstContentFallback.value = true;
+      hasShownLyricContent.value = true;
+    }, 800);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => player.audioState.playing,
+  (playing) => {
+    if (playing && !hasShownLyricContent.value) {
+      hasShownLyricContent.value = true;
+    }
+  },
+);
+
+const firstContentPending = computed(
+  () =>
+    hasLyric.value &&
+    !hasShownLyricContent.value &&
+    !firstContentFallback.value,
+);
 </script>
 
 <template>
@@ -487,6 +601,14 @@ const hasSong = computed(() => player.currentSong !== null);
       </details>
     </div>
     <div
+      v-else-if="firstContentPending"
+      class="flex items-center justify-center text-text-secondary text-sm"
+      :style="{ height: `${lyricViewportHeight}px` }"
+      role="status"
+    >
+      正在加载歌词…
+    </div>
+    <div
       v-else-if="!hasLyric"
       class="lyric-empty"
       :style="{ height: `${lyricViewportHeight}px` }"
@@ -513,41 +635,46 @@ const hasSong = computed(() => player.currentSong !== null);
           class="lyric-virtual-spacer"
           :style="{ height: `${virtualPadding.top}px` }"
         />
+        <!-- key 固定为行下标（切歌时复用 DOM），因此 v-memo 必须覆盖所有随行
+             内容变化的字段：漏掉 time/tabIndex 会命中旧缓存、跳过 patch，留下
+             上一首的点击时间（点远端歌词跳到错误位置）与旧 tabindex。 -->
         <button
-          v-for="{ line, index: idx } in visibleLines"
-          :key="`${line.time}-${idx}`"
+          v-for="row in visibleRows"
+          :key="row.idx"
           v-memo="[
-            line.text,
-            line.translation,
-            idx === activeLineIndex,
-            visualDistanceFor(idx),
-            idx === activeLineIndex ? karaokeProgressMs : 0,
+            row.text,
+            row.translation,
+            row.time,
+            row.isActive,
+            row.distance,
+            row.tabIndex,
+            row.isActive ? karaokeProgressMs : 0,
           ]"
-          :ref="(el) => setLineRef(el, idx)"
-          :data-lyric-index="idx"
+          :ref="lineRefHandler(row.idx)"
+          :data-lyric-index="row.idx"
           type="button"
-          :tabindex="Math.abs(idx - activeLineIndex) <= 2 ? 0 : -1"
+          :tabindex="row.tabIndex"
           class="lyric-line px-2 cursor-pointer"
           :class="[
-            `distance-${visualDistanceFor(idx)}`,
+            `distance-${row.distance}`,
             {
-              'is-active': idx === activeLineIndex,
-              'has-karaoke': idx === activeLineIndex && renderedKaraokeFrame.tokens.length > 0,
+              'is-active': row.isActive,
+              'has-karaoke': row.isActive && renderedKaraokeFrame.tokens.length > 0,
             },
           ]"
-          :aria-current="idx === activeLineIndex ? 'true' : undefined"
-          :aria-label="lineAriaLabel(line.text, line.translation)"
-          :lang="langForLyric(line.text)"
-          @click="onLineClick(line.time)"
+          :aria-current="row.isActive ? 'true' : undefined"
+          :aria-label="row.ariaLabel"
+          :lang="row.lang"
+          @click="onLineClick(row.time)"
         >
           <!-- 当前行：每字符单 span + background-clip:text 渐变擦色（替代双层 clip-path，光栅成本减半）。
                分组渲染：西文词包一层不可断的词级 wrapper（英文不断词），CJK 单字照常按字换行，
                空白作为普通文本空格提供词间断点。 -->
-          <template v-if="idx === activeLineIndex && renderedKaraokeFrame.tokens.length > 0">
+          <template v-if="row.isActive && renderedKaraokeFrame.tokens.length > 0">
             <span
               class="lyric-karaoke"
               dir="auto"
-              :lang="langForLyric(line.text)"
+              :lang="row.lang"
               aria-hidden="true"
             >
               <template v-for="(group, gi) in karaokeWordGroups" :key="gi">
@@ -573,17 +700,17 @@ const hasSong = computed(() => player.currentSong !== null);
                 </template>
               </template>
             </span>
-            <span class="sr-only" :lang="langForLyric(line.text)">{{ line.text }}</span>
+            <span class="sr-only" :lang="row.lang">{{ row.text }}</span>
           </template>
-          <span v-else-if="line.text" :lang="langForLyric(line.text)">{{ line.text }}</span>
+          <span v-else-if="row.text" :lang="row.lang">{{ row.text }}</span>
           <span v-else>·</span>
           <!-- 翻译：当前行及邻近行显示，小字号半透明 -->
           <span
-            v-if="line.translation"
+            v-if="row.translation"
             class="lyric-translation"
-            :class="{ 'is-active-translation': idx === activeLineIndex }"
-            :lang="langForLyric(line.translation)"
-          >{{ line.translation }}</span>
+            :class="{ 'is-active-translation': row.isActive }"
+            :lang="row.translationLang"
+          >{{ row.translation }}</span>
         </button>
         <div
           v-if="isVirtual"

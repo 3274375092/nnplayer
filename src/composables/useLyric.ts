@@ -46,6 +46,7 @@ import {
   alignLyricTimelines,
   areLyricTextsEquivalent,
 } from "@/utils/lyricTiming";
+import { getNextLyricPrefetchSongId } from "@/lyrics/lyricPrefetch";
 
 let performanceMeasureId = 0;
 
@@ -533,6 +534,40 @@ function createLyricEngine(): UseLyricReturn {
     seekRevision: () => player.audioState.seekRevision,
     playbackRate: () => mediaPlaybackRate.value,
   });
+
+  /**
+   * 顺序播放时预取下一首歌词时间轴。切歌命中缓存后走 loadFor 的缓存分支：
+   * 不再清空列表/进入加载态，歌词行 DOM 可复用（patch）而不是卸载重挂载，
+   * 这正是切歌瞬间歌词面板 10–20ms 长帧的主要来源。
+   */
+  function prefetchNextLyricTimeline() {
+    const songId = getNextLyricPrefetchSongId({
+      playMode: player.playMode,
+      queue: player.queue,
+      index: player.index,
+      currentSongId: player.audioState.currentSongId,
+    });
+    if (songId === null) return;
+    // 预取失败不影响主流程：真正切歌时会走正常加载与自动重试。
+    void resolveTimeline(songId).catch(() => {
+      // 静默：预取只是优化，不向用户暴露。
+    });
+  }
+
+  // 播放中队列/播放模式变化时预热下一首歌词；暂停时不额外请求上游。
+  watch(
+    () => [
+      player.audioState.playing,
+      player.index,
+      player.queue,
+      player.playMode,
+    ] as const,
+    () => {
+      if (!player.audioState.playing) return;
+      prefetchNextLyricTimeline();
+    },
+    { flush: "post" },
+  );
 
   const onVisibilityChange = () => {
     syncClockFromMedia();

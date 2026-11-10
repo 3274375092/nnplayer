@@ -113,6 +113,25 @@ const MEDIA_COPY: ErrorCopy = {
   relogin: false,
 };
 
+const RISK_CONTROL_COPY: ErrorCopy = {
+  category: "api",
+  title: "网易云暂时限制了请求",
+  // 通用语境（页内错误、全局提示都可能复用）：不含播放叙事，播放语境由
+  // describePlaybackFailure 另行补「已暂停自动切歌」。
+  hint: "网易云暂时拦截了这次请求；稍等几秒后重试通常可恢复。",
+  retryable: true,
+  relogin: false,
+};
+
+/** 引擎内部 kind（本地取址/媒体起播超时），不是后端 error kind。 */
+const TIMEOUT_COPY: ErrorCopy = {
+  category: "network",
+  title: "加载超时",
+  hint: "网络较慢或音频响应超时；重试会重新加载。",
+  retryable: true,
+  relogin: false,
+};
+
 const UNKNOWN_COPY: ErrorCopy = {
   category: "unknown",
   title: "操作没有完成",
@@ -121,13 +140,18 @@ const UNKNOWN_COPY: ErrorCopy = {
   relogin: false,
 };
 
-/** 后端 kind → 用户语言；与 error.rs 的 8 个 kind 一一对应，另加播放链路分类。 */
+/** 后端 kind → 用户语言；与 error.rs 的 9 个 kind 一一对应，另加播放链路分类。 */
 function copyForKind(kind: string | null): ErrorCopy {
   switch (kind) {
     case "Network":
       return NETWORK_COPY;
     case "Ncm":
       return API_COPY;
+    case "RiskControl":
+      return RISK_CONTROL_COPY;
+    // 引擎内部类别：本地取址/媒体起播超时，不是后端 kind。
+    case "Timeout":
+      return TIMEOUT_COPY;
     case "Json":
       return JSON_COPY;
     case "Unauthorized":
@@ -166,6 +190,17 @@ const MESSAGE_PREFIXES: ReadonlyArray<{
 /** 没有 kind 时按报错原文推断类别；推断不出来就是 null（走未知文案）。 */
 function inferKindFromMessage(message: string): string | null {
   if (!message) return null;
+  // 风控（网易云 -460）的原文常含「网络环境存在风险」，还可能被包在
+  // 「NCM API 错误」「网络请求失败」等通用前缀里。必须在通用前缀与「网络」
+  // 关键词之前判定，否则真正的风控会被说成网络失败或通用接口错误。
+  // 但只认风控专属措辞：通用「请稍后再试」在限流、维护、参数校验失败里都常见，
+  // 单靠它会把普通错误说成「网易云限制了请求」，给出的恢复动作也就对不上。
+  // 业务码按整词匹配，避免把 -4600、-4601 之类的其他码误当成 -460。
+  if (
+    /(?:^|\D)-460(?!\d)|风控|风险控制|网络环境存在风险|限制了请求/.test(message)
+  ) {
+    return "RiskControl";
+  }
   for (const { prefix, kind } of MESSAGE_PREFIXES) {
     if (message.includes(prefix)) return kind;
   }
@@ -404,10 +439,14 @@ export function describeLoginError(
 /**
  * 播放失败（装载失败 / 流中断 / 切档重载失败）的用户语言汇总。
  *
- * 引擎在未达到上限时会自动切到下一首（见 recoverFromPlaybackFailure），
- * 单曲失败文案必须把这件事说出来，否则用户会以为播放停在这里。
- * 连续失败达到上限时不再展示单曲标题，而给出「连续 N 次失败、已停止
- * 自动切换」的汇总，并去重列出失败歌曲名，保证停止原因可见。
+ * 引擎通报的是事实（见 PlaybackFailure）：
+ *   - advancedToNext：失败后是否真的切到了下一首。只有为 true 才能说
+ *     「已自动跳到下一首」；风控/网络/超时等会话级问题会让播放停在失败
+ *     歌曲上，此时必须如实说「播放已停在当前歌曲」。
+ *   - retryCount：通报前引擎已对同一首歌自动重试的次数，要在 hint 里说明，
+ *     否则用户会以为第一次就失败。
+ *   - stopped：连续失败达到上限、已停止自动切换；保留「连续 N 次」汇总并
+ *     去重歌曲名，不再把最后一首当单曲失败。
  */
 export function describePlaybackFailure(
   failure: PlaybackFailure,
@@ -419,15 +458,25 @@ export function describePlaybackFailure(
       ? buildError(MEDIA_COPY, base.detail)
       : base;
 
+  /** 自动重试是已经发生的事实，附在恢复建议末尾。 */
+  const retryNote =
+    failure.retryCount > 0 ? `（已自动重试 ${failure.retryCount} 次）` : "";
+  /** 汇总通报跨多首歌：retryCount 只属于最后一首，不能读成累计重试数。 */
+  const lastSongRetryNote =
+    failure.retryCount > 0
+      ? `（最后一首已自动重试 ${failure.retryCount} 次）`
+      : "";
+
   if (failure.stopped) {
     // 单曲循环时同一首会被反复重试，按次计数并去重，避免《X》、《X》、《X》。
     const names = [...new Set(failure.recentSongNames)]
       .map((name) => `《${name}》`)
       .join("、");
+    const facts = names ? `失败歌曲：${names}。` : "";
     return {
       ...cause,
       title: `连续 ${failure.failCount} 次播放失败，已停止自动切换`,
-      hint: names ? `失败歌曲：${names}。${cause.hint}` : cause.hint,
+      hint: `${facts}${cause.hint}${lastSongRetryNote}`,
     };
   }
 
@@ -435,13 +484,23 @@ export function describePlaybackFailure(
     return {
       ...cause,
       title: `《${failure.songName}》切换音质失败：${cause.title}`,
-      hint: `播放已停止。${cause.hint}`,
+      hint: `播放已停止。${cause.hint}${retryNote}`,
     };
   }
 
+  // 只有引擎确实切到了下一首才说「已自动跳到下一首」；否则必须承认停住了，
+  // 用户才知道要重试/换歌，而不是在等一首永远不会开始的歌。
+  let stopNote = failure.advancedToNext
+    ? "已自动跳到下一首。"
+    : "播放已停在当前歌曲。";
+  // 风控失败不切歌是引擎的主动保护（避免连续失败），这是播放语境的事实；
+  // 通用的页内风控错误不含这句，由 RISK_CONTROL_COPY.hint 描述即可。
+  if (!failure.advancedToNext && failure.kind === "RiskControl") {
+    stopNote += "已暂停自动切歌，避免连续失败。";
+  }
   return {
     ...cause,
     title: `《${failure.songName}》播放失败：${cause.title}`,
-    hint: `已自动跳到下一首。${cause.hint}`,
+    hint: `${stopNote}${cause.hint}${retryNote}`,
   };
 }

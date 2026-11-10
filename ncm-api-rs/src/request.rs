@@ -93,6 +93,70 @@ pub struct ApiResponse {
     pub cookie: Vec<String>,
 }
 
+/// 从响应体提取上游业务码：整数或可解析为整数的字符串。
+///
+/// 不能只在 100..600 内取值：风控码 -460 也必须在错误分类时保真，
+/// 否则会被 `ApiResponse.status` 的合法性夹紧掩盖成 400。
+fn business_code(body: &Value) -> Option<i64> {
+    body.get("code").and_then(|code| {
+        code.as_i64()
+            .or_else(|| code.as_str().and_then(|raw| raw.parse().ok()))
+    })
+}
+
+/// 由上游业务码与 HTTP 状态码推导 `ApiResponse.status`。
+///
+/// 保持既有语义：201/302/400/502/800-803 视为 200，其余不在 100..600
+/// 的值夹紧到 400。错误分类使用 `business_code` 的原始值，不受夹紧影响。
+fn response_status(raw_code: Option<i64>, http_status: i64) -> i64 {
+    let mut status = raw_code.unwrap_or(http_status);
+    if SPECIAL_STATUS_CODES.contains(&status) {
+        status = 200;
+    }
+    if !(100..600).contains(&status) {
+        status = 400;
+    }
+    status
+}
+
+/// 响应完全没给错误文案时的兜底文本。
+const UNKNOWN_ERROR_MESSAGE: &str = "Unknown error";
+
+/// 读取非空字符串字段；空串与纯空白都视为“上游没给文案”。
+fn non_empty_message(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// 提取错误文案：网易云不同接口混用 `msg` 与 `message`。
+///
+/// 风控响应（-460）只带 `message` 字段，只读 `msg` 会把真实中文文案丢掉；
+/// 空串 / 纯空白的 `msg` 也不能遮住 `message` 里的真实文案。
+fn error_message(body: &Value) -> String {
+    non_empty_message(body.get("msg"))
+        .or_else(|| non_empty_message(body.get("message")))
+        .unwrap_or(UNKNOWN_ERROR_MESSAGE)
+        .to_string()
+}
+
+/// 把非 200 响应收敛为 [`NcmError`]。
+///
+/// 分类优先使用上游原始业务码（例如 -460）；只有 body 完全没有业务码时
+/// 才退回夹紧后的 `status`，让 301/400/503 等既有映射保持不变。
+fn error_from_response(status: i64, raw_code: Option<i64>, body: &Value) -> NcmError {
+    let code = raw_code.unwrap_or(status);
+    let mut message = error_message(body);
+    // 没有可用文案时按业务码决定兜底方式：
+    // - -460：留空交给上层用业务码兜底（不能把 `Unknown error` 当上游文案）；
+    // - 301：留空让 `from_api` 回落到「需要登录」默认文案；
+    // - 其它错误（500/400/503 等）：保留既有 `Unknown error` 兜底展示。
+    if message == UNKNOWN_ERROR_MESSAGE && (code == -460 || code == 301) {
+        message.clear();
+    }
+    NcmError::from_api(code, message)
+}
+
 /// API 客户端
 #[derive(Debug, Clone)]
 pub struct ApiClient {
@@ -459,23 +523,10 @@ impl ApiClient {
             serde_json::from_str(&text).unwrap_or(Value::String(text))
         };
 
-        let mut status = body
-            .get("code")
-            .and_then(|c| {
-                c.as_i64()
-                    .or_else(|| c.as_str().and_then(|s| s.parse().ok()))
-            })
-            .unwrap_or(status_code);
-
-        // 特殊状态码视为 200
-        if SPECIAL_STATUS_CODES.contains(&status) {
-            status = 200;
-        }
-
-        // 状态码范围检查
-        if !(100..600).contains(&status) {
-            status = 400;
-        }
+        // 原始业务码用于错误分类（-460 等风控码不能被夹紧成 400）；
+        // ApiResponse.status 仍保持“特殊码视为 200 + 100..600 夹紧”的既有语义。
+        let raw_code = business_code(&body);
+        let status = response_status(raw_code, status_code);
 
         let answer = ApiResponse {
             status,
@@ -486,13 +537,7 @@ impl ApiClient {
         if status == 200 {
             Ok(answer)
         } else {
-            let msg = answer
-                .body
-                .get("msg")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error")
-                .to_string();
-            Err(NcmError::from_api(status, msg))
+            Err(error_from_response(status, raw_code, &answer.body))
         }
     }
 }
@@ -517,5 +562,236 @@ mod crypto_default_tests {
             ENCRYPT,
             "APP_CONF.encrypt 为 true，未指定 crypto 时必须是 eapi"
         );
+    }
+}
+
+#[cfg(test)]
+mod error_classification_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn risk_control_body() -> Value {
+        json!({
+            "code": -460,
+            "message": "检测到您的网络环境存在风险，请稍后再试"
+        })
+    }
+
+    /// 按 `request()` 的真实分类链路把响应体收敛为错误。
+    fn error_for(body: &Value) -> NcmError {
+        let raw_code = business_code(body);
+        error_from_response(response_status(raw_code, 200), raw_code, body)
+    }
+
+    #[test]
+    fn business_code_reads_negative_integer() {
+        assert_eq!(business_code(&json!({ "code": -460 })), Some(-460));
+    }
+
+    #[test]
+    fn business_code_parses_numeric_string() {
+        assert_eq!(business_code(&json!({ "code": "-460" })), Some(-460));
+    }
+
+    #[test]
+    fn business_code_ignores_missing_null_and_non_numeric() {
+        assert_eq!(business_code(&json!({})), None);
+        assert_eq!(business_code(&json!({ "code": null })), None);
+        assert_eq!(business_code(&json!({ "code": "oops" })), None);
+    }
+
+    #[test]
+    fn error_message_prefers_msg_over_message() {
+        let body = json!({ "msg": "msg 文案", "message": "message 文案" });
+        assert_eq!(error_message(&body), "msg 文案");
+    }
+
+    /// 风控响应只带 `message` 字段，文案必须保真，不能丢成 Unknown error。
+    #[test]
+    fn error_message_falls_back_to_message() {
+        assert_eq!(
+            error_message(&risk_control_body()),
+            "检测到您的网络环境存在风险，请稍后再试"
+        );
+    }
+
+    #[test]
+    fn error_message_defaults_to_unknown() {
+        assert_eq!(error_message(&json!({ "code": -460 })), "Unknown error");
+        assert_eq!(
+            error_message(&json!({ "code": -460, "msg": "", "message": "   " })),
+            "Unknown error"
+        );
+    }
+
+    /// 空的 `msg` 不能遮住 `message`：风控文案只带 `message` 时必须保真。
+    #[test]
+    fn error_message_skips_blank_msg_and_uses_message() {
+        for blank in ["", "   "] {
+            let body = json!({
+                "code": -460,
+                "msg": blank,
+                "message": "检测到您的网络环境存在风险",
+            });
+            assert_eq!(error_message(&body), "检测到您的网络环境存在风险");
+        }
+    }
+
+    #[test]
+    fn response_status_clamps_risk_control_code_to_400() {
+        assert_eq!(response_status(Some(-460), 200), 400);
+    }
+
+    #[test]
+    fn response_status_keeps_legacy_special_codes_as_200() {
+        for code in [201, 302, 400, 502, 800, 801, 802, 803] {
+            assert_eq!(
+                response_status(Some(code), 200),
+                200,
+                "特殊码 {code} 必须视为 200"
+            );
+        }
+        // body 没有业务码时也按 HTTP 状态码走同一套特殊码语义。
+        assert_eq!(response_status(None, 502), 200);
+    }
+
+    #[test]
+    fn response_status_keeps_in_range_codes_and_http_fallback() {
+        assert_eq!(response_status(Some(301), 200), 301);
+        assert_eq!(response_status(Some(503), 200), 503);
+        assert_eq!(response_status(None, 500), 500);
+    }
+
+    /// 端到端（纯函数层）复现真实响应：HTTP 200 + code -460 + message。
+    #[test]
+    fn risk_control_response_classifies_as_risk_control() {
+        let body = risk_control_body();
+        let raw_code = business_code(&body);
+        let status = response_status(raw_code, 200);
+        let error = error_from_response(status, raw_code, &body);
+        match error {
+            NcmError::RiskControl { code, msg } => {
+                assert_eq!(code, -460);
+                assert_eq!(msg, "检测到您的网络环境存在风险，请稍后再试");
+            }
+            other => panic!("-460 必须映射为 RiskControl，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn response_without_business_code_keeps_existing_mapping() {
+        let body = json!({ "msg": "服务器开小差了" });
+        let raw_code = business_code(&body);
+        let status = response_status(raw_code, 500);
+        let error = error_from_response(status, raw_code, &body);
+        match error {
+            NcmError::Api { code, msg } => {
+                assert_eq!(code, 500);
+                assert_eq!(msg, "服务器开小差了");
+            }
+            other => panic!("无业务码的 HTTP 500 应映射为 Api，实际 {other:?}"),
+        }
+    }
+
+    /// -460 没有任何可用文案时 `msg` 必须留空：上层 `AppError::RiskControl` 会用
+    /// 业务码兜底，不能把 `Unknown error` 哨兵当上游文案展示给用户。
+    #[test]
+    fn risk_control_without_message_leaves_msg_empty_for_upper_layer() {
+        for body in [
+            json!({ "code": -460 }),
+            json!({ "code": -460, "msg": "" }),
+            json!({ "code": -460, "msg": "   ", "message": "  " }),
+        ] {
+            match error_for(&body) {
+                NcmError::RiskControl { code, msg } => {
+                    assert_eq!(code, -460);
+                    assert!(msg.is_empty(), "无文案时应留空交上层兜底，实际 msg={msg}");
+                }
+                other => panic!("-460 必须映射为 RiskControl，实际 {other:?}"),
+            }
+        }
+    }
+
+    /// 未知的越界业务码不再被夹成 400/InvalidParam：`ApiResponse.status` 仍按
+    /// 既有语义夹紧，但错误分类必须保真原始码，便于前端按业务码诊断。
+    #[test]
+    fn out_of_range_unknown_code_is_preserved_in_error() {
+        let body = json!({ "code": 10004, "msg": "未知业务码" });
+        let raw_code = business_code(&body);
+        assert_eq!(raw_code, Some(10004));
+        let status = response_status(raw_code, 200);
+        assert_eq!(status, 400, "status 仍按既有语义夹紧到 400");
+        match error_from_response(status, raw_code, &body) {
+            NcmError::Api { code, msg } => {
+                assert_eq!(code, 10004, "错误分类必须保真原始业务码");
+                assert_eq!(msg, "未知业务码");
+            }
+            other => panic!("未知越界码应保真为 Api，实际 {other:?}"),
+        }
+    }
+
+    // ── 无可用文案时的兜底：301 默认文案不能被 `Unknown error` 哨兵顶掉 ──
+
+    /// 301 没有任何可用文案时必须回落到 [`NcmError::from_api`] 的「需要登录」
+    /// 默认：`Unknown error` 只是内部哨兵，不能变成 AuthRequired 的文案。
+    #[test]
+    fn auth_required_without_usable_message_keeps_default_copy() {
+        for body in [
+            json!({ "code": 301 }),
+            json!({ "code": 301, "msg": "" }),
+            json!({ "code": 301, "msg": "   " }),
+            json!({ "code": 301, "message": "" }),
+        ] {
+            match error_for(&body) {
+                NcmError::AuthRequired(message) => {
+                    assert_eq!(message, "需要登录", "body={body}");
+                }
+                other => panic!("301 必须映射为 AuthRequired，实际 {other:?}"),
+            }
+        }
+    }
+
+    /// 空的 `msg` 不能遮住 `message`：301 也应优先使用真实上游文案。
+    #[test]
+    fn auth_required_uses_real_message_field_when_msg_blank() {
+        let body = json!({ "code": 301, "msg": "", "message": "登录状态失效" });
+        match error_for(&body) {
+            NcmError::AuthRequired(message) => assert_eq!(message, "登录状态失效"),
+            other => panic!("301 必须映射为 AuthRequired，实际 {other:?}"),
+        }
+    }
+
+    /// 只有 301/-460 在无文案时留空兜底；其它错误必须保持既有 `Unknown error`
+    /// 展示与分类，不能因为修复 301 而改变（500 无文案是既有行为基线）。
+    #[test]
+    fn missing_message_fallback_is_unchanged_for_non_auth_codes() {
+        match error_for(&json!({ "code": 500 })) {
+            NcmError::Api { code, msg } => {
+                assert_eq!(code, 500);
+                assert_eq!(msg, "Unknown error");
+            }
+            other => panic!("500 无文案应保留 Api/Unknown error，实际 {other:?}"),
+        }
+        match error_for(&json!({ "code": 400 })) {
+            NcmError::InvalidParam(msg) => assert_eq!(msg, "Unknown error"),
+            other => panic!("400 无文案应保留 InvalidParam/Unknown error，实际 {other:?}"),
+        }
+        match error_for(&json!({ "code": 503 })) {
+            NcmError::RateLimited(msg) => assert_eq!(msg, "Unknown error"),
+            other => panic!("503 无文案应保留 RateLimited/Unknown error，实际 {other:?}"),
+        }
+    }
+
+    /// 非空上游文案（400/503）必须原样保留，不能被兜底逻辑改写。
+    #[test]
+    fn non_blank_message_is_preserved_for_invalid_param_and_rate_limit() {
+        match error_for(&json!({ "code": 400, "msg": "参数错误" })) {
+            NcmError::InvalidParam(msg) => assert_eq!(msg, "参数错误"),
+            other => panic!("400 非空文案必须保留，实际 {other:?}"),
+        }
+        match error_for(&json!({ "code": 503, "msg": "请求过频" })) {
+            NcmError::RateLimited(msg) => assert_eq!(msg, "请求过频"),
+            other => panic!("503 非空文案必须保留，实际 {other:?}"),
+        }
     }
 }

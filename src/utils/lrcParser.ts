@@ -219,7 +219,32 @@ const GraphemeSegmenter = (
  *  解析时间（实测 200 行 YRC：21.9ms → 9ms 量级）；输出与逐次构造一致。 */
 let graphemeSegmenter: GraphemeSegmenterLike | null = null;
 
+/**
+ * 快速路径白名单：白名单里的码点都不会与前/后码点组成更长的字素簇，因此逐码点
+ * 切分与 Intl.Segmenter 完全等价。绝大多数码点的 Grapheme_Cluster_Break 是
+ * Other；两个例外也能单码点独立成簇：U+00AD 软连字符（Cf，按 Control 处理）、
+ * 预组合谚文音节 U+AC00–D7A3（GCB = LV/LVT，只有后接谚文 V/T 字母时才会合并，
+ * 而 L/V/T 字母不在白名单里）。
+ *   - ASCII 可打印字符；
+ *   - 预组合拉丁字母、希腊/西里尔字母（组合附加符在 0300–036F/0483–0489，不在内）；
+ *   - 中文/日文/韩文标点、平假名/片假名基本字、全角与半角片假名；
+ *   - CJK 统一表意文字（含兼容区）与预组合谚文音节。
+ * 白名单外的一律交给 Intl.Segmenter：组合附加符、emoji/ZWJ、区域旗帜、肤色
+ * 修饰符、组合假名浊音点、谚文字母（L/V/T 可组合）、泰文 SARA AM、格式字符等
+ * 都可能与前/后码点合成一个字素簇，不能按码点切。
+ *
+ * 中文歌词的 YRC 几乎逐字一个标签，命中率接近 100%；Intl.Segmenter 每次
+ * segment() 都有固定开销（实测 ~1 µs/词），是解析的主成本，快速路径把它降到
+ * 一次正则 + Array.from。基线见 `pnpm perf:lyrics`（tools/lyric-performance.mjs）。
+ */
+const SIMPLE_GRAPHEME_TEXT =
+  /^[\u0020-\u007E\u00A1-\u024F\u0370-\u03FF\u0400-\u0482\u048A-\u04FF\u2010-\u2015\u2018-\u201D\u2026\u2030-\u203A\u3000-\u3029\u3030-\u303F\u3041-\u3096\u30A1-\u30FA\uFF01-\uFF60\uFF66-\uFF9D\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\uAC00-\uD7A3]+$/u;
+
 function splitGraphemes(text: string): string[] {
+  if (SIMPLE_GRAPHEME_TEXT.test(text)) {
+    // 单码点（中文逐字标签最常见）直接返回单元素数组，跳过 Array.from 迭代。
+    return text.length <= 1 ? [text] : Array.from(text);
+  }
   if (!GraphemeSegmenter) return Array.from(text);
   graphemeSegmenter ??= new GraphemeSegmenter(undefined, {
     granularity: "grapheme",
@@ -278,7 +303,9 @@ export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
   // 同时保留 ] 后的歌词内容（包括有意义的空格）。
   const lineRe = /^\s*\[\s*(\d+)\s*,\s*(\d+)\s*\](.*)$/;
   for (const rawLine of yrcText.split(/\r\n?|\n/)) {
-    const lineMatch = lineRe.exec(rawLine.replace(/^\uFEFF/, ""));
+    // 只在真的带 BOM 时才 slice，避免给每一行都分配一个新字符串。
+    const line = rawLine.charCodeAt(0) === 0xfeff ? rawLine.slice(1) : rawLine;
+    const lineMatch = lineRe.exec(line);
     if (!lineMatch) continue;
 
     const lineStart = Number(lineMatch[1]);
@@ -319,7 +346,12 @@ export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
     }
 
     const words: YrcWord[] = [];
-    for (const [tagIndex, tag] of wordTags.entries()) {
+    // 字标签通常已按时间升序（YRC 生成器保证）；只有真正乱序时才在行尾排序，
+    // 避免对每行都做一次 O(k log k) 排序（中文逐字歌词 k 常为 20–40）。
+    let sorted = true;
+    let previousStartMs = Number.NEGATIVE_INFINITY;
+    for (let tagIndex = 0; tagIndex < wordTags.length; tagIndex += 1) {
+      const tag = wordTags[tagIndex];
       const nextTag = wordTags[tagIndex + 1];
       const text = content.slice(
         tag.textIndex,
@@ -329,15 +361,22 @@ export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
 
       // 按可见字素切分，避免组合音标或 ZWJ emoji 被拆成多个错误 token。
       const chars = splitGraphemes(text);
-      const visibleCount = chars.filter((char) => char.trim().length > 0).length;
+      let visibleCount = 0;
+      for (let index = 0; index < chars.length; index += 1) {
+        if (chars[index].trim().length > 0) visibleCount += 1;
+      }
       const perCharDuration = visibleCount > 0 ? tag.duration / visibleCount : 0;
       let visibleIndex = 0;
-      for (const char of chars) {
+      for (let index = 0; index < chars.length; index += 1) {
+        const char = chars[index];
         const isWhitespace = char.trim().length === 0;
+        const startMs = tag.startMs + visibleIndex * perCharDuration;
+        if (startMs < previousStartMs) sorted = false;
+        previousStartMs = startMs;
         words.push({
           char,
           // 字标签起点本身就是歌曲内绝对毫秒，不能再叠加 lineStart。
-          startMs: tag.startMs + visibleIndex * perCharDuration,
+          startMs,
           // 分隔空格保留显示宽度，但不吞掉真实字符的演唱时长。
           duration: isWhitespace ? 0 : perCharDuration,
         });
@@ -349,7 +388,7 @@ export function parseYrc(yrcText: string | null | undefined): YrcLine[] {
 
     if (words.length === 0) continue;
     // 损坏或非规范来源偶尔会把字标签乱序；渲染层需要时间单调递增。
-    words.sort((a, b) => a.startMs - b.startMs);
+    if (!sorted) words.sort((a, b) => a.startMs - b.startMs);
     lines.push({ time: lineStart, duration: lineDuration, words });
   }
 

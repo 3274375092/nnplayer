@@ -152,6 +152,15 @@ const qualityBadgeLabel = computed(() => {
   return qualityPending.value ? "…" : "未知";
 });
 
+/** 已解析出播放地址、但档位仍未知：上游可能下发了特效档（如沉浸环绕声
+ *  jyeffect 等，不属于常规六档），既不能猜成所选档位，也不能把码率当档位。 */
+const actualQualityUnknownAfterResolve = computed(
+  () =>
+    mediaLoaded.value &&
+    player.activeAudioResolved &&
+    player.activeQuality === null,
+);
+
 /** 按钮 title / aria-label：同时说明实际值与所选值，降级必须明说。 */
 const qualityButtonTitle = computed(() => {
   const requested = requestedQuality.value;
@@ -170,9 +179,13 @@ const qualityButtonTitle = computed(() => {
   if (player.activeQuality === null) {
     // formatActualQuality 已带「（档位未知）」时不要再拼一次，否则读屏会听到两遍。
     const rate = formatBitrate(player.activeBitrate);
+    // 实际档位未知但播放地址已解析成功：多半是服务端下发了特效档，
+    // 只说「未知」并交回服务端，不猜成所选档位。
+    const unknownNote =
+      "服务端实际下发档位未知（可能是特效档，不属于常规六档），以服务端为准";
     return rate
-      ? `音质：当前实际 ${rate}，档位未知（所选 ${requested.label}）`
-      : `音质：当前实际音质未知（所选 ${requested.label}）`;
+      ? `音质：${unknownNote}；当前实际码率 ${rate}（所选 ${requested.label}）`
+      : `音质：${unknownNote}（所选 ${requested.label}）`;
   }
   return `音质：当前实际 ${summary}（所选 ${requested.label}）`;
 });
@@ -188,6 +201,9 @@ function qualityItemLabel(opt: AudioQualityOption): string {
   }
   if (opt.value === player.quality && qualityDowngraded.value) {
     parts.push("所选未生效，服务端下发了较低档位");
+  }
+  if (opt.value === player.quality && actualQualityUnknownAfterResolve.value) {
+    parts.push("服务端实际档位未知，可能是特效档");
   }
   if (audioQualityRank(opt.value) >= audioQualityRank("lossless")) {
     parts.push("需要网易云 VIP/SVIP 权益");

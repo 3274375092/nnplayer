@@ -58,4 +58,12 @@ export interface MediaHandle {
 
 export interface MediaRuntime {
   create(src: string, options: MediaHandleOptions): MediaHandle;
+  /**
+   * 预热下一首媒体（可选能力）：在不打断当前播放的前提下提前创建/缓冲
+   * 另一个媒体实例，让切歌时的管线启动不再占用主线程长帧。
+   * 调用方（引擎）只传已取到的 URL；adapter 可忽略或按能力实现。
+   */
+  preload?(src: string): void;
+  /** 取消预热（账号/音质等 URL 代际变化时调用）：释放预热元素的 src/缓冲。 */
+  cancelPreload?(): void;
 }

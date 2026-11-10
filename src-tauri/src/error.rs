@@ -34,6 +34,13 @@ pub enum AppError {
     #[error("参数无效: {0}")]
     InvalidParam(String),
 
+    /// 网易云风控拦截（如 `song/url/v1` 返回业务码 -460）。
+    ///
+    /// 单独成类而不是并入 [`AppError::Ncm`]：前端需要按 kind 暂停自动切歌
+    /// （换歌同样会失败），并给出“稍候重试”而不是“参数填写有问题”。
+    #[error("网易云限制了请求（风控）: {0}")]
+    RiskControl(String),
+
     #[error("内部错误: {0}")]
     Internal(String),
 }
@@ -59,6 +66,7 @@ impl Serialize for AppError {
             AppError::Io(_) => "Io",
             AppError::Store(_) => "Store",
             AppError::InvalidParam(_) => "InvalidParam",
+            AppError::RiskControl(_) => "RiskControl",
             AppError::Internal(_) => "Internal",
         };
         let mut s = serializer.serialize_struct("AppError", 2)?;
@@ -80,10 +88,25 @@ pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
         ncm_api::NcmError::Timeout(message) => AppError::Network(message),
         ncm_api::NcmError::Json(error) => AppError::Json(error),
         ncm_api::NcmError::InvalidParam(message) => AppError::InvalidParam(message),
+        ncm_api::NcmError::RiskControl { code, msg } => {
+            AppError::RiskControl(risk_control_message(code, &msg))
+        }
         ncm_api::NcmError::Crypto(message) => {
             AppError::Internal(format!("NCM 加密错误: {message}"))
         }
         error => AppError::Ncm(error.to_string()),
+    }
+}
+
+/// 组合风控错误的前端可读 message：上游中文文案优先且保真。
+///
+/// 上游正常都会带 `message`；缺失时至少保留业务码，避免只剩一句无信息的
+/// “限制了请求”。outer [`AppError::RiskControl`] 的 Display 已经统一加了前缀。
+fn risk_control_message(code: i64, msg: &str) -> String {
+    if msg.is_empty() {
+        format!("上游返回风控业务码 code={code}")
+    } else {
+        msg.to_string()
     }
 }
 
@@ -96,8 +119,8 @@ mod tests {
         serde_json::to_value(e).expect("AppError should serialize")
     }
 
-    // ── The 8 canonical kind strings matching frontend APP_ERROR_KINDS ──
-    const FRONTEND_KINDS: [&str; 8] = [
+    // ── The 9 canonical kind strings matching frontend APP_ERROR_KINDS ──
+    const FRONTEND_KINDS: [&str; 9] = [
         "Unauthorized",
         "Ncm",
         "Network",
@@ -105,6 +128,7 @@ mod tests {
         "Io",
         "Store",
         "InvalidParam",
+        "RiskControl",
         "Internal",
     ];
 
@@ -173,6 +197,18 @@ mod tests {
     }
 
     #[test]
+    fn risk_control_error_serializes() {
+        let v = serialize_err(&AppError::RiskControl(
+            "检测到您的网络环境存在风险，请稍后再试".to_string(),
+        ));
+        assert_eq!(v["kind"], "RiskControl");
+        assert_eq!(
+            v["message"],
+            "网易云限制了请求（风控）: 检测到您的网络环境存在风险，请稍后再试"
+        );
+    }
+
+    #[test]
     fn internal_error_serializes() {
         let v = serialize_err(&AppError::Internal("未知异常".to_string()));
         assert_eq!(v["kind"], "Internal");
@@ -189,6 +225,7 @@ mod tests {
             AppError::Store("test".into()),
             AppError::Unauthorized,
             AppError::InvalidParam("test".into()),
+            AppError::RiskControl("test".into()),
             AppError::Internal("test".into()),
         ];
         for e in &errors {
@@ -235,12 +272,16 @@ mod tests {
             "InvalidParam"
         );
         assert_eq!(
+            serialize_err(&AppError::RiskControl("".into()))["kind"],
+            "RiskControl"
+        );
+        assert_eq!(
             serialize_err(&AppError::Internal("".into()))["kind"],
             "Internal"
         );
     }
 
-    // ── map_ncm_err mapping (6 explicit + 1 catch-all) ──
+    // ── map_ncm_err mapping (7 explicit + 1 catch-all) ──
     // This tests the bridge: NcmError → AppError → JSON
     // AuthRequired → Unauthorized
     #[test]
@@ -258,6 +299,34 @@ mod tests {
         let v = serialize_err(&e);
         assert_eq!(v["kind"], "Network");
         assert!(v["message"].as_str().unwrap().contains("请求超时"));
+    }
+
+    // RiskControl → RiskControl：上游 -460 的业务文案必须保真到 message
+    #[test]
+    fn map_risk_control_keeps_upstream_message() {
+        let e = map_ncm_err(ncm_api::NcmError::RiskControl {
+            code: -460,
+            msg: "检测到您的网络环境存在风险，请稍后再试".into(),
+        });
+        let v = serialize_err(&e);
+        assert_eq!(v["kind"], "RiskControl");
+        assert_eq!(
+            v["message"],
+            "网易云限制了请求（风控）: 检测到您的网络环境存在风险，请稍后再试"
+        );
+    }
+
+    // 上游没给文案时至少保留业务码，不能只剩一句无信息的提示。
+    #[test]
+    fn map_risk_control_without_message_keeps_code() {
+        let e = map_ncm_err(ncm_api::NcmError::RiskControl {
+            code: -460,
+            msg: String::new(),
+        });
+        let v = serialize_err(&e);
+        assert_eq!(v["kind"], "RiskControl");
+        let message = v["message"].as_str().expect("message 必须是字符串");
+        assert!(message.contains("code=-460"), "message={message}");
     }
 
     // Catch-all (Api / RateLimited / Unknown) → Ncm

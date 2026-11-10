@@ -52,6 +52,7 @@ const APP_ERROR_KIND_MAP: Record<AppErrorPayload["kind"], true> = {
   Store: true,
   InvalidParam: true,
   Internal: true,
+  RiskControl: true,
 };
 
 const APP_ERROR_KINDS: ReadonlySet<string> = new Set(

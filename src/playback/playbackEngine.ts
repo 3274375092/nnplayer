@@ -27,7 +27,7 @@ export interface PlaybackFailure {
   songId: number;
   songName: string;
   stage: PlaybackFailureStage;
-  /** 后端错误类别（AppError.kind）或引擎内部类别（NoSource / Media）；未知为 null。 */
+  /** 后端错误类别（AppError.kind）或引擎内部类别（NoSource / Media / Timeout）；未知为 null。 */
   kind: string | null;
   /** 原始技术文本（可能为空，例如媒体元素只给数字 code）。 */
   message: string;
@@ -35,6 +35,10 @@ export interface PlaybackFailure {
   failCount: number;
   /** 是否因连续失败达到上限而停止自动切换。 */
   stopped: boolean;
+  /** 失败后是否自动切到了下一首；false 表示播放停在失败歌曲（未跳歌）。 */
+  advancedToNext: boolean;
+  /** 本次失败通报前已对同一首歌自动重试的次数（0 = 未重试）。 */
+  retryCount: number;
   /** 连续失败涉及的歌曲名（按发生顺序；仅在 stopped 汇总时使用）。 */
   recentSongNames: readonly string[];
   /** 失败前用户是否有播放意图；重载失败重试时用于恢复播放/暂停意图。 */
@@ -44,12 +48,24 @@ export interface PlaybackFailure {
 /** 暂无可用播放源（URL 解析成功但上游返回空）的引擎内部分类。 */
 const NO_SOURCE_KIND = "NoSource";
 
+/** 本地等待超时（取地址/媒体起播）的引擎内部分类；不是后端 error kind。 */
+const TIMEOUT_KIND = "Timeout";
+
 class NoPlayableSourceError extends Error {
   readonly kind = NO_SOURCE_KIND;
 
   constructor() {
     super("该歌曲暂无可用播放源");
     this.name = "NoPlayableSourceError";
+  }
+}
+
+class PlaybackTimeoutError extends Error {
+  readonly kind = TIMEOUT_KIND;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "PlaybackTimeoutError";
   }
 }
 
@@ -133,7 +149,7 @@ export interface PlaybackState {
 
 export interface PlaybackEngineOptions {
   runtime: MediaRuntime;
-  /** 解析歌曲播放 URL（生产 = Tauri get_song_url IPC） */
+  /** 解析歌曲播放 URL（生产 = Tauri get_song_url IPC）。 */
   resolveSongUrl: (songId: number) => Promise<string | null>;
   /** 初始音量 0~1，持久化读写由装配层负责 */
   initialVolume?: number;
@@ -141,6 +157,12 @@ export interface PlaybackEngineOptions {
   initialAuthEpoch?: number;
   /** 时钟，默认 Date.now；缓存 TTL 与 Clock Anchor 采样用 */
   now?: () => number;
+  /** 同歌重试前的等待实现；测试可注入立即返回。默认 setTimeout。 */
+  wait?: (ms: number) => Promise<void>;
+  /** 媒体起播最长等待（毫秒），超时按装载失败处理；0 关闭。默认 20000。 */
+  loadTimeoutMs?: number;
+  /** 取播放地址最长等待（毫秒），超时按装载失败处理；0 关闭。默认 20000。 */
+  resolveTimeoutMs?: number;
 }
 
 export interface PlaybackEngine {
@@ -183,6 +205,52 @@ const SONG_URL_CACHE_TTL_MS = 3 * 60 * 1000;
 const SONG_URL_CACHE_LIMIT = 8;
 const HISTORY_LIMIT = 50;
 
+/** 单首歌在自动跳歌前允许的同歌重试次数（换歌解决不了临时故障）。 */
+const SAME_SONG_RETRY_LIMIT = 1;
+/** 各类可重试失败的等待时长：风控要等过 Rust 侧 4s 熔断窗口再重试一次，
+ *  媒体/网络故障则快速重试；接口（Ncm）、解析（Json）与引擎内部错误
+ *  （Internal）多发于一次性临时故障，给 500~600ms 后做一次同歌重试。
+ *  用户切歌/暂停会取消等待。 */
+const RETRY_WAIT_MS: Readonly<Record<string, number>> = {
+  RiskControl: 4500,
+  Network: 600,
+  Timeout: 800,
+  Media: 300,
+  Ncm: 600,
+  Json: 500,
+  Internal: 500,
+};
+/** 值得对同一首歌自动重试的失败类别：临时网络/风控/媒体故障与一次性
+ *  接口/解析/引擎内部错误（重试仍失败则由 NON_SKIPPABLE_KINDS 停歌）。 */
+const RETRYABLE_KINDS: ReadonlySet<string> = new Set([
+  "RiskControl",
+  "Network",
+  "Timeout",
+  "Media",
+  "Ncm",
+  "Json",
+  "Internal",
+]);
+/** 重试耗尽后仍不应自动切歌的类别：换一首歌同样会失败的会话级/后端问题。
+ *  kind 为 null 的未知错误与 NoSource/Media 仍按“该歌曲不可播放”自动跳歌。 */
+const NON_SKIPPABLE_KINDS: ReadonlySet<string> = new Set([
+  "RiskControl",
+  "Network",
+  "Timeout",
+  "Unauthorized",
+  "Ncm",
+  "Json",
+  "Internal",
+]);
+const DEFAULT_LOAD_TIMEOUT_MS = 20_000;
+const DEFAULT_RESOLVE_TIMEOUT_MS = 20_000;
+
+/** 超时选项兜底：非法数字回退默认值；0/负数表示关闭超时。 */
+function readTimeoutMs(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return value > 0 ? value : 0;
+}
+
 interface CachedSongUrl {
   url: string;
   expiresAt: number;
@@ -193,6 +261,16 @@ export function createPlaybackEngine(
 ): PlaybackEngine {
   const { runtime, resolveSongUrl: resolveSongUrlUpstream } = options;
   const now = options.now ?? Date.now;
+  const wait =
+    options.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const loadTimeoutMs = readTimeoutMs(
+    options.loadTimeoutMs,
+    DEFAULT_LOAD_TIMEOUT_MS,
+  );
+  const resolveTimeoutMs = readTimeoutMs(
+    options.resolveTimeoutMs,
+    DEFAULT_RESOLVE_TIMEOUT_MS,
+  );
 
   const initialVolume =
     typeof options.initialVolume === "number" &&
@@ -239,6 +317,54 @@ export function createPlaybackEngine(
   let failStreakSongs: Song[] = [];
   /** 失败通报序号；同一首歌重复失败也能被 UI 识别为新事件。 */
   let failureRevision = 0;
+  /** 当前歌曲已经用掉多少同歌重试；换歌或成功后归零。 */
+  let retrySongId: number | null = null;
+  let retryCount = 0;
+
+  /** 换歌后重置同歌重试预算（同一首歌的多次失败共享一轮预算）。 */
+  function beginRetryBudget(songId: number) {
+    if (retrySongId === songId) return;
+    retrySongId = songId;
+    retryCount = 0;
+  }
+
+  /** 显式用户操作/会话边界后重新给同歌重试机会；失败链内部不调用，
+   *  否则单曲队列的自动重载会无限重试同一首。 */
+  function resetRetryBudget() {
+    retrySongId = null;
+    retryCount = 0;
+  }
+
+  /** 给等待加一档上限：超时后拒绝，避免卡在 loading 永不结束。 */
+  function withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    if (timeoutMs <= 0) return promise;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new PlaybackTimeoutError(message)),
+        timeoutMs,
+      );
+      // 测试/工具链在 Node 下运行时，被取代的在途请求不该让这个长超时计时器
+      // 占住事件循环；浏览器返回数字计时器，没有 unref。
+      const maybeNodeTimer = timer as unknown as { unref?: () => void };
+      if (typeof maybeNodeTimer === "object" && maybeNodeTimer !== null) {
+        maybeNodeTimer.unref?.();
+      }
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  }
 
   function destroyActiveMedia() {
     playbackRequested = false;
@@ -287,6 +413,8 @@ export function createPlaybackEngine(
     details: {
       failCount: number;
       stopped: boolean;
+      advancedToNext: boolean;
+      retryCount: number;
       wasPlaying: boolean;
       recentSongNames: readonly string[];
     },
@@ -304,6 +432,8 @@ export function createPlaybackEngine(
       message: cause.message,
       failCount: details.failCount,
       stopped: details.stopped,
+      advancedToNext: details.advancedToNext,
+      retryCount: details.retryCount,
       recentSongNames: details.recentSongNames,
       wasPlaying: details.wasPlaying,
     };
@@ -425,10 +555,7 @@ export function createPlaybackEngine(
         // 首次装载的 play() 错误由 loadAndPlay 的 Promise reject 处理，统一在
         // 那里通报，避免同一次失败产生两条记录。
         if (shouldRecover) {
-          void recoverFromPlaybackFailure(
-            new Error("播放过程中媒体流中断"),
-            "stream",
-          );
+          void handleStreamFailure(event.error);
         } else if (!wasInitialLoad) {
           // 暂停期间或无播放意图时发现坏 source：不自动切歌，但失败必须可见。
           recordPlaybackFailure(
@@ -437,6 +564,8 @@ export function createPlaybackEngine(
             {
               failCount: playFailCount,
               stopped: false,
+              advancedToNext: false,
+              retryCount,
               wasPlaying: false,
               recentSongNames: failStreakSongs.map((song) => song.name),
             },
@@ -484,7 +613,11 @@ export function createPlaybackEngine(
   }
 
   function invalidateSongUrl(songId: number | null) {
-    if (songId !== null) songUrlCache.delete(songId);
+    if (songId === null) return;
+    songUrlCache.delete(songId);
+    // 失败/切档后的重试必须重新取地址：清掉在途合并在内的旧请求，
+    // 否则重试会复用那个已经卡住或已失败的 Promise。
+    songUrlRequests.delete(songId);
   }
 
   async function resolveSongUrl(songId: number): Promise<string | null> {
@@ -502,6 +635,9 @@ export function createPlaybackEngine(
         if (requestAuthEpoch !== authEpoch) return null;
         // 取参代际（音质等）已切换时，在途旧请求同样不能回写新缓存。
         if (requestUrlEpoch !== urlEpoch) return null;
+        // 被 invalidateSongUrl 取消（取址超时/媒体错误）的请求即使晚到也
+        // 不得回写缓存：重试成功后它会把新地址覆盖成那个超时/失败的旧地址。
+        if (songUrlRequests.get(songId) !== request) return url;
         if (url) cacheSongUrl(songId, url);
         return url;
       })
@@ -528,6 +664,25 @@ export function createPlaybackEngine(
     const nextSong = state.queue[nextIndex];
     if (!nextSong || nextSong.id === getCurrentSong()?.id) return;
     prefetchSongUrl(nextSong.id);
+    // 除了 URL，还尽量预热下一首的媒体管线：WebKitGTK 首次 play() 的管线
+    // 初始化会占主线程 20–30ms，提前在空闲时做掉可避免切歌长帧。
+    if (!activeHandle) return;
+    const prefetchedSongId = nextSong.id;
+    void resolveSongUrl(prefetchedSongId)
+      .then((url) => {
+        if (!url) return;
+        // 取地址是异步的：期间可能已经切歌/改队列，目标已不再是“下一首”时
+        // 不要再预热，避免为已经跳过的歌曲白白建流、抢当前播放的带宽。
+        const stillNext =
+          state.playMode === "loop-list" &&
+          state.queue.length >= 2 &&
+          state.queue[(state.index + 1) % state.queue.length]?.id ===
+            prefetchedSongId;
+        if (stillNext) options.runtime.preload?.(url);
+      })
+      .catch(() => {
+        // 预热失败不影响当前播放；真正切歌时会照常取地址/重试。
+      });
   }
 
   function notifyAuthEpochChanged(epoch: number) {
@@ -541,6 +696,7 @@ export function createPlaybackEngine(
     // resolveSongUrl 还会校验 epoch，旧结果也不能回写当前缓存。
     songUrlRequests.clear();
     destroyActiveMedia();
+    options.runtime.cancelPreload?.();
     state.currentSongId = null;
     state.playing = false;
     state.loading = false;
@@ -551,6 +707,8 @@ export function createPlaybackEngine(
     state.lastPlaybackFailure = null;
     playFailCount = 0;
     failStreakSongs = [];
+    // 新会话的失败重试预算不能继承旧账号。
+    resetRetryBudget();
     notify();
   }
 
@@ -560,6 +718,8 @@ export function createPlaybackEngine(
     urlEpoch += 1;
     songUrlCache.clear();
     songUrlRequests.clear();
+    // 预热的是上一代 URL（如切档前的音质），必须释放，避免切歌命中错误音质。
+    options.runtime.cancelPreload?.();
   }
 
   /** 按当前队列索引重载当前已装载歌曲（切音质等场景）。
@@ -585,6 +745,7 @@ export function createPlaybackEngine(
       if (!started || getCurrentSong()?.id !== song.id) return;
       playFailCount = 0;
       failStreakSongs = [];
+      resetRetryBudget();
       prefetchNextSongUrl();
       notify();
     } catch (e) {
@@ -595,6 +756,8 @@ export function createPlaybackEngine(
       recordPlaybackFailure("reload", e, {
         failCount: 0,
         stopped: false,
+        advancedToNext: false,
+        retryCount: 0,
         wasPlaying: autoplay,
         recentSongNames: [],
       });
@@ -634,7 +797,12 @@ export function createPlaybackEngine(
       state.duration = 0;
       notify();
 
-      const resolvedUrl = await resolveSongUrl(songId);
+      // 取地址也必须有时限：IPC/上游卡住时不能永远停在 loading。
+      const resolvedUrl = await withTimeout(
+        resolveSongUrl(songId),
+        resolveTimeoutMs,
+        "获取播放地址超时",
+      );
       if (seq !== playSeq || requestAuthEpoch !== authEpoch) {
         if (seq === playSeq && !activeHandle) {
           state.loading = false;
@@ -656,7 +824,9 @@ export function createPlaybackEngine(
       initialPlayHandle = handle;
       playbackRequested = true;
       try {
-        await handle.play();
+        // CDN 卡住时 play() 可能长期不 resolve；超时后按装载失败走重试/停止，
+        // 而不是让播放条永远停在「加载中」。
+        await withTimeout(handle.play(), loadTimeoutMs, "音频加载超时");
       } finally {
         if (initialPlayHandle === handle) initialPlayHandle = null;
       }
@@ -676,31 +846,189 @@ export function createPlaybackEngine(
     }
   }
 
-  async function recoverFromPlaybackFailure(
+  /** 同歌自动重试的等待实现返回后，重新装载同一首歌；不写播放历史。 */
+  type RetryOutcome =
+    | { status: "recovered" }
+    | { status: "failed"; error: unknown }
+    | { status: "cancelled" };
+
+  async function retrySameSong(
+    song: Song,
+    kind: string,
+    requestSeq: number,
+    clearFailureOnSuccess = false,
+  ): Promise<RetryOutcome> {
+    retryCount += 1;
+    await wait(RETRY_WAIT_MS[kind] ?? 500);
+    // 等待期间用户切歌/暂停/退出了播放意图：不恢复这次重试。
+    if (requestSeq !== playSeq || getCurrentSong()?.id !== song.id) {
+      return { status: "cancelled" };
+    }
+    try {
+      // 保留原装载的「显式播放」标记：重试成功也属于用户那次点播成功，
+      // 必须像直接装载成功一样清掉上一首遗留的失败通报。
+      const started = await loadAndPlay(song.id, true, clearFailureOnSuccess);
+      if (!started || getCurrentSong()?.id !== song.id) {
+        return { status: "cancelled" };
+      }
+      return { status: "recovered" };
+    } catch (error) {
+      // loadAndPlay 的 stale 保护保证：过时请求返回 false 而不是 reject，
+      // 因此能走到这里的失败必然属于本次重试（当前代际/当前歌曲），由本链结算。
+      return { status: "failed", error };
+    }
+  }
+
+  /** 装载/重试成功后的一次性结算：写历史、清失败链、预取下一首。 */
+  function settleSuccessfulLoad(song: Song, recordHistory: boolean) {
+    if (recordHistory) pushHistory(song);
+    playFailCount = 0;
+    failStreakSongs = [];
+    resetRetryBudget();
+    prefetchNextSongUrl();
+    notify();
+  }
+
+  /**
+   * 装载失败结算：临时故障（网络/风控/媒体/超时）先对同一首歌重试一次，
+   * 换歌解决不了的问题（风控、断网、登录过期、超时）重试后停在当前歌曲并
+   * 把原因交给 UI；只有歌曲自身不可用等确定性失败才自动跳下一首。
+   */
+  async function handleLoadFailure(
+    song: Song,
     error: unknown,
+    clearFailureOnSuccess = false,
+  ) {
+    const requestSeq = playSeq;
+    const kind = readFailureCause(error).kind;
+    if (
+      kind !== null &&
+      RETRYABLE_KINDS.has(kind) &&
+      retrySongId === song.id &&
+      retryCount < SAME_SONG_RETRY_LIMIT
+    ) {
+      const outcome = await retrySameSong(
+        song,
+        kind,
+        requestSeq,
+        clearFailureOnSuccess,
+      );
+      if (outcome.status === "recovered") {
+        settleSuccessfulLoad(song, true);
+        return;
+      }
+      if (outcome.status === "failed") {
+        await finalizeLoadFailure(outcome.error);
+        return;
+      }
+      return;
+    }
+    await finalizeLoadFailure(error);
+  }
+
+  async function finalizeLoadFailure(error: unknown) {
+    const kind = readFailureCause(error).kind;
+    if (kind !== null && NON_SKIPPABLE_KINDS.has(kind)) {
+      // 会话级/网络级问题：自动换歌只会连续失败，停在当前歌曲更诚实。
+      playFailCount = 0;
+      failStreakSongs = [];
+      recordPlaybackFailure("load", error, {
+        failCount: 0,
+        stopped: false,
+        advancedToNext: false,
+        retryCount,
+        wasPlaying: true,
+        recentSongNames: [],
+      });
+      resetRetryBudget();
+      return;
+    }
+    await advanceAfterFailure("load", error);
+  }
+
+  /** 播放中流中断：先换新 URL 重试同一首歌，失败再按既有策略处理。 */
+  async function handleStreamFailure(error: unknown) {
+    const song = getCurrentSong();
+    if (!song) return;
+    beginRetryBudget(song.id);
+    const requestSeq = playSeq;
+    const kind = readFailureCause(error).kind;
+    if (
+      kind !== null &&
+      RETRYABLE_KINDS.has(kind) &&
+      retrySongId === song.id &&
+      retryCount < SAME_SONG_RETRY_LIMIT
+    ) {
+      const outcome = await retrySameSong(song, kind, requestSeq);
+      if (outcome.status === "recovered") {
+        // 流中断前历史已写过：重试成功不重复记历史。
+        settleSuccessfulLoad(song, false);
+        return;
+      }
+      if (outcome.status === "failed") {
+        await finalizeStreamFailure(outcome.error);
+        return;
+      }
+      return;
+    }
+    await finalizeStreamFailure(error);
+  }
+
+  async function finalizeStreamFailure(error: unknown) {
+    const kind = readFailureCause(error).kind;
+    if (kind !== null && NON_SKIPPABLE_KINDS.has(kind)) {
+      // 与装载路径保持一致：这次失败已结束本轮自动切换，连续失败链从头计数。
+      playFailCount = 0;
+      failStreakSongs = [];
+      recordPlaybackFailure("stream", error, {
+        failCount: 0,
+        stopped: false,
+        advancedToNext: false,
+        retryCount,
+        wasPlaying: true,
+        recentSongNames: [],
+      });
+      resetRetryBudget();
+      return;
+    }
+    await advanceAfterFailure("stream", error);
+  }
+
+  /** 跳歌前的连续失败计数与汇总通报（保留既有 3 次上限语义）。 */
+  async function advanceAfterFailure(
     stage: Extract<PlaybackFailureStage, "load" | "stream">,
+    error: unknown,
   ) {
     playFailCount += 1;
     const failedSong = getCurrentSong();
     if (failedSong) failStreakSongs = [...failStreakSongs, failedSong];
     const recentSongNames = failStreakSongs.map((song) => song.name);
+    const retriesUsed = retryCount;
+    // 只有队列里真有下一首时 next() 才会推进索引；单曲队列在单曲循环/随机
+    // 模式下 next() 是 no-op，不能谎称“已自动跳到下一首”。
+    const advancedToNext = state.queue.length > 1;
     if (playFailCount >= 3) {
       console.error("[playback] 连续 3 次播放失败，停止自动切换", error);
       // 停止自动切换也必须把原因与歌曲汇总给 UI，不能只在控制台里结束。
       recordPlaybackFailure(stage, error, {
         failCount: playFailCount,
         stopped: true,
+        advancedToNext: false,
+        retryCount: retriesUsed,
         wasPlaying: true,
         recentSongNames,
       });
       playFailCount = 0;
       failStreakSongs = [];
+      resetRetryBudget();
       return;
     }
     console.error("[playback] 播放失败，自动跳到下一首", error);
     recordPlaybackFailure(stage, error, {
       failCount: playFailCount,
       stopped: false,
+      advancedToNext,
+      retryCount: retriesUsed,
       wasPlaying: true,
       recentSongNames,
     });
@@ -713,6 +1041,7 @@ export function createPlaybackEngine(
   async function loadAndPlayCurrent(clearFailureOnSuccess = false) {
     const song = getCurrentSong();
     if (!song) return;
+    beginRetryBudget(song.id);
     try {
       const started = await loadAndPlay(
         song.id,
@@ -720,13 +1049,9 @@ export function createPlaybackEngine(
         clearFailureOnSuccess,
       );
       if (!started || getCurrentSong()?.id !== song.id) return;
-      pushHistory(song);
-      playFailCount = 0;
-      failStreakSongs = [];
-      prefetchNextSongUrl();
-      notify();
+      settleSuccessfulLoad(song, true);
     } catch (e) {
-      await recoverFromPlaybackFailure(e, "load");
+      await handleLoadFailure(song, e, clearFailureOnSuccess);
     }
   }
 
@@ -737,7 +1062,9 @@ export function createPlaybackEngine(
     if (!handle || !handle.hasSource()) return;
     playbackRequested = true;
     try {
-      await handle.play();
+      // 继续播放同样需要看门狗：CDN 卡住时 play() 可能长期不 resolve，
+      // 超时按流中断失败处理（重新取址并装载，而不是永远停在加载中）。
+      await withTimeout(handle.play(), loadTimeoutMs, "音频继续播放超时");
       // 期间被 pause/新装载取代则不结算本次「成功开始播放」。
       if (activeHandle !== handle || !playbackRequested) return;
       if (clearFailureOnSuccess) clearStalePlaybackFailure();
@@ -760,7 +1087,7 @@ export function createPlaybackEngine(
       invalidateSongUrl(state.currentSongId);
       destroyActiveMedia();
       notify();
-      void recoverFromPlaybackFailure(error, "stream");
+      void handleStreamFailure(error);
     }
   }
 
@@ -768,19 +1095,23 @@ export function createPlaybackEngine(
   function stopPlayback() {
     playSeq += 1;
     destroyActiveMedia();
+    options.runtime.cancelPreload?.();
     state.currentSongId = null;
     state.playing = false;
     state.loading = false;
     state.currentTime = 0;
     state.duration = 0;
-    // 队列已结束/清空时，之前那首歌的失败通报不再有意义。
+    // 队列已结束/清空时，之前那首歌的失败通报与重试预算不再有意义。
     state.lastPlaybackFailure = null;
+    resetRetryBudget();
   }
 
   /** 重试最近一次失败的播放：装载/流中断失败重播失败歌曲，切档重载按原意图重载。 */
   async function retryFailedPlayback() {
     const failure = state.lastPlaybackFailure;
     if (!failure) return;
+    // 用户点重试是新的一轮尝试：完整重试预算。
+    resetRetryBudget();
     // 失败歌曲仍是当前已装载媒体（切档失败后未换歌）：按失败前的播放/暂停意图重载。
     const sameSongStillCurrent =
       failure.songId === state.currentSongId &&
@@ -842,6 +1173,7 @@ export function createPlaybackEngine(
       } else {
         state.index = Math.min(absIdx, state.queue.length - 1);
         // 删除当前曲后继续播下一首是用户操作的直接结果，按用户意图处理。
+        resetRetryBudget();
         void loadAndPlayCurrent(true);
       }
     }
@@ -890,6 +1222,7 @@ export function createPlaybackEngine(
 
   async function playList(songs: Song[], startIndex = 0) {
     if (songs.length === 0) return;
+    resetRetryBudget();
     state.queue = [...songs];
     state.index = Math.max(0, Math.min(startIndex, songs.length - 1));
     notify();
@@ -898,6 +1231,7 @@ export function createPlaybackEngine(
 
   /** 播放单首歌曲（不替换队列，但加入当前索引的下一位） */
   async function playSong(song: Song) {
+    resetRetryBudget();
     const existIdx = state.queue.findIndex((s) => s.id === song.id);
     if (existIdx >= 0) {
       state.index = existIdx;
@@ -914,6 +1248,8 @@ export function createPlaybackEngine(
 
   /** 播放/暂停；待加载请求被取消后再次播放时会重新取当前歌曲 URL。 */
   function togglePlay() {
+    // 显式用户手势开启新的一轮播放尝试：上次被取消的重试预算不再占用。
+    resetRetryBudget();
     // loading 且无播放意图只出现在“暂停态切档重载”的取 URL 窗口：这时的
     // 点击语义是开始播放，不能被当成暂停/取消装载。
     if (state.loading && !playbackRequested) {
@@ -943,6 +1279,8 @@ export function createPlaybackEngine(
   function pause() {
     playSeq += 1;
     playbackRequested = false;
+    // 暂停取消了在途的重试等待/装载：预算归零，下次播放从完整重试机会开始。
+    resetRetryBudget();
     const handle = activeHandle;
     if (handle) syncCurrentTime(handle);
     state.playing = false;
@@ -955,6 +1293,9 @@ export function createPlaybackEngine(
    *  autoRecovery=true 仅由失败恢复链内部使用：成功后不得清掉失败通报。 */
   async function next(autoRecovery = false) {
     if (state.queue.length === 0) return;
+    // 用户手动切歌是新一轮尝试；失败恢复链内部的自动切歌必须保留预算，
+    // 否则单曲队列会在“自动重载同一首”里无限重试。
+    if (!autoRecovery) resetRetryBudget();
 
     if (state.playMode === "shuffle") {
       // 随机模式下：若队列 >1，随机选一个不同的；否则保持
@@ -981,6 +1322,7 @@ export function createPlaybackEngine(
   /** 上一首 */
   async function prev() {
     if (state.queue.length === 0) return;
+    resetRetryBudget();
 
     // 若已播放 > 3 秒，则"上一首"=回到当前歌曲开头
     if (getMediaCurrentTime() > 3) {
@@ -1055,9 +1397,13 @@ export function createPlaybackEngine(
     // 取消所有尚未完成的装载，避免 destroy 之后仍创建/启动新代际媒体。
     playSeq += 1;
     destroyActiveMedia();
+    // 引擎销毁后 pooled 媒体元素不再有人复用：释放预热 source，避免它在
+    // 后台继续下载（生产 adapter 的元素池活到页面卸载）。
+    options.runtime.cancelPreload?.();
     songUrlCache.clear();
     songUrlRequests.clear();
     listeners.clear();
+    resetRetryBudget();
   }
 
   return {

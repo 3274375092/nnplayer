@@ -384,7 +384,11 @@ watch(
       if (target?.isConnected) target.focus();
     }
   },
-  { flush: "post" },
+  // immediate：Sidebar 用 defineAsyncComponent 延迟加载本组件，若 chunk 就绪
+  // 前用户已点击品牌区，组件会以 open=true 首次挂载；没有 immediate 时这个
+  // watch 永不会触发，Esc/焦点圈/焦点落入弹层以及版本加载都会失效。
+  // open=false 时的 immediate 分支只做 removeEventListener 与空焦点恢复，无副作用。
+  { flush: "post", immediate: true },
 );
 
 onBeforeUnmount(() => {
