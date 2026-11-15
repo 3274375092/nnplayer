@@ -6,6 +6,7 @@ import { computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SongList from "@/components/SongList.vue";
 import LyricAside from "@/components/LyricAside.vue";
+import SkeletonCard from "@/components/SkeletonCard.vue";
 import InlineError from "@/components/InlineError.vue";
 import {
   getDailyRecommend,
@@ -74,6 +75,11 @@ async function relogin() {
   void router.push({ name: "Login", query: { redirect: route.fullPath } });
 }
 
+/** 空推荐态的下一步：不离开应用就能开始听歌。 */
+function goSearch() {
+  void router.push({ name: "Search" });
+}
+
 watch(() => userStore.userId, () => void load(true));
 onMounted(() => void load());
 </script>
@@ -91,13 +97,19 @@ onMounted(() => void load());
       </p>
     </header>
 
-    <div
-      v-if="loading"
-      class="daily-state text-text-secondary py-10 text-center"
-      role="status"
-    >
-      正在加载每日推荐…
-    </div>
+    <!-- 加载：与歌单详情同一套骨架语言（列表骨架 + 有当前歌曲时的歌词列占位），
+         不再是一句孤零零的灰字。 -->
+    <template v-if="loading">
+      <div
+        class="daily-layout grid mobile-stack"
+        :class="{ 'daily-layout--solo': !player.currentSong }"
+        aria-hidden="true"
+      >
+        <SkeletonCard variant="list" :rows="8" />
+        <SkeletonCard v-if="player.currentSong" variant="aside" :rows="7" />
+      </div>
+      <p class="sr-only" role="status">正在加载每日推荐…</p>
+    </template>
 
     <InlineError
       v-else-if="describedError"
@@ -111,7 +123,25 @@ onMounted(() => void load());
       class="daily-layout grid mobile-stack"
       :class="{ 'daily-layout--solo': !player.currentSong }"
     >
+      <!-- 空推荐：不再渲染「序号/标题/专辑/时长」空表头 + disable 的主按钮
+           （一个不能用的主操作加上一张空表，读起来像页面坏了）。说明原因并给出
+           两个真实可做的下一步。 -->
+      <section v-if="data.songs.length === 0" class="daily-empty">
+        <h2 class="daily-empty__title">今天还没有推荐歌曲</h2>
+        <p class="daily-empty__hint">
+          推荐每天更新；稍后再打开看看，或先搜索想听的歌。
+        </p>
+        <div class="daily-empty__actions">
+          <button type="button" class="btn btn-primary" @click="goSearch">
+            搜索歌曲
+          </button>
+          <button type="button" class="btn btn-ghost" @click="load(true)">
+            重新加载
+          </button>
+        </div>
+      </section>
       <SongList
+        v-else
         :songs="data.songs"
         title="今日推荐"
         empty-title="今天还没有推荐歌曲"
@@ -184,13 +214,51 @@ onMounted(() => void load());
   grid-template-columns: minmax(0, 1fr);
 }
 
-.daily-state {
-  min-height: 9rem;
+/* 空推荐态：说明为什么空 + 两个能立刻做的动作，占位高度与列表首屏接近，
+   避免页面在「加载 → 空」之间跳一大截。 */
+.daily-empty {
+  max-width: 34rem;
+  padding: 2.5rem 1.75rem 2rem;
+  border-radius: 12px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
 }
 
-/* 两栏在容器 ≥44rem 时保留；更窄时单列（每日列表只有 32 首，单列代价小）。
-   标题列由 SongList 的容器查询（<34rem 隐藏专辑列）兜底，不会在两栏区间被压成 0。 */
-@container daily-content (max-width: 44rem) {
+.daily-empty__title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.daily-empty__hint {
+  margin: 0.5rem 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.daily-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* 两栏在容器 ≥38rem 时保留（与歌单详情/搜索同一阈值）：960×640 默认展开侧栏时
+   内容壳约 41rem，能容纳 344px 列表 + 280px 歌词卡；44rem 会把 960 这一档
+   推到单列，让正在播放的歌词掉到 32 行列表之后（评审 P2）。
+   更窄时单列（每日列表只有 32 首，单列代价可接受）；标题列由 SongList 的
+   容器查询（<34rem 隐藏专辑列）兜底，不会在两栏区间被压成 0。 */
+/* 窄窗不渲染歌词卡（含加载占位），与 LyricAside 的隐藏规则一致。 */
+@media (max-width: 768px) {
+  .skeleton-aside {
+    display: none;
+  }
+}
+
+@container daily-content (max-width: 38rem) {
   .daily-layout {
     grid-template-columns: 1fr;
   }

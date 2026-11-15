@@ -90,15 +90,17 @@ watch(() => userStore.userId, () => void load(true));
 
     <div
       v-else-if="playlists.length === 0"
-      class="py-16 text-center"
+      class="playlist-empty"
     >
-      <p class="text-sm text-text-secondary">还没有歌单</p>
-      <p class="mt-1 text-xs text-text-tertiary">
+      <h2 class="playlist-empty__title">还没有歌单</h2>
+      <p class="playlist-empty__hint">
         在网易云音乐中创建或收藏的歌单，会自动显示在这里。
       </p>
-      <button type="button" class="btn btn-ghost mt-4" @click="goDaily">
-        浏览每日推荐
-      </button>
+      <div class="playlist-empty__actions">
+        <button type="button" class="btn btn-ghost" @click="goDaily">
+          浏览每日推荐
+        </button>
+      </div>
     </div>
 
     <div
@@ -127,6 +129,37 @@ watch(() => userStore.userId, () => void load(true));
   color: var(--color-text-tertiary);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* 空歌单：与每日推荐/搜索/歌单详情同一套纸面卡与标题层级（此前是裸居中文本）。 */
+.playlist-empty {
+  max-width: 34rem;
+  padding: 2.5rem 1.75rem 2rem;
+  border-radius: 12px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.playlist-empty__title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.playlist-empty__hint {
+  margin: 0.5rem 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.playlist-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
 }
 
 .playlist-grid {

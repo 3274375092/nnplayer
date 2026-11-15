@@ -447,6 +447,8 @@ export function describeLoginError(
  *     否则用户会以为第一次就失败。
  *   - stopped：连续失败达到上限、已停止自动切换；保留「连续 N 次」汇总并
  *     去重歌曲名，不再把最后一首当单曲失败。
+ *   - autoRetry：风控恢复链已排定下一次自动重试；此时播放还没失败到需要
+ *     用户接手，文案要说“正在自动重试”，而不是丢一个重试按钮让用户撞墙。
  */
 export function describePlaybackFailure(
   failure: PlaybackFailure,
@@ -477,6 +479,19 @@ export function describePlaybackFailure(
       ...cause,
       title: `连续 ${failure.failCount} 次播放失败，已停止自动切换`,
       hint: `${facts}${cause.hint}${lastSongRetryNote}`,
+    };
+  }
+
+  if (failure.autoRetry) {
+    const { attempt, limit, waitMs } = failure.autoRetry;
+    const note =
+      waitMs > 0
+        ? `约 ${Math.max(1, Math.round(waitMs / 1000))} 秒后开始第 ${attempt}/${limit} 次自动重试`
+        : `正在第 ${attempt}/${limit} 次自动重试`;
+    return {
+      ...cause,
+      title: `《${failure.songName}》播放被网易云暂时限制`,
+      hint: `${note}，无需手动操作；可以停止自动重试。`,
     };
   }
 

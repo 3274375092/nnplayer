@@ -147,6 +147,10 @@ async fn resolve_song_url(
 
     ensure_business_success(&resp, &[200], "获取播放地址")?;
 
+    // 上游可能随响应下发或刷新 NMTID 等设备会话 cookie：合并回内存会话，
+    // 让后续请求沿用一个稳定的设备标识（逐请求随机轮换会被反作弊判成机器流量）。
+    state.merge_response_cookies(&resp).await;
+
     // 服务端按账号权益可能降级下发；actualLevel 与 br 缺失时分别置
     // None/0，由前端显示为未知，不能谎报成请求档位。
     Ok(parse_song_url(song_id, &resp.body))

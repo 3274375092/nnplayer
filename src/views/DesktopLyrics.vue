@@ -1153,7 +1153,7 @@ body,
   display: inline-block;
   /* 已唱字：强调色按底板对比度派生（只提亮、不换色相），保证浅色桌面上
      底板内的已唱字仍 ≥4.5:1；--color-accent 仍用于工具条等黑底控件。 */
-  color: var(--lyric-accent, var(--color-accent, #d65d0e));
+  color: var(--lyric-accent, var(--color-accent-secondary));
   clip-path: inset(0 calc(100% - var(--char-pct, 0%)) 0 0);
 }
 

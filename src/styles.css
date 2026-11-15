@@ -166,6 +166,29 @@ input[type="number"]::-webkit-outer-spin-button {
     color: var(--color-text-tertiary);
   }
 
+  /* 输入框清空按钮（搜索框共用）：视觉 22px 图标、28px 命中区，
+     位置与悬停材质只在这里定义一次；使用方只需摆好 right 类。 */
+  .input-clear {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-tertiary);
+    transform: translateY(-50%);
+    transition: color 160ms ease, background-color 160ms ease;
+  }
+
+  .input-clear:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-strong, var(--color-card-hover));
+  }
+
   /* 骨架占位条：底色 + 一条用 transform 扫过的微光带。
      旧实现动画 background-position（纯 paint，48 个格子会每秒重新栅格化上千次）；
      现在高光放在 ::after 上只动 transform，交给合成器。
@@ -190,6 +213,31 @@ input[type="number"]::-webkit-outer-spin-button {
       transparent 100%
     );
     animation: skeleton-sweep 1.6s linear infinite;
+  }
+}
+
+/* 焦点环底座（@layer base）：组件各自声明 :focus-visible 是约定，不是基础设施——
+   登录页曾漏掉 3 个停靠点，落回 Chromium 的 1px auto 灰环（选中陶土 Tab 上约
+   1.4:1）。这里用 :where() 零特异性给所有原生可聚焦元素一个 2px 陶土环底座。
+   必须待在层里：无层的普通声明会压过 @layer components 中的组件焦点规则（与
+   特异性无关），此前 .input:focus 的 1px 偏移就被这条盖成了 2px。放进 base 层后，
+   components 层与 scoped 组件里声明的偏移（输入框 1px、菜单/tabpanel -2px）按
+   cascade layer 与原有的层内特异性正常生效。 */
+@layer base {
+  :where(
+    a,
+    button,
+    input,
+    select,
+    textarea,
+    summary,
+    [role="tab"],
+    [role="tabpanel"],
+    [role="menuitemradio"],
+    [tabindex]:not([tabindex="-1"])
+  ):focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 }
 
@@ -276,10 +324,6 @@ input[type="number"]::-webkit-outer-spin-button {
     padding-right: 12px !important;
     gap: 8px !important;
     bottom: 8px !important;
-  }
-
-  .mobile-player-bar .mobile-hide-on-small {
-    display: none !important;
   }
 
   /* 窄窗不再整体隐藏侧栏：Sidebar 会固定收成 64px 图标轨道（见 Sidebar.vue），

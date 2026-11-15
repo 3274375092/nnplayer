@@ -40,7 +40,18 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 防止 Vite 监听 src-tauri 目录造成 Rust 文件被频繁重建
-      ignored: ["**/src-tauri/**"],
+      // .impeccable 是技能产生的本地评审产物目录（截图、临时脚本），
+      // 外部进程会在其中高频创建/删除文件，watcher 曾因 EBUSY 直接崩溃。
+      // `*.tmpdir/` 与 `.*.tmp` 是原子写工具的临时目录/文件（编辑器、AI 工具、
+      // 同步盘都会产生）：Windows 上 watcher 抢在删除前打开会 EBUSY 崩掉整个
+      // dev server，而这些路径永远不会是源码，直接忽略。
+      ignored: [
+        "**/src-tauri/**",
+        "**/.impeccable/**",
+        "**/*.tmpdir",
+        "**/*.tmpdir/**",
+        "**/.*.tmp",
+      ],
     },
   },
 

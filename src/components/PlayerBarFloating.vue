@@ -108,6 +108,8 @@ const qualityMenuOpen = ref(false);
 const qualityButtonRef = ref<HTMLButtonElement | null>(null);
 const qualityMenuRef = ref<HTMLElement | null>(null);
 const coverButtonRef = ref<HTMLButtonElement | null>(null);
+/** 播放条左侧歌曲信息是否获得键盘焦点：驱动长标题的聚焦跑马灯。 */
+const songInfoFocused = ref(false);
 const qualityMenuStyle = ref<{
   width: string;
   bottom: string;
@@ -350,12 +352,19 @@ function openNowPlaying() {
 
 <template>
   <footer
+    id="nnplayer-player-bar"
     class="player-bar-grid mobile-player-bar"
     role="region"
     aria-label="播放控制"
+    tabindex="-1"
   >
-    <!-- 左：cover + info -->
-    <div class="mobile-song-section flex items-center gap-4 w-full min-w-0">
+    <!-- 左：cover + info。键盘焦点进入封面入口时让标题跑马灯开始（与 hover 同一
+         条路径），否则长歌名对只用键盘的人永远只剩截断文本。 -->
+    <div
+      class="mobile-song-section flex items-center gap-4 w-full min-w-0"
+      @focusin="songInfoFocused = true"
+      @focusout="songInfoFocused = false"
+    >
       <button
         ref="coverButtonRef"
         type="button"
@@ -385,10 +394,12 @@ function openNowPlaying() {
       <div class="mobile-song-info min-w-0 flex-1">
         <ScrollText
           :text="player.currentSong?.name ?? '尚未播放'"
+          :reveal="songInfoFocused"
           class="text-sm font-medium text-text-primary"
         />
         <ScrollText
           :text="player.currentSong?.artists ?? '—'"
+          :reveal="songInfoFocused"
           class="text-xs text-text-secondary"
         />
       </div>
@@ -503,10 +514,10 @@ function openNowPlaying() {
           aria-hidden="true"
         />
       </button>
-      <div class="player-volume min-w-0 flex-1 flex items-center gap-1.5 mobile-hide-on-small">
+      <div class="player-volume min-w-0 flex-1 flex items-center gap-1.5">
         <button
           type="button"
-          class="player-mute-button"
+          class="player-mute-button mobile-hide-tiny"
           :title="player.audioState.muted ? '取消静音' : '静音'"
           :aria-label="player.audioState.muted ? '取消静音' : '静音'"
           :aria-pressed="player.audioState.muted"
@@ -526,7 +537,7 @@ function openNowPlaying() {
           max="1"
           step="0.01"
           :value="player.audioState.volume"
-          class="player-volume-range flex-1 min-w-0 appearance-none cursor-pointer"
+          class="player-volume-range mobile-hide-slider flex-1 min-w-0 appearance-none cursor-pointer"
           aria-label="音量"
           :aria-valuetext="
             player.audioState.muted
@@ -551,7 +562,7 @@ function openNowPlaying() {
       ></div>
       <div
         ref="qualityMenuRef"
-        class="glass fixed z-50 rounded-xl py-1.5 box-border"
+        class="glass fixed z-50 py-1.5 box-border"
         :style="qualityMenuStyle"
       >
         <div
@@ -627,6 +638,12 @@ function openNowPlaying() {
   border-radius: 8px;
   background: var(--color-raised);
   box-shadow: var(--shadow-floating);
+}
+
+/* 「跳到播放控制」失败/屏幕阅读器定位到整条区域时，焦点环不应框住整条播放条：
+   区域本身不是一个可操作控件，Tab 会继续进入内部按钮（各自有 2px 环）。 */
+#nnplayer-player-bar:focus {
+  outline: none;
 }
 
 .player-cover-button {
@@ -716,7 +733,8 @@ function openNowPlaying() {
 
 .player-play-button:hover:not(:disabled) {
   transform: scale(1.045);
-  box-shadow: 0 4px 14px var(--color-glow);
+  /* DESIGN 的 Accent Glow（0 8px 24px）；此前是自行缩短的 0 4px 14px。 */
+  box-shadow: 0 8px 24px var(--color-glow);
 }
 
 .player-play-button:active:not(:disabled) {
@@ -873,7 +891,8 @@ function openNowPlaying() {
 .quality-menu-footer {
   margin-top: 4px;
   padding: 6px 12px 4px;
-  border-top: 1px solid var(--color-border, var(--color-border-strong));
+  /* No-Line Rule：旧写法画了一条 `1px solid var(--color-border)`，而
+     border token 恒为 transparent——它从来不渲染，只在源码里假装有分隔线。 */
   font-size: 11px;
   line-height: 1.5;
   color: var(--color-text-tertiary);
@@ -917,10 +936,11 @@ function openNowPlaying() {
   box-shadow: none;
 }
 
-/* 窄窗只隐藏音量，音质胶囊必须保留。左右两列同为 1fr（胶囊靠 justify-self
-   贴右），中央列才真正落在内容壳中线上；旧实现右列用 max-content，520–768px
-   区间播放键与进度行会整体右移（实测 768 CSS：播放键圆心 542.8，壳中线 416）。
-   最窄 520px 时左列仍有约 92px，足够容纳 48px 封面，右列 ≥92px 容得下胶囊。 */
+/* 窄窗只隐藏音量滑杆、保留静音键，音质胶囊必须保留。左右两列同为 1fr（胶囊靠
+   justify-self 贴右），中央列才真正落在内容壳中线上；旧实现右列用 max-content，
+   520–768px 区间播放键与进度行会整体右移（实测 768 CSS：播放键圆心 542.8，壳中线
+   416）。最窄 520px 时左列仍有约 92px，足够容纳 48px 封面，右列 ≥92px 容得下胶囊。
+   “能不能出声”比“音量多大”更基本：最小窗里的键盘/读屏用户需要至少一个音量入口。 */
 @media (max-width: 768px) {
   .player-bar-grid {
     grid-template-columns: minmax(0, 1fr) clamp(200px, 42%, 280px) minmax(0, 1fr);
@@ -929,6 +949,16 @@ function openNowPlaying() {
   .player-extras {
     width: auto;
     max-width: none;
+  }
+
+  /* 只剩一个 24px 静音键时不再占 flex 空间，交给右列自然宽度。 */
+  .player-volume {
+    flex: 0 0 auto;
+    opacity: 1;
+  }
+
+  .mobile-hide-slider {
+    display: none !important;
   }
 
   /* #9 几何契约：窄窗 74px 播放条（styles.css .mobile-player-bar），
@@ -955,6 +985,11 @@ function openNowPlaying() {
 
   .mobile-song-info {
     display: none;
+  }
+
+  /* ≤520：连静音键也收起，播放条只留封面、中央控制与图标化音质入口。 */
+  .mobile-hide-tiny {
+    display: none !important;
   }
 
   .mobile-player-cover {

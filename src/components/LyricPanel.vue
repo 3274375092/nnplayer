@@ -50,12 +50,22 @@ const props = withDefaults(
     panelHeight?: number;
     /** 单行基准高度（px），作为 min-height 和 line-height 基准 */
     lineHeight?: number;
+    /**
+     * 隐藏面板自带的「歌词 / 歌曲名」标题行。
+     * 正在播放页已经用 h1 展示了歌曲名，页内再重复一次同一标题会让同一视口
+     * 出现三次歌名（评审 P2：标题重复）；歌词卡的标题行只属于页内歌词列。
+     */
+    hideHeader?: boolean;
   }>(),
-  { panelHeight: 400, lineHeight: 36 },
+  { panelHeight: 400, lineHeight: 36, hideHeader: false },
 );
+/** 标题行（24px 标题 + 8px 间距）只有在渲染时才占用高度。 */
 const LYRIC_CHROME_HEIGHT = 40;
 const lyricViewportHeight = computed(() =>
-  Math.max(0, props.panelHeight - LYRIC_CHROME_HEIGHT),
+  Math.max(
+    0,
+    props.panelHeight - (props.hideHeader ? 0 : LYRIC_CHROME_HEIGHT),
+  ),
 );
 
 const player = usePlayerStore();
@@ -553,7 +563,7 @@ const firstContentPending = computed(
     class="lyric-panel p-4 w-full"
     :style="{ minHeight: `${panelHeight}px` }"
   >
-    <div class="lyric-panel__header flex items-center justify-between mb-2">
+    <div v-if="!hideHeader" class="lyric-panel__header flex items-center justify-between mb-2">
       <h3 class="lyric-panel__title text-sm font-medium">歌词</h3>
       <div
         v-if="hasSong"

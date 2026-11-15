@@ -104,6 +104,13 @@ if (playerStore) {
       let action: NoticeAction | undefined;
       if (described.relogin) {
         action = { label: "重新登录", run: reloginFromNotice };
+      } else if (failure.autoRetry) {
+        // 自动等待期间不提供会重置整套阶梯的普通“重试”；用户可以明确停止
+        // 自动请求，随后状态会回到可手动重试的最终失败。
+        action = {
+          label: "停止自动重试",
+          run: () => playerStore.cancelAutoRetry(),
+        };
       } else if (described.retryable) {
         action = {
           label: "重试",
@@ -114,11 +121,18 @@ if (playerStore) {
       }
       noticeStore.push({
         id: PLAYBACK_NOTICE_ID,
-        tone: "error",
+        // 自动恢复是引擎控制的常规进度，用 polite status；只有阶梯耗尽或
+        // 普通播放失败才升级为 assertive alert。
+        tone: failure.autoRetry ? "info" : "error",
         title: described.title,
         hint: described.hint,
-        detail: described.detail,
+        detail: failure.autoRetry ? undefined : described.detail,
         action,
+        compact: Boolean(failure.autoRetry),
+        suppressBehindQueue: Boolean(failure.autoRetry),
+        dismissLabel: failure.autoRetry
+          ? "停止自动重试并关闭提示"
+          : "关闭提示",
         onDismiss: () => playerStore.dismissPlaybackFailure(),
       });
     },
@@ -163,6 +177,16 @@ onBeforeUnmount(() => {
   stopAuthEpochSubscription = null;
   tauriBridge?.teardown();
 });
+// 键盘跳跃链接：桌面应用里内容壳之前是整条侧栏，48 首歌的列表要让键盘用户
+// 按 40+ 次 Tab 才能到达播放控制。两个 skip link 只在获得焦点时可见。
+function focusMain() {
+  document.querySelector<HTMLElement>(".app-main")?.focus();
+}
+
+function focusPlayerBar() {
+  const bar = document.querySelector<HTMLElement>("#nnplayer-player-bar");
+  bar?.focus();
+}
 </script>
 
 <template>
@@ -175,8 +199,26 @@ onBeforeUnmount(() => {
 
   <!-- 主窗：完整布局 -->
   <div v-else class="theme-root h-full flex overflow-hidden">
+    <!-- 跳跃链接：视觉上隐藏，键盘聚焦时才出现（WCAG 2.4.1 Bypass Blocks）。 -->
+    <a class="skip-link" href="#nnplayer-main" @click.prevent="focusMain">
+      跳到主要内容
+    </a>
+    <!-- 登录页不渲染播放条：此时第二个跳跃链接没有目标，必须一起隐藏，
+         否则 Enter 后焦点留在原地，读屏会把它当作一个失效的控件。 -->
+    <a
+      v-if="!isLoginRoute"
+      class="skip-link"
+      href="#nnplayer-player-bar"
+      @click.prevent="focusPlayerBar"
+    >
+      跳到播放控制
+    </a>
+
+    <!-- 登录页没有可用的播放器与导航：隐藏整条侧栏，让登录成为唯一焦点，
+         也避免点击导航项被路由守卫弹回同一个登录页的死胡同。 -->
     <!-- 侧栏宽度过渡的开始/结束上报给 App：页面侧据此冻结容器查询（见 script）。 -->
     <Sidebar
+      v-if="!isLoginRoute"
       class="shrink-0 mobile-sidebar-hidden"
       @width-transition-start="onSidebarWidthTransitionStart"
       @width-transition-end="onSidebarWidthTransitionEnd"
@@ -195,7 +237,7 @@ onBeforeUnmount(() => {
       }"
       :data-sidebar-transitioning="sidebarTransitioning ? 'true' : undefined"
     >
-      <main class="app-main overflow-y-auto" tabindex="-1">
+      <main id="nnplayer-main" class="app-main overflow-y-auto" tabindex="-1">
         <div class="route-stage">
           <router-view v-slot="{ Component }">
             <transition name="fade-slide">
@@ -221,6 +263,34 @@ onBeforeUnmount(() => {
      并把整窗 background-color 过渡压到 150ms（短于 200ms 主题 debounce），
      避免换歌时 600ms 整窗重绘 + 文档级继承色重算。 */
   transition: background-color 0.15s ease;
+}
+
+/* 跳跃链接：藏在视口外，Tab 聚焦后落回左上角；纸面 + Floating 阴影在深色
+   壁纸/内容上都能看清，焦点环沿用全局 2px 陶土底座。 */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 12px;
+  z-index: 80;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-floating);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  transform: translateY(calc(-100% - 16px));
+  transition: transform 160ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link {
+    transition: none;
+  }
 }
 
 .app-content-shell {

@@ -12,7 +12,7 @@ use reqwest::header::{HeaderMap, HeaderValue, COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 /// 特殊状态码集合（视为 200）
 static SPECIAL_STATUS_CODES: LazyLock<std::collections::HashSet<i64>> =
@@ -25,6 +25,89 @@ static WNMCID: LazyLock<String> = LazyLock::new(generate_wnmcid);
 /// Cookie Domain 移除正则（编译一次，全局复用）
 static DOMAIN_REGEX: LazyLock<regex_lite::Regex> =
     LazyLock::new(|| regex_lite::Regex::new(r"\s*Domain=[^;]+;?").unwrap());
+
+/// 网易云反作弊要求设备会话标识在一次会话内稳定：同一进程里 NMTID 不能每个
+/// 请求都换一个。服务端下发过 NMTID 时 Cookie 里已有值、优先沿用；没有时用
+/// 进程内固定的 deviceId 派生一个稳定兜底，而不是每次随机。
+fn stable_nmtid(device_id: &str) -> String {
+    use md5::{Digest, Md5};
+    let seed = format!("nnplayer-nmtid:{device_id}");
+    let first = hex::encode(Md5::digest(seed.as_bytes()));
+    let second = hex::encode(Md5::digest(format!("{seed}:fallback").as_bytes()));
+    format!("00O{}", &format!("{first}{second}")[..38])
+}
+
+struct NmtidState {
+    server_value: Option<String>,
+    probes_left: u8,
+}
+
+impl Default for NmtidState {
+    fn default() -> Self {
+        Self {
+            server_value: None,
+            probes_left: 3,
+        }
+    }
+}
+
+static NMTID_STATES: LazyLock<Mutex<HashMap<String, NmtidState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn remember_server_nmtid(device_id: &str, cookies: &[String]) -> Result<()> {
+    for cookie in cookies {
+        let Some(pair) = cookie.split(';').next() else {
+            continue;
+        };
+        let Some((name, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if name.trim() == "NMTID" && !value.trim().is_empty() {
+            let mut states = NMTID_STATES
+                .lock()
+                .map_err(|_| NcmError::Unknown("NMTID state lock poisoned".to_string()))?;
+            states
+                .entry(device_id.to_string())
+                .or_default()
+                .server_value = Some(value.trim().to_string());
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn cached_server_nmtid(device_id: &str) -> Result<Option<String>> {
+    let states = NMTID_STATES
+        .lock()
+        .map_err(|_| NcmError::Unknown("NMTID state lock poisoned".to_string()))?;
+    Ok(states
+        .get(device_id)
+        .and_then(|state| state.server_value.clone()))
+}
+
+/// NMTID 选择顺序：显式 Cookie > 服务端缓存 > eapi 探测 > 稳定兜底。
+///
+/// 新会话先让最多三次 eapi 请求不带 NMTID，服务端才可能通过 Set-Cookie 下发
+/// 真实值；探测预算耗尽后才使用稳定兜底，避免一开始就用生成值挡住下发。
+fn choose_nmtid(
+    supplied: Option<&str>,
+    cached: Option<&str>,
+    probes_left: &mut u8,
+    uses_eapi: bool,
+    device_id: &str,
+) -> Option<String> {
+    if let Some(value) = supplied.filter(|value| !value.is_empty()) {
+        return Some(value.to_string());
+    }
+    if let Some(value) = cached.filter(|value| !value.is_empty()) {
+        return Some(value.to_string());
+    }
+    if uses_eapi && *probes_left > 0 {
+        *probes_left -= 1;
+        return None;
+    }
+    Some(stable_nmtid(device_id))
+}
 
 /// 安全创建 HeaderValue，无效字符会被过滤
 fn header_value(s: &str) -> HeaderValue {
@@ -272,11 +355,37 @@ impl ApiClient {
             .entry("appver".to_string())
             .or_insert_with(|| os.appver.to_string());
 
-        // 非登录接口注入 NMTID
+        // 确定加密方式
+        let crypto_type = if options.crypto == CryptoType::Eapi && !ENCRYPT {
+            CryptoType::Api
+        } else {
+            options.crypto.clone()
+        };
+
+        // 非登录接口按“Cookie > 服务端缓存 > eapi 探测 > 稳定兜底”选择 NMTID。
         if !uri.contains("login") {
-            cookie_map
-                .entry("NMTID".to_string())
-                .or_insert_with(|| random_hex(8));
+            let supplied = cookie_map.get("NMTID").cloned();
+            let device_id = cookie_map
+                .get("deviceId")
+                .cloned()
+                .unwrap_or_else(|| self.get_device_id().to_string());
+            let cached = cached_server_nmtid(&device_id)?;
+            let selected = {
+                let mut states = NMTID_STATES
+                    .lock()
+                    .map_err(|_| NcmError::Unknown("NMTID state lock poisoned".to_string()))?;
+                let state = states.entry(device_id.clone()).or_default();
+                choose_nmtid(
+                    supplied.as_deref(),
+                    cached.as_deref(),
+                    &mut state.probes_left,
+                    crypto_type == CryptoType::Eapi,
+                    &device_id,
+                )
+            };
+            if let Some(nmtid) = selected {
+                cookie_map.insert("NMTID".to_string(), nmtid);
+            }
         }
 
         // 未登录时注入匿名 token
@@ -289,13 +398,6 @@ impl ApiClient {
         }
 
         headers.insert(COOKIE, header_value(&cookie_obj_to_string(&cookie_map)));
-
-        // 确定加密方式
-        let crypto_type = if options.crypto == CryptoType::Eapi && !ENCRYPT {
-            CryptoType::Api
-        } else {
-            options.crypto.clone()
-        };
 
         let mut data = data;
         let url: String;
@@ -411,6 +513,15 @@ impl ApiClient {
                     header_map.insert("MUSIC_A".to_string(), music_a.clone());
                 }
 
+                // eapi 仍按客户端字段单独构造 Cookie；关键是此前遗漏了 NMTID。
+                // 已维护的 API 实现会把 cookie 传入、服务端缓存或稳定兜底的
+                // NMTID 放进这组字段，不能只在通用 Cookie 头里准备却在这里覆盖掉。
+                if crypto_type == CryptoType::Eapi {
+                    if let Some(nmtid) = cookie_map.get("NMTID") {
+                        header_map.insert("NMTID".to_string(), nmtid.clone());
+                    }
+                }
+
                 let header_cookie_str = header_map
                     .iter()
                     .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
@@ -508,6 +619,11 @@ impl ApiClient {
                 DOMAIN_REGEX.replace_all(s, "").to_string()
             })
             .collect();
+        let response_device_id = cookie_map
+            .get("deviceId")
+            .cloned()
+            .unwrap_or_else(|| self.get_device_id().to_string());
+        remember_server_nmtid(&response_device_id, &resp_cookies)?;
 
         // 解析响应体：e_r 必须与请求侧使用同一默认值，否则会把明文当密文解析
         let e_r = options.e_r.unwrap_or(ENCRYPT_RESPONSE);
@@ -546,6 +662,62 @@ impl ApiClient {
 mod crypto_default_tests {
     use super::*;
 
+    #[test]
+    fn fallback_nmtid_is_stable_for_a_device() {
+        let first = stable_nmtid("device-a");
+        assert_eq!(first, stable_nmtid("device-a"));
+        assert_ne!(first, stable_nmtid("device-b"));
+        assert!(first.starts_with("00O"));
+        assert_eq!(first.len(), 41);
+    }
+
+    #[test]
+    fn nmtid_selection_prefers_supplied_then_cached_then_probe() {
+        let mut probes = 3;
+        assert_eq!(
+            choose_nmtid(Some("cookie"), Some("cached"), &mut probes, true, "device"),
+            Some("cookie".to_string())
+        );
+        assert_eq!(
+            choose_nmtid(None, Some("cached"), &mut probes, true, "device"),
+            Some("cached".to_string())
+        );
+        assert_eq!(choose_nmtid(None, None, &mut probes, true, "device"), None);
+        assert_eq!(probes, 2);
+    }
+
+    #[test]
+    fn nmtid_selection_uses_fallback_after_probe_budget_or_outside_eapi() {
+        let mut exhausted = 0;
+        let fallback = choose_nmtid(None, None, &mut exhausted, true, "device")
+            .expect("exhausted probe should use fallback");
+        assert!(fallback.starts_with("00O"));
+
+        let mut untouched = 3;
+        let non_eapi = choose_nmtid(None, None, &mut untouched, false, "device")
+            .expect("non-eapi should use fallback");
+        assert!(non_eapi.starts_with("00O"));
+        assert_eq!(untouched, 3);
+    }
+
+    #[test]
+    fn server_nmtid_cache_is_scoped_to_device_id() {
+        remember_server_nmtid(
+            "test-device-a",
+            &["NMTID=server-a; Path=/; HttpOnly".to_string()],
+        )
+        .expect("cache device A NMTID");
+
+        assert_eq!(
+            cached_server_nmtid("test-device-a").expect("read device A"),
+            Some("server-a".to_string())
+        );
+        assert_eq!(
+            cached_server_nmtid("test-device-b").expect("read device B"),
+            None
+        );
+    }
+
     /// 上游 `util/request.js` 对未指定 crypto 的模块取配置默认值：
     /// `APP_CONF.encrypt ? 'eapi' : 'api'`，而 `util/config.json` 是 `encrypt: true`。
     /// 也就是说"不显式传 crypto"必须解析成 **Eapi**；只有上游显式写
@@ -558,10 +730,12 @@ mod crypto_default_tests {
     fn unspecified_crypto_matches_upstream_default() {
         assert_eq!(CryptoType::default(), CryptoType::Eapi);
         assert_eq!(CryptoType::from(""), CryptoType::Eapi);
-        assert!(
-            ENCRYPT,
-            "APP_CONF.encrypt 为 true，未指定 crypto 时必须是 eapi"
-        );
+        const {
+            assert!(
+                ENCRYPT,
+                "APP_CONF.encrypt 为 true，未指定 crypto 时必须是 eapi"
+            );
+        }
     }
 }
 

@@ -29,9 +29,21 @@ export const RAISED_NEUTRAL = "#ffffff";
 export const RAISED_CARD_WEIGHT = 0.42;
 export const SURFACE_SOFT_ALPHA = 0.05;
 export const SURFACE_STRONG_ALPHA = 0.06;
-const ACCENT_SUBTLE_ALPHA = 0.12;
+/** accent-subtle 洗色的透明度：测试复算合成面时也引用这个单源值。 */
+export const ACCENT_SUBTLE_ALPHA = 0.12;
 /** 强调色文字叠在 accent-subtle 洗色上的下限（比纸面强调色再留一点渲染余量）。 */
 const ACCENT_ON_SUBTLE_MIN_CONTRAST = 4.65;
+/**
+ * 三级文字（时间、元信息、占位符）在真实合成面上的下限。
+ *
+ * 与正文同用 4.65：它承载的是 11–12px 的真实信息（播放时间、音质档位、搜索占位符），
+ * 不是装饰。封面染色后，`accent-subtle` 洗色（当前歌曲行/激活导航）与双重嵌套的
+ * `surface-soft`（侧栏输入框）会比纸面更暗，静态 ash 在这两种面上只剩 4.33–4.46:1；
+ * 低于 AA。这里按“真实合成面”推导一个只在需要时略微压暗的三级文字色。
+ */
+const TEXT_TERTIARY_MIN_CONTRAST = 4.65;
+/** 推导下限：比泥炭（secondary）再深就会和二级文字混成同一档。 */
+const TEXT_TERTIARY_MIN_LIGHTNESS = 0.28;
 
 export const GRUVBOX_LIGHT_THEME = {
   background: "#fbf1c7",
@@ -58,6 +70,7 @@ export const DYNAMIC_THEME_CSS_VARIABLES = [
   "--color-accent-subtle",
   "--color-accent-on-subtle",
   "--color-glow",
+  "--color-text-tertiary",
 ] as const;
 
 export type DynamicThemeVariable =
@@ -420,6 +433,69 @@ function accessibleAccentOnSubtle(
 }
 
 /**
+ * 三级文字真正落座的合成面。
+ *
+ * 只列 CSS 实际绘制的表面（`--color-bg` 的全窗纸底是唯一底）：侧栏 = surface-soft
+ * 叠纸；侧栏搜索框再叠一层 surface-soft（双重嵌套）；行/卡片 hover = surface-strong
+ * 叠纸；accent-subtle 洗色落在当前歌曲行（洗色叠纸）、激活导航（洗色叠侧栏）、
+ * 队列“播放中”徽标（洗色叠两层 raised）；歌词卡/弹层是 raised 纸面。
+ * 旧的三档纸面渐变（bg-from/bg-to）已不再绘制，因此不再参与这组下限推导。
+ */
+function tertiaryTextBackdrops(background: string, accent: string): string[] {
+  const inkOverlay = (value: string, alpha: number) =>
+    mixHex(value, GRUVBOX_LIGHT_THEME.foreground, alpha);
+  const wash = (base: string, layers = 1): string => {
+    let color = base;
+    for (let layer = 0; layer < layers; layer += 1) {
+      color = mixHex(color, accent, ACCENT_SUBTLE_ALPHA);
+    }
+    return color;
+  };
+  const sidebar = inkOverlay(background, SURFACE_SOFT_ALPHA);
+  const sidebarInput = inkOverlay(sidebar, SURFACE_SOFT_ALPHA);
+  const strong = inkOverlay(background, SURFACE_STRONG_ALPHA);
+  const raised = mixHex(
+    RAISED_NEUTRAL,
+    GRUVBOX_LIGHT_THEME.card,
+    RAISED_CARD_WEIGHT,
+  );
+
+  return [
+    background,
+    sidebar,
+    sidebarInput,
+    strong,
+    wash(background),
+    wash(sidebar),
+    wash(strong),
+    wash(raised, 2),
+    GRUVBOX_LIGHT_THEME.card,
+    GRUVBOX_LIGHT_THEME.cardHover,
+  ];
+}
+
+/**
+ * 只压暗明度、保持 ash 的色相与低饱和度：默认纸面上仍是 DESIGN 记录的 #665c54，
+ * 只有真实合成面更暗时才向下让一小步，保住三级文字的“安静”性格。
+ */
+function accessibleTextTertiary(backdrops: string[]): string {
+  const { h, s, l } = parseHex(GRUVBOX_LIGHT_THEME.textTertiary);
+  let lightness = l;
+  let color = hslToHex(h, s, lightness);
+  while (
+    backdrops.some(
+      (backdrop) =>
+        contrastRatio(color, backdrop) < TEXT_TERTIARY_MIN_CONTRAST,
+    ) &&
+    lightness > TEXT_TERTIARY_MIN_LIGHTNESS
+  ) {
+    lightness = Math.max(TEXT_TERTIARY_MIN_LIGHTNESS, lightness - 0.005);
+    color = hslToHex(h, s, lightness);
+  }
+  return color;
+}
+
+/**
  * 将封面原色映射到浅色主题：结构色保持 Gruvbox Light，只让背景色温和
  * 强调色随封面变化。背景/环境光的 hue 向陶土拉近，强调色 hue 收进 10°–40°
  * 的暖色区间（40°–55° 的暖金折回陶土一侧），因此切歌仍有可见反馈，品牌却始终
@@ -507,6 +583,11 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
     clamp(s * 1.06 + 0.2, 0.58, 0.82),
     0.58,
   );
+  // 三级文字按“它真正落座的合成面”推导，而不是按纸面本体：洗色/嵌套透明层
+  // 比纸面更暗，静态 ash 在染色状态下会跌破 AA（评审 P1）。
+  const textTertiary = accessibleTextTertiary(
+    tertiaryTextBackdrops(background, accent),
+  );
 
   return {
     tokens: {
@@ -519,6 +600,7 @@ export function deriveCoverTheme(input: CoverPaletteInput): DerivedCoverTheme {
       "--color-accent-subtle": hexToRgba(accent, ACCENT_SUBTLE_ALPHA),
       "--color-accent-on-subtle": accentOnSubtle,
       "--color-glow": hexToRgba(accent, 0.22),
+      "--color-text-tertiary": textTertiary,
     },
     uiAccent: accent,
     desktopAccent,

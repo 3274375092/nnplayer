@@ -5,18 +5,33 @@
 //   3. 手机验证码登录（60s 倒计时）
 //
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useUserStore } from "@/stores/user";
 import { describeAppError, describeInputError, describeLoginError } from "@/utils/appErrors";
 import type { UserFacingError } from "@/utils/appErrors";
 import { isValidEmail, isValidPhone, md5Password } from "@/utils/crypto";
+import { hasUsableMusicUCookie } from "@/utils/loginCookie";
+
+// 「关于与帮助」在登录页也要可达：首次启动/登录失败时，快捷键、托盘与更新
+// 说明恰恰是最需要的时候。弹层本身 Teleport 到 body，与登录卡布局无关。
+const AboutDialog = defineAsyncComponent(
+  () => import("@/components/AboutDialog.vue"),
+);
 
 type Tab = "qr" | "account" | "phone";
 const TABS: ReadonlyArray<{ key: Tab; label: string }> = [
+  // 三个标签保持同一语法（都是“方式 + 登录”），此前扫码是动词短语、另外两个是名词短语。
   { key: "qr", label: "扫码登录" },
-  { key: "account", label: "账号密码" },
-  { key: "phone", label: "手机验证码" },
+  { key: "account", label: "密码登录" },
+  { key: "phone", label: "验证码登录" },
 ];
 const tab = ref<Tab>("qr");
 
@@ -265,12 +280,32 @@ onBeforeUnmount(() => {
 
 // =============== 高级：粘贴 Cookie 登录 ===============
 const showCookieDebug = ref(false);
+/** 「关于与帮助」弹层（登录页唯一可用的帮助入口）。 */
+const aboutOpen = ref(false);
+const aboutTriggerRef = ref<HTMLButtonElement | null>(null);
+
+function openAbout() {
+  aboutOpen.value = true;
+}
+
+function closeAbout() {
+  aboutOpen.value = false;
+  void nextTick(() => aboutTriggerRef.value?.focus());
+}
+
 const cookieRaw = ref("");
 const cookieError = ref<UserFacingError | null>(null);
+
+/**
+ * 判断粘贴的 Cookie 里是否真的有一个可用的 `MUSIC_U=...` 键值对。
+ * 判定逻辑在 utils/loginCookie.ts 中单测覆盖；这里只做 UI 绑定。
+ */
+const cookieReady = computed(() => hasUsableMusicUCookie(cookieRaw.value));
+
 async function submitCookie() {
-  if (!cookieRaw.value.includes("MUSIC_U")) {
+  if (!cookieReady.value) {
     cookieError.value = describeInputError(
-      "Cookie 中缺少 MUSIC_U，请粘贴包含 MUSIC_U 的完整 Cookie",
+      "Cookie 中缺少可用的 MUSIC_U，请粘贴包含 MUSIC_U=… 的完整 Cookie",
     );
     return;
   }
@@ -297,6 +332,11 @@ async function submitCookie() {
 
     <div class="login-panel my-auto w-full max-w-md p-8 animate-fade-in-up relative z-10">
       <h1 class="text-xl font-semibold mb-1">登录 nnplayer</h1>
+      <!-- 第一屏就交代身份与边界：非官方、仅供学习与个人使用。
+           此前这句话只存在于“关于”弹层（评审： Releases 用户在第一分钟看不到）。 -->
+      <p class="login-identity">
+        非官方网易云音乐桌面客户端，仅供学习与个人使用。
+      </p>
       <p v-if="loginHint" class="text-xs text-text-secondary mb-5">
         {{ loginHint }}
       </p>
@@ -598,9 +638,9 @@ async function submitCookie() {
           <button
             type="button"
             class="btn btn-ghost w-full mt-2"
-            :disabled="!cookieRaw.includes('MUSIC_U')"
+            :disabled="!cookieReady"
             :aria-describedby="
-              !cookieRaw.includes('MUSIC_U') ? 'login-cookie-help' : undefined
+              !cookieReady ? 'login-cookie-help' : undefined
             "
             @click="submitCookie"
           >
@@ -608,7 +648,25 @@ async function submitCookie() {
           </button>
         </div>
       </div>
+
+      <!-- 登录前的帮助入口：首次启动或服务不可用时，快捷键/托盘/更新说明
+           不能因为侧栏被隐藏而彻底不可达。 -->
+      <div class="login-footnote">
+        <button
+          ref="aboutTriggerRef"
+          type="button"
+          class="login-footnote__link"
+          @click="openAbout"
+        >
+          关于与帮助
+        </button>
+      </div>
     </div>
+
+    <!-- 弹层本身 Teleport 到 body，放在根元素内部不改变布局；但它必须留在根里，
+         否则登录页成为多根组件，路由 <transition name="fade-slide"> 无法拿到元素
+         根节点、只能打印警告并放弃动画（评审 L1）。 -->
+    <AboutDialog :open="aboutOpen" @close="closeAbout" />
   </div>
 </template>
 
@@ -617,6 +675,40 @@ async function submitCookie() {
   border-radius: 12px;
   background: var(--color-raised);
   box-shadow: var(--shadow-floating);
+}
+
+/* 身份声明：一行安静的边界说明，不是营销文案。 */
+.login-identity {
+  margin: 0 0 0.5rem;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 登录卡脚注：把「关于与帮助」放在卡片最后一行，安静但可命中（≥24px 高）。 */
+.login-footnote {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+
+.login-footnote__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.login-footnote__link:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-strong, var(--color-card-hover));
 }
 
 /* 二维码外框沿用 Floating 阴影（Two-Shadow Rule），不再用 Tailwind 的黑色
@@ -689,6 +781,15 @@ async function submitCookie() {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+/* tabpanel 是容器：用负偏移让焦点环落在面板内侧，不随卡片圆角外溢。
+   普通控件的 2px 陶土环由 styles.css 的全局焦点环底座（@layer base）提供，
+   登录页不再复制一份同款规则（评审 L7：重复副本会随全局底座一起漂移）。 */
+.login-panel [role="tabpanel"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: 8px;
 }
 
 .login-error-detail code {

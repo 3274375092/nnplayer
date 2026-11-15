@@ -131,7 +131,13 @@ function runAction() {
         <section
           v-if="current && current.tone === region.tone"
           class="notice"
-          :class="`notice--${region.tone}`"
+          :class="[
+            `notice--${region.tone}`,
+            {
+              'notice--compact': current.compact,
+              'notice--suppress-behind-queue': current.suppressBehindQueue,
+            },
+          ]"
         >
           <CircleAlert
             v-if="region.tone === 'error'"
@@ -170,7 +176,7 @@ function runAction() {
             <button
               type="button"
               class="notice-close"
-              aria-label="关闭提示"
+              :aria-label="current.dismissLabel ?? '关闭提示'"
               @click="close"
             >
               <X :size="14" :stroke-width="1.75" aria-hidden="true" />
@@ -234,6 +240,32 @@ function runAction() {
 
 .notice--info .notice-icon {
   color: var(--color-text-secondary);
+}
+
+.notice--compact {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.notice--compact .notice-icon {
+  margin-top: 0;
+}
+
+.notice--compact .notice-body {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.notice--compact .notice-title {
+  font-size: 12px;
+}
+
+.notice--compact .notice-hint {
+  margin-top: 0;
+  font-size: 11px;
 }
 
 .notice-body {
@@ -368,5 +400,14 @@ function runAction() {
   .notice-pop-leave-to {
     transform: none;
   }
+}
+</style>
+
+<style>
+/* 这条规则依赖 <body> 上的状态类，必须放在非 scoped 块：Vue 3.5.42 会把
+   scoped 里的 :global(...) 编译成 `body.queue-drawer-open { visibility:
+   hidden }`，导致整个应用被隐藏。 */
+body.queue-drawer-open .notice--suppress-behind-queue {
+  visibility: hidden;
 }
 </style>

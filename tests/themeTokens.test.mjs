@@ -23,6 +23,7 @@ const theme = await import(
 );
 
 const {
+  ACCENT_SUBTLE_ALPHA,
   DEFAULT_THEME_SEED,
   DYNAMIC_THEME_CSS_VARIABLES,
   GRUVBOX_LIGHT_THEME,
@@ -183,29 +184,58 @@ function paintedPaperSurfaces(background) {
 }
 
 /**
- * 复算 accent-subtle 洗色在真实渲染里的合成色：accent-subtle 是 12% 透明层，
- * 侧栏 = surface-soft 叠纸色，窄窗侧栏浮层 = 纸色，队列徽标 = 叠两次的 raised。
- * 公式与 styles.css 的派生面一致；测试独立复算，避免推导自证。
+ * 复算 accent-subtle 洗色在真实渲染里的合成色：accent-subtle 是导出的
+ * ACCENT_SUBTLE_ALPHA 透明层，侧栏 = surface-soft 叠纸色，窄窗侧栏浮层 = 纸色，
+ * 队列徽标 = 叠两次的 raised。公式与 styles.css 的派生面一致；测试独立复算，
+ * 避免推导自证。
  */
-function accentSubtleBackdrops({
-  background,
-  accent,
-  card = GRUVBOX_LIGHT_THEME.card,
-}) {
+function accentSubtleBackdrops({ background, accent }) {
   const wash = (base, layers = 1) => {
     let color = base;
     for (let layer = 0; layer < layers; layer += 1) {
-      color = mixHex(color, accent, 0.12);
+      color = mixHex(color, accent, ACCENT_SUBTLE_ALPHA);
     }
     return color;
   };
   const surfaces = paintedPaperSurfaces(background);
-  const raised = mixHex(RAISED_NEUTRAL, card, RAISED_CARD_WEIGHT);
   return {
     sidebar: wash(surfaces.sidebar),
     overlaySidebar: wash(background),
-    queueBadge: wash(raised, 2),
-    raised,
+    queueBadge: wash(surfaces.raised, 2),
+    raised: surfaces.raised,
+  };
+}
+
+/**
+ * 三级文字（时间/元信息/占位符）真正落座的绘制表面，独立于推导复算：
+ * 侧栏与侧栏输入框的双重嵌套、hover 面、以及各种 accent-subtle 洗色底。
+ * 纸面本体复用 paintedPaperSurfaces、洗色 alpha 复用导出的 ACCENT_SUBTLE_ALPHA，
+ * 不再复制第三份合成公式；旧的三档纸面渐变不再绘制，不在此列。
+ */
+function tertiaryTextBackdrops({ background, accent }) {
+  const surfaces = paintedPaperSurfaces(background);
+  const wash = (base, layers = 1) => {
+    let color = base;
+    for (let layer = 0; layer < layers; layer += 1) {
+      color = mixHex(color, accent, ACCENT_SUBTLE_ALPHA);
+    }
+    return color;
+  };
+  return {
+    page: surfaces.background,
+    sidebar: surfaces.sidebar,
+    sidebarInput: mixHex(
+      surfaces.sidebar,
+      GRUVBOX_LIGHT_THEME.foreground,
+      SURFACE_SOFT_ALPHA,
+    ),
+    strong: surfaces.strong,
+    currentRowWash: wash(surfaces.background),
+    activeNavWash: wash(surfaces.sidebar),
+    hoverWash: wash(surfaces.strong),
+    queueBadgeWash: wash(surfaces.raised, 2),
+    card: surfaces.card,
+    cardHover: surfaces.cardHover,
   };
 }
 
@@ -264,11 +294,38 @@ function assertThemeReadable(derived, label) {
     surfaces.sidebar,
     GRUVBOX_LIGHT_THEME.card,
   ]) {
-    const subtleSurface = mixHex(surface, accent, 0.12);
+    const subtleSurface = mixHex(surface, accent, ACCENT_SUBTLE_ALPHA);
     assert.ok(
       contrastRatio(GRUVBOX_LIGHT_THEME.foreground, subtleSurface) >=
         BODY_MIN_CONTRAST,
       `${label}: primary text is not readable on subtle accent surface ${subtleSurface}`,
+    );
+  }
+
+  // 三级文字是 11–12px 的真实信息，必须对“真实合成面”全部达标：
+  // 封面染色后，洗色底与双重嵌套的侧栏输入框比纸面更暗（评审 P1）。
+  const textTertiary = derived.tokens["--color-text-tertiary"];
+  assert.match(
+    textTertiary,
+    /^#[\da-f]{6}$/i,
+    `${label}: --color-text-tertiary must be a hex color, got ${textTertiary}`,
+  );
+  const staticAsh = hexToHsl(GRUVBOX_LIGHT_THEME.textTertiary);
+  const derivedAsh = hexToHsl(textTertiary);
+  assert.ok(
+    derivedAsh.l <= staticAsh.l + 0.002,
+    `${label}: tinted tertiary ${textTertiary} must not be lighter than the static ash`,
+  );
+  assert.ok(
+    hueDistance(derivedAsh.h, staticAsh.h) <= 6,
+    `${label}: tinted tertiary ${textTertiary} drifted off the ash hue (${derivedAsh.h.toFixed(1)}° vs ${staticAsh.h.toFixed(1)}°)`,
+  );
+  for (const [name, surface] of Object.entries(
+    tertiaryTextBackdrops({ background, accent }),
+  )) {
+    assert.ok(
+      contrastRatio(textTertiary, surface) >= BODY_MIN_CONTRAST,
+      `${label}: tertiary text ${textTertiary} is not readable on the ${name} surface ${surface}`,
     );
   }
 }
@@ -320,7 +377,7 @@ test("CSS defaults stay synchronized with the Gruvbox token source", () => {
     "--color-accent": DEFAULT_THEME_SEED,
     "--color-on-accent": GRUVBOX_LIGHT_THEME.background,
     "--color-accent-secondary": "#d65d0e",
-    "--color-accent-subtle": "rgba(175, 58, 3, 0.12)",
+    "--color-accent-subtle": `rgba(175, 58, 3, ${ACCENT_SUBTLE_ALPHA})`,
     "--color-accent-on-subtle": STATIC_ACCENT_ON_SUBTLE,
     "--color-text-primary": GRUVBOX_LIGHT_THEME.foreground,
     "--color-text-secondary": GRUVBOX_LIGHT_THEME.textSecondary,
@@ -364,6 +421,8 @@ test("CSS derived surfaces stay single-sourced from themeTokens.ts", async () =>
   assertAlphaUnit(SURFACE_SOFT_ALPHA, "SURFACE_SOFT_ALPHA");
   assertAlphaUnit(SURFACE_STRONG_ALPHA, "SURFACE_STRONG_ALPHA");
   assertAlphaUnit(RAISED_CARD_WEIGHT, "RAISED_CARD_WEIGHT");
+  // accent-subtle 的洗色 alpha 也是单源：测试与推导引用同一个导出常量。
+  assertAlphaUnit(ACCENT_SUBTLE_ALPHA, "ACCENT_SUBTLE_ALPHA");
 
   const surfaceSoft = styles.match(
     /--color-surface-soft:\s*color-mix\(in srgb,\s*var\(--color-text-primary\)\s+(\d+(?:\.\d+)?)%,\s*transparent\)/,

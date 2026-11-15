@@ -33,6 +33,12 @@ export interface AppNotice {
   detail?: string;
   /** 主动作，如重试失败歌曲 / 重新登录。 */
   action?: NoticeAction;
+  /** 关闭按钮的无障碍名称；当关闭会取消后台动作时必须写明后果。 */
+  dismissLabel?: string;
+  /** 紧凑单行布局，用于可由系统自行完成的短时进度。 */
+  compact?: boolean;
+  /** 队列抽屉打开时隐藏这条背景提示，避免被遮罩压暗后又重复显示。 */
+  suppressBehindQueue?: boolean;
   /** 用户关闭提示时回调；抛错不得阻止关闭。 */
   onDismiss?: () => void;
 }

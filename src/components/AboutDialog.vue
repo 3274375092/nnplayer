@@ -30,10 +30,14 @@ import type {
 import { isUnsupportedPlatformError } from "@/utils/updateErrors";
 import { nextInstallAction, type UpdateStatus } from "@/utils/updateFlow";
 import { downloadPercent } from "@/utils/updateProgress";
+import { useBackgroundInert } from "@/composables/useBackgroundInert";
 
 const props = defineProps<{
   open: boolean;
 }>();
+
+// 弹层打开期间应用壳 inert（dialog 内容 Teleport 到 body，不受影响）。
+useBackgroundInert(() => props.open);
 
 const emit = defineEmits<{
   close: [];
@@ -433,6 +437,11 @@ onBeforeUnmount(() => {
             </header>
 
             <div class="about-body">
+              <!-- 关于是产品的“铭牌”：先用一句自己的话介绍它是什么，
+                   再给法律边界。不新增承诺，只是让这里听起来像这台收音机。 -->
+              <p class="about-voice">
+                一台安静的桌面收音机：把歌唱完，把歌词留在眼前，不打扰你手上的事。
+              </p>
               <p class="about-lede">
                 nnplayer 是非官方第三方客户端，仅供学习与个人使用。内容经网易云接口获取，与网易云音乐及其关联公司无隶属关系。
               </p>
@@ -466,6 +475,13 @@ onBeforeUnmount(() => {
                 <h3 class="about-section-title">关闭窗口后继续播放</h3>
                 <p class="about-text">
                   关闭主窗口不会停止播放，nnplayer 会留在系统托盘。点击托盘图标可显示或隐藏窗口，或从托盘菜单退出应用。
+                </p>
+              </section>
+
+              <section class="about-section">
+                <h3 class="about-section-title">桌面歌词</h3>
+                <p class="about-text">
+                  从侧栏「桌面歌词」打开独立透明窗口：歌词置顶显示，可拖动到任意位置。鼠标移到歌词上（或按 Tab 聚焦窗口）会浮出工具条：调整字号（14–48px）、不透明度、锁定窗口与下一行显示；Esc 只收起工具条，不会关闭窗口，强退出用工具条最右侧的关闭按钮。双击歌词可锁定或解锁窗口（锁定后窗口不可拖动，与工具条上的锁按钮同一动作）。
                 </p>
               </section>
 
@@ -666,10 +682,23 @@ onBeforeUnmount(() => {
 }
 
 .about-version {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-surface-soft);
   color: var(--color-text-tertiary);
   font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* 产品自述：比法律边界更暖的一行，字重与色阶介于标题和正文之间。 */
+.about-voice {
+  margin: 0 0 0.5rem;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
+  text-wrap: pretty;
 }
 
 .about-close {
@@ -893,6 +922,11 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  /* WCAG 2.5.8：文字链接也要 ≥24×24 命中区。可视化仍是 12px 文字，
+     用行内 padding 把可点区域抬到 24px 高，不改变页脚视觉密度。 */
+  min-height: 24px;
+  margin-block: -3px;
+  padding-block: 3px;
   color: var(--color-accent);
   text-decoration: none;
   transition: color 0.18s ease;

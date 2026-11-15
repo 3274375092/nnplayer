@@ -5,19 +5,141 @@ import {
   ChevronUp,
   Music2,
   Play,
+  RefreshCw,
   Trash,
   X,
 } from "@lucide/vue";
 import { usePlayerStore } from "@/stores/player";
+import { useNoticeStore } from "@/stores/notice";
+import { useBackgroundInert } from "@/composables/useBackgroundInert";
+import { describePlaybackFailure } from "@/utils/appErrors";
 import { coverImageUrl } from "@/utils/coverImage";
 import { fmtDurationMs, fmtLongDuration } from "@/utils/format";
+import { remainingQueueDurationMs } from "@/utils/queue";
 import type { Song } from "@/types/music";
 
 /** 一次最多渲染多少行待播歌曲；避免超长队列（数千首）一次铺满 DOM。 */
 const QUEUE_WINDOW_LIMIT = 100;
 
 const open = ref(false);
+// 抽屉打开期间背景 inert：焦点陷阱之外，读屏浏览模式也不能走进背景页面。
+// 播放条不在背景里——遮罩与面板都让开它，音质/音量/播放键在抽屉打开时仍可直接
+// 操作（见组件底部样式注释与 DESIGN Queue drawer），因此把它从 inert 子树中排除。
+useBackgroundInert(() => open.value, {
+  keepInteractive: ["#nnplayer-player-bar"],
+});
 const player = usePlayerStore();
+const noticeStore = useNoticeStore();
+
+/**
+ * 最近一次可撤销的队列操作。三种动作共用同一条撤销条：
+ *   - remove：移除单曲（插回原位置）
+ *   - clear：清空待播（按原位逐首插回）
+ *   - restart：从这首歌开始重建队列（恢复上一份队列与索引）
+ * 队列级操作也做撤销，避免“单曲可撤销、整段清空不可撤销”的不一致。
+ */
+type QueueUndo =
+  | {
+      kind: "remove";
+      song: Song;
+      absIdx: number;
+      queue: Song[];
+      index: number;
+      wasCurrent: boolean;
+    }
+  | {
+      kind: "clear";
+      queue: Song[];
+      index: number;
+      removedCount: number;
+    }
+  | { kind: "restart"; queue: Song[]; index: number };
+
+const undoEntry = ref<QueueUndo | null>(null);
+
+const undoText = computed(() =>
+  undoEntry.value ? undoTextFor(undoEntry.value) : "",
+);
+
+function undoTextFor(entry: QueueUndo): string {
+  if (entry.kind === "remove") return `已移除《${entry.song.name}》`;
+  if (entry.kind === "clear") return `已清空 ${entry.removedCount} 首待播`;
+  return "队列已从这首歌重新开始";
+}
+
+/** 抽屉内「撤销」：执行后立即清掉提示，避免重复撤销。 */
+function undoLastAction() {
+  const entry = undoEntry.value;
+  if (!entry) return;
+  undoEntry.value = null;
+  runUndo(entry);
+}
+
+/**
+ * 抽屉关闭后撤销不应凭空消失：把仍可撤销的动作转成一条全局提示（此时没有
+ * 遮罩，提示条在播放条上方可见可点）。抽屉重新打开时不再恢复旧提示。
+ */
+watch(open, (isOpen) => {
+  if (isOpen) return;
+  const entry = undoEntry.value;
+  undoEntry.value = null;
+  if (!entry) return;
+  noticeStore.push({
+    id: "queue-undo",
+    tone: "info",
+    title: undoTextFor(entry),
+    hint: "如需恢复，请点「撤销」；关掉这条提示即放弃。",
+    // 撤销是一次性动作：执行后必须自己把提示关掉，否则同一闭包可以被再次
+    // 点击，把已经插回的歌曲再插一遍（round-5 代码评审 M1）。
+    action: {
+      label: "撤销",
+      run: () => {
+        noticeStore.dismiss("queue-undo");
+        runUndo(entry);
+      },
+    },
+    onDismiss: () => {
+      // 用户关掉提示即放弃这次撤销，避免抽屉再次打开时复活旧动作。
+      undoEntry.value = null;
+    },
+  });
+});
+
+/** 把撤销动作应用到播放器（抽屉内外共用同一份实现）。 */
+function runUndo(entry: QueueUndo) {
+  if (entry.kind === "remove") {
+    if (entry.wasCurrent) {
+      // 删除当前曲会立即播放下一首。撤销必须回到原位置并从该曲重新开始，
+      // 否则只剩下一行“已恢复”的队列记录，播放器还在别的歌上。
+      void player.playList([...entry.queue], entry.index);
+    } else {
+      player.insertIntoQueue(entry.absIdx, entry.song);
+    }
+  } else if (entry.kind === "clear") {
+    // 整队列一次恢复：避免 N 次克隆与 N 次订阅通知，也不会让大歌单撤销
+    // 变成 O(n²)。
+    player.restoreQueueSnapshot(entry.queue, entry.index);
+  } else {
+    player.restoreQueueSnapshot(entry.queue, entry.index);
+  }
+}
+
+/** 队列抽屉覆盖全局状态条：把同一份播放失败状态投影到抽屉内部。 */
+const playbackFailure = computed(() => player.lastPlaybackFailure);
+const describedPlaybackFailure = computed(() =>
+  playbackFailure.value
+    ? describePlaybackFailure(playbackFailure.value)
+    : null,
+);
+const playbackDismissLabel = computed(() =>
+  playbackFailure.value?.autoRetry
+    ? "停止自动重试并关闭提示"
+    : "关闭播放失败提示",
+);
+
+function retryPlaybackFailure() {
+  void player.retryFailedPlayback();
+}
 const dialogRef = ref<HTMLElement | null>(null);
 const closeButtonRef = ref<HTMLButtonElement | null>(null);
 /** 打开前的焦点位置，关闭时归还（队列由侧栏按钮通过 open() 触发）。 */
@@ -64,12 +186,15 @@ const upcomingCount = computed(() => {
   return Math.max(0, player.queue.length - player.index - 1);
 });
 
-const totalDuration = computed(() => {
-  const ms = player.queue
-    .slice(baseIndex.value)
-    .reduce((sum, s) => sum + (s.duration ?? 0), 0);
-  return fmtLongDuration(ms);
-});
+const totalDuration = computed(() =>
+  fmtLongDuration(
+    remainingQueueDurationMs(
+      player.queue,
+      player.index,
+      player.audioState.currentTime,
+    ),
+  ),
+);
 
 /** 已渲染窗口的末尾绝对索引（不含）。 */
 const windowEndAbs = computed(() => baseIndex.value + displayItems.value.length);
@@ -226,7 +351,23 @@ function onDrop(e: DragEvent, targetAbsIdx: number) {
 }
 
 function remove(absIdx: number) {
+  const removed = player.queue[absIdx];
+  if (!removed) return;
+  const previousQueue = [...player.queue];
+  const previousIndex = player.index;
+  const wasCurrent = absIdx === previousIndex;
   player.removeFromQueue(absIdx);
+  // 删除是低风险但不可逆的动作：在抽屉内部给一次「撤销」，把歌放回原来的
+  // 绝对位置。不能用全局状态条——它位于播放条上方、会被遮罩/抽屉盖住，
+  // 恰好在需要撤销的时候看不见也点不到。
+  undoEntry.value = {
+    kind: "remove",
+    song: removed,
+    absIdx,
+    queue: previousQueue,
+    index: previousIndex,
+    wasCurrent,
+  };
   // 被删除的行（含焦点所在的删除按钮）会从 DOM 移除，焦点会掉到 body；
   // 把焦点交还对话框，避免后续 Tab 落到遮罩后的页面上。
   void nextTick().then(() => {
@@ -244,16 +385,46 @@ function clear() {
   const message =
     `清空待播的 ${count} 首歌曲？` +
     (keepsCurrent ? "当前歌曲会继续播放，" : "") +
-    "清空后无法恢复。";
-  if (window.confirm(message)) {
-    player.clearQueue();
+    "清空后可以用一次撤销恢复。";
+  if (!window.confirm(message)) return;
+  const removed = keepsCurrent
+    ? player.queue.slice(player.index + 1)
+    : [...player.queue];
+  const previous = {
+    queue: [...player.queue],
+    index: player.index,
+  };
+  player.clearQueue();
+  if (removed.length > 0) {
+    undoEntry.value = {
+      kind: "clear",
+      queue: previous.queue,
+      index: previous.index,
+      removedCount: removed.length,
+    };
   }
 }
 
 function playAll() {
   const songs = [...player.queue.slice(baseIndex.value)];
   if (songs.length === 0) return;
+  const previous = {
+    queue: [...player.queue],
+    index: player.index,
+  };
   void player.playList(songs, 0);
+  recordRestartUndo(previous);
+}
+
+/** 「从这首歌开始」会丢弃当前曲之前的队列条目：同样给一次可撤销的重建。 */
+function recordRestartUndo(previous: { queue: Song[]; index: number }) {
+  const dropped = previous.index > 0;
+  if (!dropped) return;
+  undoEntry.value = {
+    kind: "restart",
+    queue: previous.queue,
+    index: previous.index,
+  };
 }
 
 /**
@@ -278,8 +449,10 @@ function onGlobalKeydown(e: KeyboardEvent) {
   const first = focusable[0]!;
   const last = focusable[focusable.length - 1]!;
   const active = document.activeElement;
-  const insideDialog = dialogRef.value?.contains(active) ?? false;
-  if (!insideDialog) {
+  const insideAllowedRoot = allowedFocusRoots().some(
+    (root) => root.contains(active),
+  );
+  if (!insideAllowedRoot) {
     e.preventDefault();
     (e.shiftKey ? last : first).focus();
     return;
@@ -293,19 +466,40 @@ function onGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+/**
+ * 抽屉声明播放条仍可交互，因此键盘焦点圈也必须把播放条视为允许区域；
+ * 否则 `keepInteractive` 只对鼠标生效，音量、音质与播放键会被 Tab 绕过。
+ */
+function allowedFocusRoots(): HTMLElement[] {
+  const roots: HTMLElement[] = [];
+  if (dialogRef.value) roots.push(dialogRef.value);
+  const playerBar = document.querySelector<HTMLElement>(
+    "#nnplayer-player-bar",
+  );
+  if (playerBar) roots.push(playerBar);
+  // Tab 圈必须按文档顺序首尾相接。播放条在 #app 内，Teleport 的抽屉在其后；
+  // 若仍按“抽屉、播放条”返回，从播放条首个控件 Shift+Tab 会落到 body。
+  return roots.sort((left, right) => {
+    if (left === right) return 0;
+    const position = left.compareDocumentPosition(right);
+    return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
+
 function getFocusableElements(): HTMLElement[] {
-  const root = dialogRef.value;
-  if (!root) return [];
-  return Array.from(
-    root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((el) => el.offsetParent !== null);
+  return allowedFocusRoots().flatMap((root) =>
+    Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => el.offsetParent !== null),
+  );
 }
 
 watch(
   open,
   async (v) => {
+    document.body.classList.toggle("queue-drawer-open", v);
     if (v) {
       // 清掉上一次打开时的播报，避免重开抽屉时 live region 带着旧文案。
       reorderAnnouncement.value = "";
@@ -329,6 +523,7 @@ watch(
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onGlobalKeydown);
+  document.body.classList.remove("queue-drawer-open");
 });
 
 defineExpose({
@@ -353,7 +548,6 @@ defineExpose({
         ref="dialogRef"
         class="queue-drawer glass fixed top-4 right-4 w-[380px] max-w-[calc(100vw-32px)] z-50 flex flex-col overflow-hidden"
         role="dialog"
-        aria-modal="true"
         aria-label="播放队列"
         tabindex="-1"
       >
@@ -436,7 +630,9 @@ defineExpose({
                 class="text-accent mx-auto"
                 :class="{ 'animate-pulse-fade': player.audioState.playing }"
               />
-              <span v-else>{{ player.index >= 0 ? i : i + 1 }}</span>
+              <!-- 绝对队列位次（从 1 开始）：与「剩余 N 首 / 从这首歌开始」同一套
+                   心智模型。此前用相对序号，第二首（当前曲之后的第一首）会显示 1。 -->
+              <span v-else>{{ item.absIndex + 1 }}</span>
             </span>
             <div class="w-9 h-9 rounded-md overflow-hidden shrink-0 relative">
               <img
@@ -523,6 +719,36 @@ defineExpose({
           </li>
         </ul>
 
+        <!-- 撤销条：删除后的可逆入口，必须留在抽屉内部（全局状态条会被遮罩
+             与抽屉挡在下面，恰好在该看见它的时候看不见）。 -->
+        <div
+          v-if="undoEntry"
+          class="queue-undo"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span class="queue-undo__text truncate">
+            {{ undoText }}
+          </span>
+          <button
+            type="button"
+            class="queue-undo__action"
+            @click="undoLastAction"
+          >
+            撤销
+          </button>
+          <button
+            type="button"
+            class="queue-icon-button queue-undo__close"
+            aria-label="关闭撤销提示"
+            title="关闭撤销提示"
+            @click="undoEntry = null"
+          >
+            <X :size="14" :stroke-width="1.75" aria-hidden="true" />
+          </button>
+        </div>
+
         <footer
           v-if="remainingCount > 0 && (displayItems.length > 1 || upcomingCount > 0)"
           class="px-5 py-3 flex gap-2"
@@ -530,7 +756,7 @@ defineExpose({
           <button
             v-if="displayItems.length > 1"
             type="button"
-            class="btn btn-ghost queue-footer-button text-xs rounded-xl"
+            class="btn btn-ghost queue-footer-button text-xs"
             @click="playAll"
           >
             <Play :size="14" :stroke-width="1.75" class="mr-1" aria-hidden="true" />
@@ -540,12 +766,64 @@ defineExpose({
           <button
             v-if="upcomingCount > 0"
             type="button"
-            class="btn btn-ghost queue-footer-button text-xs text-text-tertiary hover:text-accent-on-subtle rounded-xl ml-auto"
+            class="btn btn-ghost queue-footer-button text-xs text-text-tertiary hover:text-accent-on-subtle ml-auto"
             @click="clear"
           >
             <Trash :size="14" :stroke-width="1.75" class="mr-1" aria-hidden="true" />清空待播
           </button>
         </footer>
+
+        <!-- 抽屉位于全局状态条上方。这里投影同一份播放失败状态，避免焦点
+             陷阱把用户真正需要的“停止/重试”挡在抽屉背景里。 -->
+        <section
+          v-if="playbackFailure && describedPlaybackFailure"
+          class="queue-risk"
+          :role="playbackFailure.autoRetry ? 'status' : 'alert'"
+          :aria-live="playbackFailure.autoRetry ? 'polite' : 'assertive'"
+          aria-atomic="true"
+        >
+          <RefreshCw
+            :size="14"
+            :stroke-width="1.75"
+            class="queue-risk__icon"
+            aria-hidden="true"
+          />
+          <div class="queue-risk__body">
+            <p class="queue-risk__title">
+              {{ describedPlaybackFailure.title }}
+            </p>
+            <p class="queue-risk__hint">
+              {{ describedPlaybackFailure.hint }}
+            </p>
+          </div>
+          <div class="queue-risk__actions">
+            <button
+              v-if="playbackFailure.autoRetry"
+              type="button"
+              class="queue-risk__action"
+              @click="player.cancelAutoRetry()"
+            >
+              停止
+            </button>
+            <button
+              v-else-if="describedPlaybackFailure.retryable"
+              type="button"
+              class="queue-risk__action"
+              @click="retryPlaybackFailure"
+            >
+              重试
+            </button>
+            <button
+              type="button"
+              class="queue-icon-button queue-risk__close"
+              :aria-label="playbackDismissLabel"
+              :title="playbackDismissLabel"
+              @click="player.dismissPlaybackFailure()"
+            >
+              <X :size="14" :stroke-width="1.75" aria-hidden="true" />
+            </button>
+          </div>
+        </section>
       </aside>
     </Transition>
   </Teleport>
@@ -554,7 +832,9 @@ defineExpose({
 <style scoped>
 /* 抽屉与遮罩都让开底部播放条：桌面 76px 播放条 + 12px 底距 + 8px 间隙 = 96px，
    窄窗 74px 播放条（#9 新几何）+ 8px 底距 + 8px 间隙 = 90px。这样抽屉不再盖住
-   播放条右侧的音质入口/音量/总时长，遮罩之外的播放条也保持可见、可点。 */
+   播放条右侧的音质入口/音量/总时长，遮罩之外的播放条也保持可见、可点。
+   脚本里的 useBackgroundInert(keepInteractive: #nnplayer-player-bar) 与这条
+   几何约定配套：播放条既不压暗、不被遮罩拦截，也不进入 inert 子树。 */
 .queue-scrim,
 .queue-drawer {
   --queue-bottom-inset: 96px;
@@ -697,6 +977,136 @@ defineExpose({
 .queue-footer-button:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/* 抽屉内播放恢复：与撤销条同为安静纸面，但把原因、下一步和动作放在同一视线内。 */
+.queue-risk {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px 6px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-secondary);
+}
+
+.queue-risk__icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--color-accent-on-subtle);
+}
+
+.queue-risk__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.queue-risk__title,
+.queue-risk__hint {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.queue-risk__title {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.queue-risk__hint {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.queue-risk__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.queue-risk__action {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-accent-on-subtle);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.queue-risk__action:hover {
+  background: var(--color-accent-subtle);
+}
+
+.queue-risk__close {
+  width: 24px;
+  height: 24px;
+}
+
+.queue-risk__action:focus-visible,
+.queue-risk__close:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 撤销条：抽屉底部的一条安静纸面（ink-whisper），不抢行内容，也不遮播放条。 */
+.queue-undo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 20px 4px;
+  padding: 6px 8px 6px 12px;
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.queue-undo__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.queue-undo__action {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-accent-on-subtle);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background-color 160ms ease;
+}
+
+.queue-undo__action:hover {
+  background: var(--color-accent-subtle);
+}
+
+.queue-undo__close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  /* WCAG 2.5.8：可见的是 14px 图标，命中区必须 ≥24×24（与抽屉内其它图标按钮一致）。 */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
+.queue-undo__close:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-strong, var(--color-card-hover));
 }
 
 .queue-fade-enter-active,

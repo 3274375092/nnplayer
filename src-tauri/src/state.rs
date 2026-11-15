@@ -38,8 +38,8 @@ const SONG_URL_MIN_INTERVAL: Duration = Duration::from_millis(350);
 /// 命中风控后的熔断窗口：窗口内不再请求上游，直接返回可重试错误。
 ///
 /// 取值 4s 是两端的平衡：既能挡住「当前曲 + 预取」瞬时重试造成的连击，
-/// 又短于前端播放引擎对风控失败的同歌重试等待（4.5s），让那次重试真能
-/// 到达上游一次；风控持续时前端会停在当前歌曲并提示稍后重试，不再跳歌。
+/// 又短于前端风控恢复链第一次自动重试的等待（5s），让那次重试真能到达上游
+/// 一次；风控持续时前端按 5s/20s/60s 阶梯继续重试，阶梯耗尽后停在当前歌曲。
 const SONG_URL_RISK_CONTROL_WINDOW: Duration = Duration::from_secs(4);
 
 /// 风控熔断期间 `get_song_url` 立即返回的用户可读提示。
@@ -243,6 +243,33 @@ impl AppState {
     pub async fn trip_song_url_breaker(&self) {
         *self.song_url_blocked_until.lock().await =
             Some(risk_control_blocked_until(Instant::now()));
+    }
+
+    /// 把上游响应里的 Set-Cookie 合并回内存会话（保留登录态）。
+    ///
+    /// 取播放地址时上游可能同步下发/刷新 NMTID 等设备会话标识；若丢弃它们，
+    /// 后续请求会退回随机值，逐请求轮换正是网易云反作弊判定 -460 的特征。
+    /// 这里只更新内存会话（不落盘）：同一会话内的后续请求因此复用同一个标识。
+    pub async fn merge_response_cookies(&self, resp: &ApiResponse) {
+        if resp.cookie.is_empty() {
+            return;
+        }
+        let merged = {
+            let mut auth = self.auth.lock().await;
+            if !auth.is_logged_in() {
+                return;
+            }
+            let Some(merged) = crate::commands::auth::merge_cookie(auth.cookie.as_deref(), resp)
+            else {
+                return;
+            };
+            auth.cookie = Some(merged.clone());
+            merged
+        };
+        // AuthState 只服务持久化/展示；业务请求读取 ApiClient 自己的 cookie。
+        // 两处必须同步，否则响应刷新 MUSIC_U/__csrf 后仍会继续携带旧会话。
+        // 先释放 auth 锁再获取 api 写锁，遵守 AppState 的锁顺序约定。
+        self.api.write().await.set_cookie(merged);
     }
 
     /// 提取 NCM 业务码。
@@ -530,5 +557,53 @@ mod tests {
             matches!(result, Err(AppError::RiskControl(_))),
             "排队期间进入熔断后应放弃请求，实际 {result:?}"
         );
+    }
+
+    // ── 上游 Set-Cookie 合并：NMTID 等设备会话标识在一次会话内稳定 ──
+
+    #[tokio::test]
+    async fn merge_response_cookies_keeps_server_issued_identity() {
+        init_rustls();
+        let auth = AuthState {
+            user_id: Some(42),
+            cookie: Some("MUSIC_U=old".to_string()),
+            ..Default::default()
+        };
+        let state = AppState::new(None, auth).expect("create state");
+        let resp = ApiResponse {
+            status: 200,
+            body: json!({ "code": 200 }),
+            cookie: vec![
+                "NMTID=server-issued; Path=/".to_string(),
+                "MUSIC_U=fresh; Path=/; HttpOnly".to_string(),
+            ],
+        };
+
+        state.merge_response_cookies(&resp).await;
+
+        let cookie = state
+            .auth
+            .lock()
+            .await
+            .cookie
+            .clone()
+            .expect("已登录会话应保留 cookie");
+        assert!(cookie.contains("NMTID=server-issued"), "cookie={cookie}");
+        assert!(cookie.contains("MUSIC_U=fresh"), "cookie={cookie}");
+    }
+
+    #[tokio::test]
+    async fn merge_response_cookies_ignores_logged_out_state() {
+        init_rustls();
+        let state = AppState::new(None, Default::default()).expect("create state");
+        let resp = ApiResponse {
+            status: 200,
+            body: json!({ "code": 200 }),
+            cookie: vec!["NMTID=server-issued; Path=/".to_string()],
+        };
+
+        state.merge_response_cookies(&resp).await;
+
+        assert!(state.auth.lock().await.cookie.is_none());
     }
 }

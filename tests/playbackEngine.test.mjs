@@ -782,6 +782,228 @@ test("失败歌曲已被移出队列：retry 明确 no-op 并保留通报", asyn
   assert.equal(engine.getState().currentSongId, 2);
 });
 
+// =============== 队列插入（撤销删除） ===============
+
+test("insertIntoQueue 把歌放回原位置且不替换当前曲", async () => {
+  const { engine } = createEngine();
+  await engine.playList([song(1), song(2), song(3)], 1);
+  await flush();
+
+  // 撤销当前曲之后的删除：插回 index 2，当前曲索引不变。
+  engine.insertIntoQueue(2, song(9));
+  assert.deepEqual(
+    engine.getState().queue.map((s) => s.id),
+    [1, 2, 9, 3],
+  );
+  assert.equal(engine.getState().index, 1);
+
+  // 撤销当前曲之前的删除：插回 index 0，当前曲索引后移一位，播放的仍是 S2。
+  engine.insertIntoQueue(0, song(8));
+  assert.deepEqual(
+    engine.getState().queue.map((s) => s.id),
+    [8, 1, 2, 9, 3],
+  );
+  assert.equal(engine.getState().currentSongId, 2);
+  assert.equal(engine.getState().queue[engine.getState().index]?.id, 2);
+});
+
+test("insertIntoQueue 夹住越界位置，不破坏队列与当前索引", async () => {
+  const { engine } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+
+  engine.insertIntoQueue(-5, song(7));
+  engine.insertIntoQueue(99, song(8));
+  assert.deepEqual(
+    engine.getState().queue.map((s) => s.id),
+    [7, 1, 2, 8],
+  );
+  assert.equal(engine.getState().queue[engine.getState().index]?.id, 1);
+});
+
+test("restoreQueueSnapshot 恢复队列，并把 index 指回正在播放的歌", async () => {
+  const { engine, fake } = createEngine();
+  await engine.playList([song(1), song(2), song(3)], 1);
+  await flush();
+  const playingSrc = fake.last().src;
+  const handlesBefore = fake.handles.length;
+
+  // 模拟“从这首歌开始”前的快照，然后用户点了另一首（媒体换成 S3），再撤销。
+  const snapshotQueue = [...engine.getState().queue];
+  const snapshotIndex = engine.getState().index;
+  await engine.playList([song(1), song(3)], 0);
+  await engine.playList([song(1), song(2), song(3)], 2);
+  await flush();
+  assert.equal(engine.getState().currentSongId, 3);
+
+  engine.restoreQueueSnapshot(snapshotQueue, snapshotIndex);
+  await flush();
+
+  assert.deepEqual(
+    engine.getState().queue.map((s) => s.id),
+    [1, 2, 3],
+  );
+  // 正在播放的是 S3：index 必须指回它，而不是快照里的 S2。
+  assert.equal(engine.getState().queue[engine.getState().index]?.id, 3);
+  assert.equal(engine.getState().currentSongId, 3);
+  // 队列结构恢复不触发新的媒体装载（最后一次装载来自上面的 playList）。
+  assert.equal(fake.handles.length, handlesBefore + 2);
+  assert.equal(fake.last().src, "url://3");
+  assert.notEqual(playingSrc, undefined);
+});
+
+test("restoreQueueSnapshot 越界索引被夹住；恢复队列里没有正在播放的歌时停止媒体", async () => {
+  const { engine } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  const handle = engine.getState().currentSongId;
+
+  // S1 不在恢复后的队列里：不能留下 queue[index] 与媒体各说各话的状态。
+  engine.restoreQueueSnapshot([song(7), song(8)], 99);
+  assert.equal(engine.getState().index, 1);
+  assert.equal(engine.getState().queue[engine.getState().index]?.id, 8);
+  assert.equal(engine.getState().currentSongId, null);
+  assert.notEqual(handle, null);
+
+  engine.restoreQueueSnapshot([], 0);
+  assert.equal(engine.getState().queue.length, 0);
+  assert.equal(engine.getState().index, -1);
+  assert.equal(engine.getState().currentSongId, null);
+  assert.equal(engine.getState().playing, false);
+});
+
+test("restoreQueueSnapshot 保留无当前曲时的 -1 索引", () => {
+  const { engine } = createEngine();
+
+  engine.restoreQueueSnapshot([song(7), song(8)], -1);
+
+  assert.deepEqual(
+    engine.getState().queue.map((item) => item.id),
+    [7, 8],
+  );
+  assert.equal(engine.getState().index, -1);
+  assert.equal(engine.getState().currentSongId, null);
+});
+
+test("restoreQueueSnapshot 保留 duplicate songId 的快照 occurrence", async () => {
+  const { engine } = createEngine();
+  const first = {
+    id: 7,
+    name: "A1",
+    artists: "a",
+    album: "al",
+    duration: 1000,
+  };
+  const middle = song(8);
+  const second = {
+    id: 7,
+    name: "A2",
+    artists: "a",
+    album: "al",
+    duration: 1000,
+  };
+  const last = song(9);
+  await engine.playList([first, middle, second, last], 2);
+  await flush();
+
+  engine.restoreQueueSnapshot([first, middle, second, last], 2);
+  await flush();
+
+  assert.equal(engine.getState().index, 2);
+  assert.equal(engine.getState().queue[2]?.name, "A2");
+  assert.equal(engine.getState().currentSongId, 7);
+});
+
+test("队列结构修改后 currentSongId 始终等于 queue[index].id（不变量）", async () => {
+  const { engine } = createEngine();
+  await engine.playList([song(1), song(2), song(3)], 1);
+  await flush();
+
+  const assertInvariant = () => {
+    const state = engine.getState();
+    if (state.currentSongId === null) return;
+    assert.equal(state.queue[state.index]?.id, state.currentSongId);
+  };
+
+  engine.insertIntoQueue(0, song(9));
+  assertInvariant();
+  engine.insertIntoQueue(4, song(8));
+  assertInvariant();
+  engine.reorderQueue(0, 4);
+  assertInvariant();
+  engine.removeFromQueue(0);
+  await flush();
+  assertInvariant();
+  engine.restoreQueueSnapshot([song(2), song(3)], 0);
+  await flush();
+  assertInvariant();
+  engine.clearQueue();
+  assertInvariant();
+});
+
+test("非有限队列索引被拒绝，不会把 index 写成 NaN", async () => {
+  const { engine } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+
+  engine.insertIntoQueue(NaN, song(9));
+  assert.deepEqual(
+    engine.getState().queue.map((s) => s.id),
+    [1, 2],
+  );
+
+  engine.restoreQueueSnapshot([song(7), song(8)], Number.NaN);
+  assert.equal(Number.isFinite(engine.getState().index), true);
+  assert.equal(engine.getState().queue[engine.getState().index]?.id, 7);
+});
+
+test("批量插回歌曲时下一首未变，不重复重建预取与预热", async () => {
+  const { engine, fake, resolver } = createEngine();
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(fake.preloaded.length, 1);
+  assert.equal(resolver.callsFor(2), 1);
+
+  // 「清空待播」撤销会逐首 insert：下一首始终是 S2，不得重复预取/load。
+  for (let i = 0; i < 20; i += 1) engine.insertIntoQueue(i, song(100 + i));
+  await flush();
+  assert.equal(fake.preloaded.length, 1, "同一首下一曲只预热一次");
+  assert.equal(resolver.callsFor(2), 1, "同一首下一曲只取址一次");
+});
+
+test("大队列快照恢复只通知一次，避免清空撤销 O(n²)", async () => {
+  const { engine } = createEngine();
+  const bigQueue = Array.from({ length: 1_000 }, (_, i) => song(i + 1));
+  await engine.playList(bigQueue, 500);
+  await flush();
+
+  let notifications = 0;
+  const stop = engine.subscribe(() => {
+    notifications += 1;
+  });
+  engine.restoreQueueSnapshot(bigQueue, 500);
+  stop();
+
+  assert.equal(engine.getState().queue.length, 1_000);
+  assert.equal(engine.getState().index, 500);
+  assert.equal(notifications, 1);
+});
+
+test("insertIntoQueue 到空队列后可以从头播放", async () => {
+  const { engine, fake } = createEngine();
+  engine.insertIntoQueue(0, song(5));
+  await flush();
+  assert.deepEqual(
+    engine.getState().queue.map((s) => s.id),
+    [5],
+  );
+  // 只改队列结构，不擅自开始播放。
+  assert.equal(engine.getState().playing, false);
+  await engine.playList([song(5)], 0);
+  await flush();
+  assert.equal(fake.last().src, "url://5");
+});
+
 // =============== 同歌自动重试 / 不跳歌策略（因音质风控跳过歌曲的修复） ===============
 
 /** 构造带 kind 的播放链路错误（后端 AppError 与引擎内部分类的形态）。 */
@@ -789,28 +1011,419 @@ function failureError(kind, message = "失败") {
   return Object.assign(new Error(message), { kind });
 }
 
-test("风控失败：同歌自动重试一次，仍失败则停在当前歌曲、不自动跳歌", async () => {
-  const { engine, resolver } = createEngine({ wait: async () => {} });
+test("风控失败：按 5s/20s/60s 阶梯自动重试 3 次，仍失败则停在当前歌曲、不自动跳歌", async () => {
+  const waits = [];
+  const { engine, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
   resolver.set(async () => {
     throw failureError("RiskControl", "检测到您的网络环境存在风险");
   });
 
-  await engine.playList([song(1), song(2)], 0);
+  const play = engine.playList([song(1), song(2)], 0);
   await flush();
 
-  // 首次取址 + 同歌重试各一次；绝不请求下一首。
-  assert.deepEqual(resolver.calls, [1, 1]);
+  // 首次取址失败 → 通报“5 秒后第 1/3 次自动重试”，不请求下一首。
+  assert.equal(waits.length, 1);
+  assert.equal(waits[0].ms, 5_000);
+  let failure = engine.getState().lastPlaybackFailure;
+  assert.ok(failure);
+  assert.equal(failure.kind, "RiskControl");
+  assert.deepEqual(failure.autoRetry, { attempt: 1, limit: 3, waitMs: 5_000 });
+  assert.deepEqual(resolver.calls, [1]);
+
+  // 第 1 次重试仍被风控 → 排定第 2 次（20s）。
+  waits[0].resolve();
+  await flush();
+  await flush();
+  assert.equal(waits.length, 2);
+  assert.equal(waits[1].ms, 20_000);
+  failure = engine.getState().lastPlaybackFailure;
+  assert.deepEqual(failure.autoRetry, { attempt: 2, limit: 3, waitMs: 20_000 });
+
+  // 第 2 次仍失败 → 排定第 3 次（60s）。
+  waits[1].resolve();
+  await flush();
+  await flush();
+  assert.equal(waits.length, 3);
+  assert.equal(waits[2].ms, 60_000);
+  failure = engine.getState().lastPlaybackFailure;
+  assert.deepEqual(failure.autoRetry, { attempt: 3, limit: 3, waitMs: 60_000 });
+
+  // 第 3 次也失败：阶梯用完，停在当前歌曲，交回手动重试。
+  waits[2].resolve();
+  await play;
+  await flush();
+  assert.deepEqual(resolver.calls, [1, 1, 1, 1]);
+  assert.equal(resolver.callsFor(2), 0, "风控恢复期间绝不预取/请求下一首");
   assert.equal(engine.getState().index, 0);
   assert.equal(engine.getState().playing, false);
   assert.equal(engine.getState().loading, false);
 
-  const failure = engine.getState().lastPlaybackFailure;
+  failure = engine.getState().lastPlaybackFailure;
   assert.ok(failure, "停在当前歌曲时必须有可见失败通报");
   assert.equal(failure.songId, 1);
   assert.equal(failure.kind, "RiskControl");
   assert.equal(failure.advancedToNext, false, "未跳歌时不得谎称已跳歌");
-  assert.equal(failure.retryCount, 1);
+  assert.equal(failure.retryCount, 3);
+  assert.equal(failure.autoRetry, null, "阶梯用完后不再计划自动重试");
   assert.equal(failure.stopped, false);
+});
+
+test("风控恢复：阶梯重试成功即继续播放，清除通报并重新预取下一首", async () => {
+  const waits = [];
+  const { engine, fake, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+  let attempts = 0;
+  resolver.set(async (id) => {
+    attempts += 1;
+    if (attempts <= 2) {
+      throw failureError("RiskControl", "检测到您的网络环境存在风险");
+    }
+    return `url://${id}`;
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(waits.length, 1);
+  waits[0].resolve();
+  await flush();
+  await flush();
+  assert.equal(waits.length, 2);
+  waits[1].resolve();
+  await play;
+  await flush();
+  await flush();
+
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(fake.last().src, "url://1");
+  assert.equal(fake.last().playCalls, 1);
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+  // 恢复成功属于同一次显式点播：只写一次播放历史，预取在冷却解除后恢复。
+  assert.deepEqual(
+    engine.getState().history.map((item) => item.id),
+    [1],
+  );
+  assert.equal(resolver.callsFor(2), 1);
+  assert.equal(waits.length, 2, "成功恢复后不再排定新的自动重试");
+});
+
+test("风控等待期间用户切歌：恢复链取消，不再为旧歌重试", async () => {
+  const waits = [];
+  const { engine, fake, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+  resolver.set(async (id) => {
+    if (id === 1) throw failureError("RiskControl", "检测到您的网络环境存在风险");
+    return `url://${id}`;
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(waits.length, 1);
+
+  // 用户切到下一首（新起一次装载）；旧等待晚到也不得复活旧歌的重试。
+  await engine.next();
+  await flush();
+  waits[0].resolve();
+  await flush();
+  await flush();
+  await play;
+  await flush();
+
+  assert.equal(waits.length, 1, "不得为旧歌再排定自动重试");
+  assert.deepEqual(resolver.calls.slice(0, 2), [1, 2], "只保留旧歌首次取址，随后装载用户选的新歌");
+  assert.equal(engine.getState().currentSongId, 2);
+  assert.equal(fake.last().src, "url://2");
+  assert.equal(fake.last().playCalls, 1);
+});
+
+test("风控冷却期间不预取下一首，恢复播放后解除冷却", async () => {
+  const { engine, resolver } = createEngine({ wait: async () => {} });
+  resolver.set(async (id) => {
+    if (id === 1) throw failureError("RiskControl", "检测到您的网络环境存在风险");
+    return `url://${id}`;
+  });
+
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.deepEqual(resolver.calls, [1, 1, 1, 1]);
+  assert.equal(resolver.callsFor(2), 0);
+
+  // 冷却中队列结构变化不得触发下一首 URL 预取。
+  engine.reorderQueue(0, 2);
+  await flush();
+  assert.equal(resolver.callsFor(2), 0, "风控冷却期内不得预取");
+
+  // 用户手动重试并成功：冷却解除，下一次预取恢复。
+  resolver.set(async (id) => `url://${id}`);
+  await engine.retryFailedPlayback();
+  await flush();
+  await flush();
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.ok(resolver.callsFor(2) > 0, "恢复播放后应重新预取下一首");
+});
+
+test("暂停发生在风控自动重试的取址窗口：立即取消重试并清掉虚假进度", async () => {
+  const waits = [];
+  let releaseRetry;
+  let calls = 0;
+  const resolver = createResolver();
+  resolver.set(() => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.reject(failureError("RiskControl", "风控"));
+    }
+    return new Promise((resolve) => {
+      releaseRetry = resolve;
+    });
+  });
+  const originalResolve = resolver.fn;
+  const engine = createPlaybackEngine({
+    runtime: createFakeRuntime().runtime,
+    resolveSongUrl: originalResolve,
+    now: () => 0,
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  waits[0].resolve();
+  await flush();
+  await flush();
+  assert.ok(releaseRetry, "第二次取址必须已经开始");
+
+  engine.pause();
+  assert.equal(
+    engine.getState().lastPlaybackFailure?.autoRetry,
+    null,
+  );
+  releaseRetry("url://1");
+  await play;
+  await flush();
+
+  assert.equal(engine.getState().loading, false);
+  assert.equal(engine.getState().playing, false);
+  assert.equal(
+    engine.getState().lastPlaybackFailure?.autoRetry,
+    null,
+  );
+  assert.equal(waits.length, 1, "暂停后旧链不得继续排下一次");
+});
+
+test("手动停止自动重试会取消已在途的取址，不允许迟到媒体起播", async () => {
+  const waits = [];
+  let releaseRetry;
+  let calls = 0;
+  const resolver = createResolver();
+  resolver.set(() => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.reject(failureError("RiskControl", "风控"));
+    }
+    return new Promise((resolve) => {
+      releaseRetry = resolve;
+    });
+  });
+  const originalResolve = resolver.fn;
+  const fake = createFakeRuntime();
+  const engine = createPlaybackEngine({
+    runtime: fake.runtime,
+    resolveSongUrl: originalResolve,
+    now: () => 0,
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  waits[0].resolve();
+  await flush();
+  await flush();
+  assert.equal(
+    engine.getState().lastPlaybackFailure?.autoRetry?.waitMs,
+    0,
+  );
+  assert.ok(releaseRetry, "自动重试的第二次取址应已在途");
+
+  engine.cancelAutoRetry();
+  releaseRetry("url://1");
+  await play;
+  await flush();
+
+  assert.equal(fake.handles.length, 0, "取消后不得创建迟到媒体");
+  assert.equal(engine.getState().playing, false);
+  assert.equal(
+    engine.getState().lastPlaybackFailure?.autoRetry,
+    null,
+  );
+});
+
+test("第一次等待前停止不把尚未发生的重试计入 retryCount", async () => {
+  const waits = [];
+  const { engine, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+  resolver.set(async () => {
+    throw failureError("RiskControl", "风控");
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(engine.getState().lastPlaybackFailure?.retryCount, 0);
+  engine.cancelAutoRetry();
+  waits[0].resolve();
+  await play;
+  await flush();
+
+  const failure = engine.getState().lastPlaybackFailure;
+  assert.equal(failure?.autoRetry, null);
+  assert.equal(failure?.retryCount, 0);
+  assert.deepEqual(resolver.calls, [1], "尚未发生的重试不得计入");
+});
+
+test("旧风控计时器晚到，不得清掉手动重试新链的进度", async () => {
+  const waits = [];
+  const { engine, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+  resolver.set(async () => {
+    throw failureError("RiskControl", "风控");
+  });
+
+  const initial = engine.playList([song(1), song(2)], 0);
+  await flush();
+  const oldWait = waits[0];
+  const manual = engine.retryFailedPlayback();
+  await flush();
+  assert.equal(waits.length, 2);
+  assert.equal(engine.getState().lastPlaybackFailure?.autoRetry?.attempt, 1);
+
+  oldWait.resolve();
+  await flush();
+  await flush();
+  assert.deepEqual(engine.getState().lastPlaybackFailure?.autoRetry, {
+    attempt: 1,
+    limit: 3,
+    waitMs: 5_000,
+  });
+
+  engine.cancelAutoRetry();
+  waits[1].resolve();
+  await Promise.all([initial, manual]);
+  await flush();
+});
+
+test("风控自动重试若变成网络错误：立即停止阶梯并停歌", async () => {
+  const waits = [];
+  let calls = 0;
+  const resolver = createResolver();
+  resolver.set(() => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.reject(failureError("RiskControl", "风控"));
+    }
+    return Promise.reject(failureError("Network", "网络断开"));
+  });
+  const engine = createPlaybackEngine({
+    runtime: createFakeRuntime().runtime,
+    resolveSongUrl: resolver.fn,
+    now: () => 0,
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  waits[0].resolve();
+  await play;
+  await flush();
+
+  const failure = engine.getState().lastPlaybackFailure;
+  assert.equal(failure?.kind, "Network");
+  assert.equal(failure?.autoRetry, null);
+  assert.equal(waits.length, 1, "非风控错误不得继续 20s/60s 阶梯");
+  assert.equal(engine.getState().index, 0);
+});
+
+test("普通网络重试后才遇到风控：仍进入 5s/20s/60s 恢复阶梯", async () => {
+  const waits = [];
+  let calls = 0;
+  const { engine, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+  resolver.set(() => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.reject(failureError("Network", "临时网络失败"));
+    }
+    return Promise.reject(failureError("RiskControl", "风控"));
+  });
+
+  const play = engine.playList([song(1), song(2)], 0);
+  await flush();
+  assert.equal(waits[0].ms, 600);
+  waits[0].resolve();
+  await flush();
+  await flush();
+  assert.deepEqual(waits.map((item) => item.ms), [600, 5_000]);
+  assert.deepEqual(engine.getState().lastPlaybackFailure?.autoRetry, {
+    attempt: 1,
+    limit: 3,
+    waitMs: 5_000,
+  });
+
+  engine.cancelAutoRetry();
+  waits[1].resolve();
+  await play;
+  await flush();
+});
+
+test("流中断恢复成功后清除风控进度通报", async () => {
+  const waits = [];
+  let primaryCalls = 0;
+  const { engine, fake, resolver } = createEngine({
+    wait: (ms) => new Promise((resolve) => waits.push({ ms, resolve })),
+  });
+  resolver.set(async (id) => {
+    if (id === 1) {
+      primaryCalls += 1;
+      if (primaryCalls === 2) {
+        throw failureError("RiskControl", "风控");
+      }
+    }
+    return `url://${id}`;
+  });
+
+  await engine.playList([song(1), song(2)], 0);
+  await flush();
+  fake.last().emit("playing");
+  fake.last().emit("error", {
+    error: failureError("Media", "流中断"),
+  });
+  await flush();
+
+  assert.equal(waits.length, 1);
+  waits[0].resolve();
+  await flush();
+  await flush();
+  await flush();
+  await flush();
+  assert.deepEqual(
+    waits.map((item) => item.ms),
+    [300, 5_000],
+    `waits=${waits.map((item) => item.ms).join(",")}`,
+  );
+  assert.equal(waits[1].ms, 5_000);
+  assert.equal(engine.getState().lastPlaybackFailure?.autoRetry?.waitMs, 5_000);
+
+  waits[1].resolve();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(engine.getState().lastPlaybackFailure, null);
+  assert.equal(engine.getState().currentSongId, 1);
+  assert.equal(fake.last().src, "url://1");
 });
 
 test("网络临时失败：同歌重试成功则继续播放，不产生失败通报也不重复写历史", async () => {

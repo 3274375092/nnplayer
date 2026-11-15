@@ -257,6 +257,24 @@ function playAll() {
   void player.playList(props.songs, 0);
 }
 
+/**
+ * 「播放全部」只在真的会播完整个集合时这么写。
+ *
+ * 搜索结果是分页截断的（找到 N 首，仅加载前 M 首）：此时按钮实际只入队 M 首，
+ * 文案若仍写「播放全部」就直接违背 PRODUCT 的“状态诚实”（服务端实际 vs
+ * 用户以为）。列表头已经写明截断，按钮必须跟着说清范围。
+ */
+const playAllLabel = computed(() =>
+  props.totalCount !== undefined && props.totalCount > props.songs.length
+    ? `播放已显示的 ${props.songs.length} 首`
+    : "播放全部",
+);
+const playAllTitle = computed(() =>
+  props.totalCount !== undefined && props.totalCount > props.songs.length
+    ? `完整结果共 ${props.totalCount} 首，当前仅加载前 ${props.songs.length} 首`
+    : "从头播放这个列表",
+);
+
 /** 整行播放按钮的无障碍名称：动作 + 歌名 + 艺人。 */
 function playLabel(song: Song) {
   return `播放歌曲 ${song.name}，艺人 ${song.artists}`;
@@ -289,9 +307,11 @@ function playLabel(song: Song) {
       <button
         class="btn btn-primary shrink-0 text-sm px-4 py-2"
         :disabled="songs.length === 0"
+        :title="playAllTitle"
+        :aria-label="playAllLabel"
         @click="playAll"
       >
-        <Play :size="14" :stroke-width="1.5" class="mr-1.5" aria-hidden="true" />播放全部
+        <Play :size="14" :stroke-width="1.5" class="mr-1.5" aria-hidden="true" />{{ playAllLabel }}
       </button>
     </div>
 

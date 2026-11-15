@@ -1,16 +1,17 @@
 <script setup lang="ts">
 // 骨架屏卡片。
-//   - 列表型 / 网格型两种 variant
+//   - 列表型 / 网格型 / 歌词列型三种 variant
 //   - 微光用 ::after 上的 transform 扫光实现（合成器属性，不动 background-position）
 //
 // 用法：
 //   <SkeletonCard v-for="i in 8" :key="i" variant="grid" />
 //   <SkeletonCard variant="list" :rows="6" />
+//   <SkeletonCard variant="aside" :rows="7" />
 
 interface Props {
-  /** 列表型（一行一卡片模拟）或 网格型（封面 + 标题两行） */
-  variant?: "list" | "grid";
-  /** 列表型行数（仅 list 生效） */
+  /** 列表型 / 网格型 / 歌词列型（raised 纸卡 + 若干行占位） */
+  variant?: "list" | "grid" | "aside";
+  /** 列表型 / 歌词列型的占位行数 */
   rows?: number;
 }
 withDefaults(defineProps<Props>(), {
@@ -30,6 +31,18 @@ withDefaults(defineProps<Props>(), {
       <div class="skeleton h-3.5 w-3/4 rounded" />
     </div>
     <div class="skeleton mt-1 h-4 w-1/2 rounded" />
+  </div>
+
+  <!-- 歌词列型：镜像 LyricAside 的 raised 纸卡（16px 内边距 + Raised 阴影），
+       加载完成时只换内容、不换骨架；三个列表页共用这一份标记。 -->
+  <div v-else-if="variant === 'aside'" class="skeleton-aside" aria-hidden="true">
+    <div class="skeleton h-3.5 w-12 rounded" />
+    <div
+      v-for="i in rows"
+      :key="i"
+      class="skeleton mt-3 h-3 rounded"
+      :class="i % 3 === 0 ? 'w-2/3' : 'w-full'"
+    />
   </div>
 
   <!-- 列表型：镜像 SongList（小节头 + 列头 + 60px 行），加载完成后不跳位 -->
@@ -77,6 +90,16 @@ withDefaults(defineProps<Props>(), {
 .skeleton-list {
   container-name: skeleton-song-list;
   container-type: inline-size;
+}
+
+/* 与 LyricAside 同一张 raised 纸卡的体量与内边距（分页/容器查询里的
+   display:none 覆盖由使用方页面声明，这里只负责卡片本体）。 */
+.skeleton-aside {
+  align-self: start;
+  padding: 1rem;
+  border-radius: 8px;
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
 }
 
 @container skeleton-song-list (max-width: 34rem) {

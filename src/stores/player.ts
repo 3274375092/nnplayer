@@ -237,6 +237,7 @@ export const usePlayerStore = defineStore("player", () => {
     // 播放失败可见性：事实来自引擎，人话映射由 utils/appErrors 完成
     lastPlaybackFailure,
     retryFailedPlayback: engine.retryFailedPlayback,
+    cancelAutoRetry: engine.cancelAutoRetry,
     dismissPlaybackFailure: engine.dismissPlaybackFailure,
     // 转发引擎
     audioState: readonly(audioState),
@@ -252,7 +253,9 @@ export const usePlayerStore = defineStore("player", () => {
     prev: engine.prev,
     togglePlayMode: engine.togglePlayMode,
     removeFromQueue: engine.removeFromQueue,
+    insertIntoQueue: engine.insertIntoQueue,
     reorderQueue: engine.reorderQueue,
+    restoreQueueSnapshot: engine.restoreQueueSnapshot,
     clearQueue: engine.clearQueue,
     getNextUp: engine.getNextUp,
   };

@@ -40,6 +40,8 @@ src-tauri/gen/
 .agents/
 .codex/
 .zcode/
+# DSH 项目级技能（npx impeccable install 会写入 .dsh/skills，含约 21MB 引擎二进制）
+.dsh/
 
 # impeccable 技能的本地评审截图等工作产物
 .impeccable/
@@ -61,5 +63,7 @@ docs/*
 !docs/agents/**
 !docs/adr/
 !docs/adr/**
+!docs/research/
+!docs/research/**
 !docs/lyric-sync-troubleshooting.md
 !docs/cow-refactor.md

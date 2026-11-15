@@ -13,16 +13,20 @@ import { isTauri } from "@tauri-apps/api/core";
 import {
   ChevronLeft,
   ChevronRight,
+  CircleHelp,
   CirclePlay,
   Folder,
   ListMusic,
+  LoaderCircle,
   Music2,
   Pin,
   Search,
   Sparkles,
+  X,
 } from "@lucide/vue";
 
 import { searchSuggest } from "@/composables/useNcmApi";
+import { useBackgroundInert } from "@/composables/useBackgroundInert";
 import type { SearchSuggestion } from "@/types/music";
 import { useUserStore } from "@/stores/user";
 import { useDesktopLyricsStore } from "@/stores/desktopLyrics";
@@ -73,6 +77,10 @@ const narrowQuery =
 const narrowViewport = ref(narrowQuery?.matches ?? false);
 // 窄窗里从轨道临时展开的浮层：不写入偏好，跨断点或切页后自动收起。
 const narrowExpanded = ref(false);
+// 浮层是 dialog：只 inert 内容壳，侧栏自身仍是可交互的对话框主体。
+useBackgroundInert(() => narrowExpanded.value, {
+  targets: [".app-content-shell"],
+});
 // 关闭浮层时保持 fixed 直到宽度过渡结束：若不这样，aside 会先带着 240px
 // 宽度回到 flex 流、再动画回 64px，把内容壳/播放条推出去再拉回来。
 const overlayClosing = ref(false);
@@ -82,6 +90,12 @@ const overlayActive = computed(
 const compact = computed(() =>
   narrowViewport.value ? !narrowExpanded.value : collapsed.value,
 );
+/**
+ * 窄窗的 64px 轨道是“默认形态”，不是用户主动折叠：这里在图标下补 11px 文本
+ * 标签，避免第一次打开（尤其 125% 缩放下的 960×640 窗口）必须认出八个图标。
+ * 桌面端用户主动折叠时仍保持纯图标 + title/aria-label，不牺牲纵向密度。
+ */
+const railLabeled = computed(() => compact.value && narrowViewport.value);
 /** 占位 wrapper 的宽度：与 aside 的宽度保持同一套类名与过渡，避免内容壳错位。 */
 const shellWidthClass = computed(() =>
   overlayActive.value
@@ -146,6 +160,17 @@ const menu = [
   { to: "/playlists", label: "我的歌单", icon: Folder },
 ] as const;
 
+/**
+ * 导航激活判定按「信息架构」而不是 URL 前缀：歌单详情属于“我的歌单”这一节，
+ * 但仍要能看到自己处在哪个导航分区（此前 /playlist/:id 上三个导航项全灭）。
+ */
+function isMenuActive(to: string): boolean {
+  if (to === "/playlists") {
+    return route.name === "MyPlaylists" || route.name === "PlaylistDetail";
+  }
+  return route.path === to;
+}
+
 /** 关于弹层开关：入口是侧栏品牌区（展开/折叠都可用）。 */
 const aboutOpen = ref(false);
 
@@ -154,6 +179,8 @@ const suggestions = ref<SearchSuggestion[]>([]);
 const showSuggest = ref(false);
 /** 建议请求失败：不能表现成「没有建议」，要留一条可读提示且回车仍可搜索。 */
 const suggestError = ref(false);
+/** 建议请求在途：搜索建议也要有系统状态可见性（此前浮层只是“晚 300ms 才出现”）。 */
+const suggestLoading = ref(false);
 const highlightIndex = ref(-1);
 /** combobox：输入框用 aria-activedescendant 指向当前高亮的选项（DOM 焦点不离开输入框）。 */
 const SUGGEST_LIST_ID = "sidebar-search-suggest";
@@ -183,51 +210,23 @@ const searchButtonRef = ref<HTMLButtonElement | null>(null);
 const expandButtonRef = ref<HTMLButtonElement | null>(null);
 /** 品牌区「关于」入口：展开/折叠是两个不同元素，同一个 ref 只会挂到当前渲染的那个。 */
 const aboutButtonRef = ref<HTMLButtonElement | null>(null);
+const aboutRailButtonRef = ref<HTMLButtonElement | null>(null);
 /** 侧栏浮层（dialog 模式）的焦点圈容器。 */
 const sidebarRef = ref<HTMLElement | null>(null);
 /** 搜索弹层（dialog 模式）的焦点圈容器。 */
 const searchPanelRef = ref<HTMLElement | null>(null);
 const searchExpand = ref(false);
+// 折叠态搜索弹层同为 aria-modal 对话框：面板 Teleport 到 body，打开期间整棵
+// 应用壳 inert（与队列抽屉/关于弹层/窄窗浮层共用同一个引用计数钩子）。
+// 生效条件与模板里的 v-if 完全一致（searchExpand && compact），弹层没渲染时
+// 不会误伤背景。
+useBackgroundInert(() => searchExpand.value && compact.value);
 
 /**
- * 搜索页上侧栏输入框是 route.query.q 的镜像：路由成为唯一查询来源，
- * 页面输入框与侧栏不再各持一份会互相打架的关键词。其它页面上它仍是独立草稿。
+ * 侧栏搜索是「其它页面上的草稿」，/search 路由下整块不渲染：搜索页已经有唯一
+ * 主输入框，镜像一份同关键词的侧栏输入会让同一页面出现两个等价入口。
  */
 const onSearchPage = computed(() => route.name === "Search");
-/** 上一次路由是否停在搜索页：离开时清掉镜像来的关键词，不留误导性的旧词。 */
-let wasOnSearchPage = false;
-
-/** 路由 query.q 只接受字符串：重复参数会解析成数组，宁可当作空查询。 */
-function routeKeyword(): string {
-  const q = route.query.q;
-  return typeof q === "string" ? q : "";
-}
-
-/** 路由切换后对齐侧栏输入：进入搜索页镜像当前查询，离开时清空。 */
-function syncKeywordWithRoute() {
-  const current = router.currentRoute.value;
-  const onSearch = current.name === "Search";
-  if (onSearch) {
-    keyword.value =
-      typeof current.query.q === "string" ? current.query.q : "";
-  } else if (wasOnSearchPage) {
-    keyword.value = "";
-  }
-  wasOnSearchPage = onSearch;
-}
-
-/**
- * 搜索页上侧栏输入停顿后把关键词写回路由（replace，不新增历史）：
- * 页面输入框由 route.query.q 驱动，两个输入框看到同一个词、也搜同一批结果。
- */
-function syncKeywordToRoute() {
-  if (!onSearchPage.value) return;
-  // 与路由已经一致就不重复导航（输入后又删回原词会走到这里）。
-  if (routeKeyword() === keyword.value) return;
-  void router.replace({
-    query: keyword.value ? { q: keyword.value } : {},
-  });
-}
 
 function goSearch(kw?: string) {
   const q = (kw ?? keyword.value).trim();
@@ -251,7 +250,16 @@ function hideSuggest() {
   inFlightSeq += 1;
   showSuggest.value = false;
   suggestError.value = false;
+  suggestLoading.value = false;
   highlightIndex.value = -1;
+}
+
+/** 清空搜索框：回到「无关键词」状态，焦点留在输入框里继续编辑。 */
+function clearSearch() {
+  keyword.value = "";
+  suggestions.value = [];
+  hideSuggest();
+  void nextTick(() => searchInputRef.value?.focus());
 }
 
 async function fetchSuggest() {
@@ -261,9 +269,11 @@ async function fetchSuggest() {
     suggestions.value = [];
     showSuggest.value = false;
     suggestError.value = false;
+    suggestLoading.value = false;
     return;
   }
   const seq = ++inFlightSeq;
+  suggestLoading.value = true;
   try {
     const res = await searchSuggest(q);
     if (seq !== inFlightSeq) return;
@@ -279,6 +289,8 @@ async function fetchSuggest() {
     suggestError.value = true;
     showSuggest.value = true;
     highlightIndex.value = -1;
+  } finally {
+    if (seq === inFlightSeq) suggestLoading.value = false;
   }
 }
 
@@ -289,8 +301,6 @@ function onInput() {
   inFlightSeq += 1;
   debounceTimer = window.setTimeout(() => {
     fetchSuggest();
-    // 搜索页上路由是唯一真相：停顿后同步回 query，页面输入框随之更新。
-    syncKeywordToRoute();
   }, 300);
 }
 
@@ -383,9 +393,20 @@ function logout() {
 /** 视图切换后主控件会重新渲染，把焦点交给新布局里最靠前的可操作项。 */
 function focusPrimaryAction() {
   void nextTick(() => {
-    if (compact.value) expandButtonRef.value?.focus();
-    else searchInputRef.value?.focus();
+    if (compact.value) {
+      expandButtonRef.value?.focus();
+      return;
+    }
+    // 展开态的首选是侧栏搜索框，但 /search 页刻意不渲染它（搜索页已有唯一主
+    // 搜索框）：必须退回一个仍然存在且可见的控件，否则 focus() 无声失败、焦点
+    // 掉回 <body>，下一次 Tab 会从文档顶部的跳跃链接重新开始。
+    (searchInputRef.value ?? firstNavLink())?.focus();
   });
+}
+
+/** 展开态焦点兜底：搜索框不存在时（/search）交给侧栏第一个导航项。 */
+function firstNavLink(): HTMLElement | null {
+  return sidebarRef.value?.querySelector<HTMLElement>("nav a") ?? null;
 }
 
 // 与 aside 的宽度过渡（220ms）对齐，再回落到 flex 流，避免回流瞬间推挤内容。
@@ -403,7 +424,8 @@ function openNarrowOverlay() {
   clearOverlayTimer();
   overlayClosing.value = false;
   narrowExpanded.value = true;
-  void nextTick(() => searchInputRef.value?.focus());
+  // /search 页浮层里也不渲染搜索框：同样退回首个导航项，别把焦点丢给 <body>。
+  void nextTick(() => (searchInputRef.value ?? firstNavLink())?.focus());
 }
 
 /**
@@ -457,10 +479,25 @@ function onNarrowChange(e: MediaQueryListEvent) {
   narrowExpanded.value = false;
   searchExpand.value = false;
   // 断点切换会重排/卸载浮层与弹层：把焦点交给仍然存在的等价入口。
+  // /search 页没有侧栏搜索框，最后再退到首个导航项（见 firstNavLink）。
   if (wasSearchModal) {
-    void nextTick(() => (searchInputRef.value ?? searchButtonRef.value)?.focus());
+    void nextTick(
+      () =>
+        (
+          searchInputRef.value ??
+          searchButtonRef.value ??
+          firstNavLink()
+        )?.focus(),
+    );
   } else if (wasOverlay) {
-    void nextTick(() => (searchInputRef.value ?? expandButtonRef.value)?.focus());
+    void nextTick(
+      () =>
+        (
+          searchInputRef.value ??
+          expandButtonRef.value ??
+          firstNavLink()
+        )?.focus(),
+    );
   }
 }
 
@@ -572,16 +609,27 @@ async function openDesktopLyrics() {
   }
 }
 
+/** 关于弹层的触发元素：品牌字或底部的「关于与帮助」行，关闭后焦点回到它。 */
+let aboutTrigger: HTMLElement | null = null;
+
 /** 打开关于弹层；窄窗浮层正开着时先收起它，把焦点让给弹层。 */
-function openAbout() {
+function openAbout(event?: MouseEvent) {
   if (narrowExpanded.value) closeNarrowOverlay(false);
+  const trigger = event?.currentTarget;
+  aboutTrigger =
+    trigger instanceof HTMLElement ? trigger : aboutButtonRef.value;
   aboutOpen.value = true;
 }
 
 /** 关闭关于弹层：断点切换可能替换品牌按钮，按当前渲染的入口归还焦点。 */
 function closeAbout() {
   aboutOpen.value = false;
-  void nextTick(() => aboutButtonRef.value?.focus());
+  void nextTick(() => {
+    const fallback =
+      aboutRailButtonRef.value ?? aboutButtonRef.value;
+    (aboutTrigger?.isConnected ? aboutTrigger : fallback)?.focus();
+    aboutTrigger = null;
+  });
 }
 
 /** 首次驻留托盘提示的固定 id 与会话内状态。 */
@@ -647,20 +695,8 @@ watch(
   },
 );
 
-// 搜索页的路由查询是唯一真相：页面输入框或前进/后退改了 q，侧栏同步镜像；
-// 侧栏自己写回路由时 q 与本地输入相等，这里不会回灌覆盖正在输入的新内容。
-watch(
-  () => route.query.q,
-  () => {
-    if (!onSearchPage.value) return;
-    const next = routeKeyword();
-    if (next === keyword.value) return;
-    keyword.value = next;
-    // 外部改了查询：上一次的建议已经不对应当前关键词，收起而不是继续显示。
-    hideSuggest();
-  },
-);
-
+// 侧栏搜索只是当前页面上的草稿：路由一变就收起建议并清空，避免把一个页面的
+// 关键词带到另一个页面（搜索页自己的输入框由 route.query.q 驱动）。
 watch(
   () => router.currentRoute.value.path,
   () => {
@@ -670,8 +706,8 @@ watch(
     // 否则两个 nextTick 回调会互相抢焦点。
     if (narrowExpanded.value) closeNarrowOverlay(false);
     searchExpand.value = false;
-    // 进入/离开搜索页时对齐输入框，离开后不留下与页面不一致的旧词。
-    syncKeywordWithRoute();
+    keyword.value = "";
+    suggestions.value = [];
   },
   { immediate: true },
 );
@@ -761,20 +797,21 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <!-- 搜索区 -->
+      <!-- 搜索区：搜索页本身已有主搜索框，这里不再渲染第二个同款控件
+           （评审 P2：同一页面两个等价的搜索入口会让人不知道哪个才是“真的”）。 -->
       <div
-        v-if="!compact"
+        v-if="!compact && !onSearchPage"
         ref="searchBoxRef"
         class="mb-4 relative shrink-0"
         @focusout="onSearchFocusOut"
       >
-        <form @submit.prevent="onEnter">
+        <form class="relative" @submit.prevent="onEnter">
           <input
             ref="searchInputRef"
             v-model="keyword"
             type="text"
             placeholder="搜索歌曲或艺人"
-            class="input"
+            class="input search-input"
             autocomplete="off"
             aria-label="搜索歌曲或艺人"
             role="combobox"
@@ -791,16 +828,43 @@ onBeforeUnmount(() => {
             @keydown="onKeydown"
             @focus="fetchSuggest"
           />
+          <!-- 有内容时给出明确的清空入口（此前只能逐字删掉）。 -->
+          <button
+            v-if="keyword"
+            type="button"
+            class="input-clear search-clear"
+            title="清空搜索"
+            aria-label="清空搜索"
+            @click="clearSearch"
+          >
+            <X :size="14" :stroke-width="2" aria-hidden="true" />
+          </button>
         </form>
         <div
-          v-if="showSuggest && (suggestions.length > 0 || suggestError)"
+          v-if="
+            (showSuggest || suggestLoading) &&
+            (suggestLoading || suggestions.length > 0 || suggestError)
+          "
           :id="suggestions.length > 0 && !suggestError ? SUGGEST_LIST_ID : undefined"
           :role="suggestions.length > 0 && !suggestError ? 'listbox' : undefined"
           aria-label="搜索建议"
           class="glass absolute left-0 right-0 top-full mt-2 z-30 max-h-80 overflow-y-auto py-1"
         >
           <div
-            v-if="suggestError"
+            v-if="suggestLoading && suggestions.length === 0"
+            class="px-3 py-2 text-xs text-text-tertiary flex items-center gap-2"
+            role="status"
+          >
+            <LoaderCircle
+              :size="13"
+              :stroke-width="2"
+              class="animate-spin shrink-0"
+              aria-hidden="true"
+            />
+            正在搜索建议…
+          </div>
+          <div
+            v-else-if="suggestError"
             class="px-3 py-2 text-xs text-accent"
             role="status"
           >
@@ -842,16 +906,25 @@ onBeforeUnmount(() => {
           </template>
         </div>
       </div>
-      <div v-else class="mb-3 flex justify-center shrink-0">
+      <div
+        v-else-if="compact && !onSearchPage"
+        class="mb-3 flex shrink-0 justify-center"
+      >
         <button
           ref="searchButtonRef"
           type="button"
-          class="w-10 h-10 rounded-xl bg-card-hover text-text-tertiary hover:text-text-primary hover:bg-surface-strong flex items-center justify-center transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          :class="[
+            'rounded-xl bg-card-hover text-text-tertiary hover:text-text-primary hover:bg-surface-strong transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
+            railLabeled
+              ? 'flex h-11 w-full flex-col items-center justify-center gap-0.5'
+              : 'flex h-10 w-10 items-center justify-center',
+          ]"
           :aria-label="'打开搜索'"
           title="打开搜索"
           @click="openSearchModal"
         >
           <Search :size="18" :stroke-width="1.75" />
+          <span v-if="railLabeled" class="sidebar-rail-label">搜索</span>
         </button>
       </div>
 
@@ -981,10 +1054,16 @@ onBeforeUnmount(() => {
           :to="item.to"
           :class="[
             'flex items-center h-12 rounded-md text-sm transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
-            compact ? 'justify-center px-2' : 'px-4 gap-3',
-            'text-text-secondary hover:text-text-primary hover:bg-card-hover',
+            compact
+              ? railLabeled
+                ? 'flex-col justify-center gap-0.5 px-1'
+                : 'justify-center px-2'
+              : 'px-4 gap-3',
+            isMenuActive(item.to)
+              ? 'text-accent-on-subtle bg-accent-subtle font-medium'
+              : 'text-text-secondary hover:text-text-primary hover:bg-card-hover',
           ]"
-          active-class="!text-accent-on-subtle !bg-accent-subtle font-medium"
+          :aria-current="isMenuActive(item.to) ? 'page' : undefined"
           :title="compact ? item.label : undefined"
           :aria-label="compact ? item.label : undefined"
         >
@@ -995,6 +1074,9 @@ onBeforeUnmount(() => {
             class="w-5 shrink-0"
           />
           <span v-if="!compact">{{ item.label }}</span>
+          <span v-else-if="railLabeled" class="sidebar-rail-label">{{
+            item.label
+          }}</span>
         </RouterLink>
       </nav>
 
@@ -1004,7 +1086,11 @@ onBeforeUnmount(() => {
           type="button"
           :class="[
             'flex items-center h-10 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-card-hover transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
-            compact ? 'justify-center px-2' : 'px-4 gap-3',
+            compact
+              ? railLabeled
+                ? 'flex-col justify-center gap-0.5 px-1'
+                : 'justify-center px-2'
+              : 'px-4 gap-3',
           ]"
           title="播放队列"
           :aria-label="'播放队列'"
@@ -1012,12 +1098,17 @@ onBeforeUnmount(() => {
         >
           <ListMusic :size="16" :stroke-width="1.75" class="w-5 shrink-0" />
           <span v-if="!compact">播放队列</span>
+          <span v-else-if="railLabeled" class="sidebar-rail-label">播放队列</span>
         </button>
         <button
           type="button"
           :class="[
-            'flex items-center h-10 rounded-xl text-sm transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
-            compact ? 'justify-center px-2' : 'px-4 gap-3',
+            'relative flex items-center h-10 rounded-xl text-sm transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
+            compact
+              ? railLabeled
+                ? 'flex-col justify-center gap-0.5 px-1'
+                : 'justify-center px-2'
+              : 'px-4 gap-3',
             desktopLyricsStore.isOpen
               ? 'text-accent-on-subtle bg-accent-subtle'
               : 'text-text-secondary hover:text-text-primary hover:bg-card-hover',
@@ -1029,6 +1120,15 @@ onBeforeUnmount(() => {
         >
           <Pin :size="16" :stroke-width="1.75" class="w-5 shrink-0" />
           <span v-if="!compact">桌面歌词</span>
+          <span v-else-if="railLabeled" class="sidebar-rail-label">桌面歌词</span>
+          <!-- 折叠成图标轨道时没有文案，用一个角落小圆点保留开关状态（此前
+               窄窗里“已开启/已关闭”状态完全不可见）。窄窗补了文字标签后
+               状态由激活底色表达，小圆点只在桌面折叠态保留。 -->
+          <span
+            v-if="compact && !railLabeled && desktopLyricsStore.isOpen"
+            class="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-accent"
+            aria-hidden="true"
+          />
           <span
             v-if="!compact"
             class="ml-auto text-[11px]"
@@ -1039,16 +1139,43 @@ onBeforeUnmount(() => {
             "
           >{{ desktopLyricsStore.isOpen ? "已开启" : "已关闭" }}</span>
         </button>
+        <!-- 关于与帮助：快捷键、托盘说明、更新与许可证的唯一入口，此前只在
+             品牌字上可点（评审 P2：帮助/更新被藏在 logo 后面）。 -->
+        <button
+          ref="aboutRailButtonRef"
+          type="button"
+          :class="[
+            'flex items-center h-10 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-card-hover transition-all duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
+            compact
+              ? railLabeled
+                ? 'flex-col justify-center gap-0.5 px-1'
+                : 'justify-center px-2'
+              : 'px-4 gap-3',
+          ]"
+          title="关于与帮助"
+          aria-label="关于与帮助"
+          @click="openAbout"
+        >
+          <CircleHelp :size="16" :stroke-width="1.75" class="w-5 shrink-0" />
+          <span v-if="!compact">关于与帮助</span>
+          <span v-else-if="railLabeled" class="sidebar-rail-label"
+            >关于与帮助</span
+          >
+        </button>
         <button
           v-if="compact"
           ref="expandButtonRef"
           type="button"
-          class="flex h-9 w-9 self-center items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-card-hover transition-colors"
+          :class="[
+            'flex items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-card-hover transition-colors',
+            railLabeled ? 'h-10 w-full flex-col gap-0.5' : 'h-9 w-9 self-center',
+          ]"
           title="展开侧栏"
           aria-label="展开侧栏"
           @click="toggleCollapsed"
         >
           <ChevronRight :size="18" :stroke-width="1.75" />
+          <span v-if="railLabeled" class="sidebar-rail-label">展开</span>
         </button>
       </div>
 
@@ -1088,7 +1215,7 @@ onBeforeUnmount(() => {
 
       <div
         v-else
-        class="pt-3 flex justify-center shrink-0"
+        class="sidebar-compact-user pt-3 flex justify-center shrink-0"
       >
         <img
           v-if="userStore.avatarUrl"
@@ -1139,7 +1266,43 @@ onBeforeUnmount(() => {
   contain: layout paint;
 }
 
+/* 窄窗图标轨道下的 11px 标签（DESIGN 的 micro 步进，不再新增字号）：
+   图标仍是主识别，文字只负责“第一次见面”。line-height 收紧以留在
+   40/44px 的行内，不改变轨道总高。 */
+.sidebar-rail-label {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 /* 侧栏内所有可键盘聚焦的控件统一 2px 陶土焦点环（DESIGN 的焦点约定）。 */
+/* 折叠轨道在 768×512 验收档要装下：三个导航项 + 队列/桌面歌词/关于/展开四个
+   底部项 + 用户块。新增“关于与帮助”后总高超出 32px（实测 scrollHeight 544 vs
+   512，头像被裁）。只在这一档收紧纵向节奏，桌面/宽窗几何不变。 */
+@media (max-width: 768px) and (max-height: 620px) {
+  .sidebar {
+    padding-block: 0.75rem;
+  }
+
+  .sidebar nav > a {
+    height: 2.75rem;
+  }
+
+  /* 窄窗补上 11px 轨道标签后底部多出 4px：把常驻头像的上间距收紧到 4px，
+     保证 768×512 下轨道 scrollHeight 不超出视口，并留出余量（评审 P3：
+     任何后续项增长都不应立刻裁掉头像）。 */
+  .sidebar-compact-user {
+    padding-top: 0.25rem;
+  }
+}
+
+/* 搜索框清空按钮：全局 .input-clear 负责视觉与命中区，这里只补输入框的右内边距。 */
+.search-input {
+  padding-right: 2rem;
+}
+
 .sidebar button:focus-visible,
 .sidebar a:focus-visible {
   outline: 2px solid var(--color-accent);

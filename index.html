@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>nnplayer</title>
+    <!-- 内联 favicon：不额外发请求、不占构建产物，也让开发预览的标签页与
+         控制台不再出现 /favicon.ico 404（桌面壳的窗口图标走 src-tauri/icons）。 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23fbf1c7'/%3E%3Cpath d='M12 23V11.5l9-2V21' fill='none' stroke='%23af3a03' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='10' cy='23' r='2.6' fill='%23af3a03'/%3E%3Ccircle cx='19' cy='21' r='2.6' fill='%23af3a03'/%3E%3C/svg%3E"
+    />
     <!-- Inter 未随包分发：字体栈会回退到系统字体。
          若要保留 Inter，请自托管（@fontsource/inter 或本地 woff2）后再引入。 -->
     <script>

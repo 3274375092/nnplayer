@@ -34,12 +34,11 @@ function goSearch() {
 const LYRIC_PANEL_MAX_HEIGHT = 360;
 const LYRIC_PANEL_MIN_HEIGHT = 180;
 // LyricPanel 把 panelHeight 当 min-height 与内部视口基准，但根节点还有 p-4
-// （上下共 32px 内边距）、32px 标题行（24px 标题 + mb-2 8px），而内部视口只
-// 扣掉 LYRIC_CHROME_HEIGHT 40px ⇒ 实际渲染高度 = panelHeight + 24px。预留时
-// 必须把这个余量算进去，否则 768×512 下页面会多出约 24px 的滚动（审计 #18
-// 的残余）。用常量而不是渲染后再测一次：避免「测高度 → 改 prop → 再测」的
-// 抖动循环。
-const LYRIC_PANEL_RENDER_OVERHEAD = 24;
+// （上下共 32px 内边距）；正在播放页隐藏了面板标题行（歌曲名已由 h1 承担），
+// 因此实际渲染高度 = panelHeight + 32px。预留时把这个余量算进去，否则
+// 768×512 下页面会多出一截滚动。用常量而不是渲染后再测一次：避免
+// 「测高度 → 改 prop → 再测」的抖动循环。
+const LYRIC_PANEL_RENDER_OVERHEAD = 32;
 
 const rootRef = ref<HTMLElement | null>(null);
 const headerRef = ref<HTMLElement | null>(null);
@@ -196,8 +195,9 @@ onBeforeUnmount(() => {
             </p>
           </div>
 
-          <!-- 歌词区用 section 承载 h2 语义：歌词卡内部的 h3「歌词」作为它的小节
-               标题，标题层级变成 h1（歌曲名）→ h2（当前歌词）→ h3，不再跳级。 -->
+          <!-- 歌词区用 section 承载 h2 语义：正在播放页已通过 hide-header 隐藏
+               歌词卡的标题行（连那枚 h3「歌词」一起），实际标题层级是 h1（歌曲名）
+               → h2（当前歌词，sr-only，作为本 section 的 aria-labelledby），不跳级。 -->
           <section
             class="now-playing__lyrics"
             aria-labelledby="now-playing-lyrics-heading"
@@ -206,6 +206,7 @@ onBeforeUnmount(() => {
             <LyricPanel
               :panel-height="lyricPanelHeight"
               :line-height="40"
+              hide-header
             />
           </section>
         </template>

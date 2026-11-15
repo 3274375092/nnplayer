@@ -43,6 +43,22 @@ export interface PlaybackFailure {
   recentSongNames: readonly string[];
   /** 失败前用户是否有播放意图；重载失败重试时用于恢复播放/暂停意图。 */
   wasPlaying: boolean;
+  /** 计划中的风控自动重试；null 表示没有自动恢复计划（普通重试/最终失败）。 */
+  autoRetry: PlaybackAutoRetry | null;
+}
+
+/**
+ * 风控失败后的自动恢复计划：播放失败通知据此如实显示
+ * “第几次自动重试、大约多久后开始”，而不是只给一个“重试”按钮让用户
+ * 在风控窗口内反复点、反复失败。
+ */
+export interface PlaybackAutoRetry {
+  /** 第几次自动重试（从 1 起）。 */
+  attempt: number;
+  /** 恢复链允许的自动重试总次数。 */
+  limit: number;
+  /** 距离下一次尝试计划的等待时长（毫秒）；0 表示重试已经开始、正在取地址。 */
+  waitMs: number;
 }
 
 /** 暂无可用播放源（URL 解析成功但上游返回空）的引擎内部分类。 */
@@ -183,7 +199,11 @@ export interface PlaybackEngine {
   setVolume(volume: number): void;
   toggleMute(): void;
   removeFromQueue(absIdx: number): void;
+  /** 在绝对位置插回一首歌（队列移除的撤销）；越界位置会夹到合法范围。 */
+  insertIntoQueue(absIdx: number, song: Song): void;
   reorderQueue(from: number, to: number): void;
+  /** 用给定队列与索引恢复队列结构（队列级撤销用），不改变当前媒体/播放状态。 */
+  restoreQueueSnapshot(queue: readonly Song[], index: number): void;
   clearQueue(): void;
   getNextUp(limit?: number): Song[];
   /** auth epoch 变化输入口；装配层接 subscribeAuthEpoch，测试直接调用 */
@@ -195,6 +215,8 @@ export interface PlaybackEngine {
   reloadCurrent(): void;
   /** 重试最近一次失败的播放：装载/流中断失败重播失败歌曲，切档重载失败按原意图重载。 */
   retryFailedPlayback(): Promise<void>;
+  /** 停止当前风控自动恢复链；保留失败通报，让用户可稍后手动重试。 */
+  cancelAutoRetry(): void;
   /** 清除最近一次播放失败通报（用户关闭提示）；不清空连续失败计数。 */
   dismissPlaybackFailure(): void;
   /** 销毁媒体、清空缓存与订阅 */
@@ -220,6 +242,16 @@ const RETRY_WAIT_MS: Readonly<Record<string, number>> = {
   Json: 500,
   Internal: 500,
 };
+/** 网易云风控（-460 / 503）的失败类别。 */
+const RISK_CONTROL_KIND = "RiskControl";
+/** 风控恢复阶梯：命中风控后留在同一首歌上、逐次拉长间隔自动重试，而不是
+ *  只试一次就把用户扔回“手动重试”。等待都长于 Rust 侧 4s 熔断窗口，前三次
+ *  覆盖常见的短时限流（5s → 20s → 60s，合计约 85s）；仍被拦截才停止并保留
+ *  手动重试入口。 */
+const RISK_CONTROL_RETRY_WAITS_MS = [5_000, 20_000, 60_000] as const;
+/** 风控后暂停下一首 URL 预取的冷却时长：恢复期间不要继续给上游添请求，
+ *  也避免预取抢在用户真正的播放请求之前再次打爆风控。 */
+const RISK_CONTROL_PREFETCH_COOLDOWN_MS = 90_000;
 /** 值得对同一首歌自动重试的失败类别：临时网络/风控/媒体故障与一次性
  *  接口/解析/引擎内部错误（重试仍失败则由 NON_SKIPPABLE_KINDS 停歌）。 */
 const RETRYABLE_KINDS: ReadonlySet<string> = new Set([
@@ -320,6 +352,13 @@ export function createPlaybackEngine(
   /** 当前歌曲已经用掉多少同歌重试；换歌或成功后归零。 */
   let retrySongId: number | null = null;
   let retryCount = 0;
+  /** 风控冷却截止时刻：期间不再预取下一首 URL（见 prefetchNextSongUrl）。 */
+  let prefetchCooldownUntil = 0;
+  /**
+   * 风控恢复链代际。用户暂停、切歌、关闭提示或开始新一轮恢复时递增；
+   * 旧等待结束后只能读取自己的代际，不能修改新一轮的通报或继续加载。
+   */
+  let autoRetryGeneration = 0;
 
   /** 换歌后重置同歌重试预算（同一首歌的多次失败共享一轮预算）。 */
   function beginRetryBudget(songId: number) {
@@ -417,6 +456,8 @@ export function createPlaybackEngine(
       retryCount: number;
       wasPlaying: boolean;
       recentSongNames: readonly string[];
+      /** 计划中的风控自动重试；普通失败/最终失败不传。 */
+      autoRetry?: PlaybackAutoRetry | null;
     },
   ) {
     const song = getCurrentSong();
@@ -436,6 +477,7 @@ export function createPlaybackEngine(
       retryCount: details.retryCount,
       recentSongNames: details.recentSongNames,
       wasPlaying: details.wasPlaying,
+      autoRetry: details.autoRetry ?? null,
     };
     notify();
   }
@@ -450,6 +492,45 @@ export function createPlaybackEngine(
   function clearStalePlaybackFailure() {
     if (state.lastPlaybackFailure === null) return;
     state.lastPlaybackFailure = null;
+    notify();
+  }
+
+  /** 风控等待结束、真正开始重新取地址时，把通报从“约 N 秒后自动重试”切换为
+   *  “正在自动重试”。revision 不变（这不是一次新的失败事件），只换引用让 UI
+   *  订阅者刷新文案。 */
+  function markAutoRetryStarted(generation: number) {
+    if (generation !== autoRetryGeneration) return;
+    const failure = state.lastPlaybackFailure;
+    if (!failure || !failure.autoRetry) return;
+    state.lastPlaybackFailure = {
+      ...failure,
+      autoRetry: { ...failure.autoRetry, waitMs: 0 },
+    };
+    notify();
+  }
+
+  /** 恢复链被用户切歌/暂停取消：清掉“计划中的自动重试”，避免通报一直停在
+   *  “即将自动重试”的假状态。 */
+  function clearScheduledAutoRetry(generation?: number): boolean {
+    if (generation !== undefined && generation !== autoRetryGeneration) {
+      return false;
+    }
+    const failure = state.lastPlaybackFailure;
+    if (!failure || !failure.autoRetry) return false;
+    state.lastPlaybackFailure = { ...failure, autoRetry: null };
+    return true;
+  }
+
+  /** 作废所有在途风控等待，并清掉当前通报里的倒计时。 */
+  function cancelAutoRetry() {
+    autoRetryGeneration += 1;
+    if (!state.lastPlaybackFailure?.autoRetry) return;
+    // 已经在取址或 play() 的自动尝试也必须取消，不能只让等待分支稍后失效。
+    playSeq += 1;
+    destroyActiveMedia();
+    state.loading = false;
+    state.playing = false;
+    clearScheduledAutoRetry();
     notify();
   }
 
@@ -657,37 +738,46 @@ export function createPlaybackEngine(
     });
   }
 
+  /** 与 prefetchNextSongUrl 同一口径的“下一首”歌曲 id；不可预测/没有则 null。 */
+  function nextQueueSongId(): number | null {
+    if (state.playMode !== "loop-list" || state.queue.length < 2) return null;
+    const nextSong = state.queue[(state.index + 1) % state.queue.length];
+    if (!nextSong || nextSong.id === getCurrentSong()?.id) return null;
+    return nextSong.id;
+  }
+
   function prefetchNextSongUrl() {
-    // 只在列表循环下预取确定候选；随机不可预测，单曲循环无需下一首。
-    if (state.playMode !== "loop-list" || state.queue.length < 2) return;
-    const nextIndex = (state.index + 1) % state.queue.length;
-    const nextSong = state.queue[nextIndex];
-    if (!nextSong || nextSong.id === getCurrentSong()?.id) return;
-    prefetchSongUrl(nextSong.id);
+    // 风控冷却期间不要再给上游添请求（预取会抢在用户真正的播放请求之前）。
+    if (now() < prefetchCooldownUntil) return;
+    const nextSongId = nextQueueSongId();
+    if (nextSongId === null) return;
+    prefetchSongUrl(nextSongId);
     // 除了 URL，还尽量预热下一首的媒体管线：WebKitGTK 首次 play() 的管线
     // 初始化会占主线程 20–30ms，提前在空闲时做掉可避免切歌长帧。
     if (!activeHandle) return;
-    const prefetchedSongId = nextSong.id;
+    const prefetchedSongId = nextSongId;
     void resolveSongUrl(prefetchedSongId)
       .then((url) => {
         if (!url) return;
         // 取地址是异步的：期间可能已经切歌/改队列，目标已不再是“下一首”时
         // 不要再预热，避免为已经跳过的歌曲白白建流、抢当前播放的带宽。
-        const stillNext =
-          state.playMode === "loop-list" &&
-          state.queue.length >= 2 &&
-          state.queue[(state.index + 1) % state.queue.length]?.id ===
-            prefetchedSongId;
-        if (stillNext) options.runtime.preload?.(url);
+        if (nextQueueSongId() !== prefetchedSongId) return;
+        options.runtime.preload?.(url);
       })
       .catch(() => {
         // 预热失败不影响当前播放；真正切歌时会照常取地址/重试。
       });
   }
 
+  /** 记录一次风控失败并开启预取冷却。 */
+  function noteRiskControlCooldown() {
+    prefetchCooldownUntil = now() + RISK_CONTROL_PREFETCH_COOLDOWN_MS;
+  }
+
   function notifyAuthEpochChanged(epoch: number) {
     if (epoch === authEpoch) return;
     authEpoch = epoch;
+    autoRetryGeneration += 1;
     // 认证边界变化后，旧账号已装载的 source 与尚未完成的装载都不能
     // 被新账号继续 resume/提交状态。队列保留，用户可显式重新播放。
     playSeq += 1;
@@ -707,6 +797,7 @@ export function createPlaybackEngine(
     state.lastPlaybackFailure = null;
     playFailCount = 0;
     failStreakSongs = [];
+    prefetchCooldownUntil = 0;
     // 新会话的失败重试预算不能继承旧账号。
     resetRetryBudget();
     notify();
@@ -727,6 +818,7 @@ export function createPlaybackEngine(
    *  无已装载媒体时 no-op；失败不改队列/索引、不自动切歌，但会通报给 UI。 */
   function reloadCurrent() {
     if (!getCurrentSong() || state.currentSongId === null) return;
+    cancelAutoRetry();
     // playbackRequested 已在 loadAndPlay 里于 await 之前记录本次装载的播放意图，
     // 这里不能再把 state.loading 当作意图：暂停态切档重载在取 URL 期间同样会
     // 置 loading=true，二次切档会被误判成“继续播放”而自动出声。
@@ -884,9 +976,107 @@ export function createPlaybackEngine(
     if (recordHistory) pushHistory(song);
     playFailCount = 0;
     failStreakSongs = [];
+    // 播放已恢复：解除风控预取冷却，预取下一首重新可用。
+    prefetchCooldownUntil = 0;
     resetRetryBudget();
     prefetchNextSongUrl();
     notify();
+  }
+
+  /**
+   * 风控/限流失败的自动恢复。
+   *
+   * 与普通同歌重试不同：风控要等的是上游的限制窗口，只等一次通常不够，而用户
+   * 手动反复点“重试”只会继续撞墙。这里按 {@link RISK_CONTROL_RETRY_WAITS_MS}
+   * 的阶梯留在同一首歌上重试，并把“下一次自动重试的时间”写进失败通报，UI 因此
+   * 能如实显示恢复进度；用户切歌/暂停会递增 playSeq，整条恢复链在等待结束处
+   * 自动作废。阶梯用完才交给 UI 的手动重试入口。
+   */
+  async function recoverFromRiskControl(
+    song: Song,
+    error: unknown,
+    requestSeq: number,
+    clearFailureOnSuccess: boolean,
+    recordHistoryOnSuccess: boolean,
+    stage: Extract<PlaybackFailureStage, "load" | "stream">,
+  ): Promise<void> {
+    const generation = ++autoRetryGeneration;
+    noteRiskControlCooldown();
+    let lastError = error;
+    let ladderAttempt = 0;
+    // 每次重试本身会递增 playSeq；等待结束时必须拿“本次重试所在代际”比较，
+    // 否则会把自身上一次重试误判成用户切歌。
+    let attemptSeq = requestSeq;
+    while (ladderAttempt < RISK_CONTROL_RETRY_WAITS_MS.length) {
+      const waitMs = RISK_CONTROL_RETRY_WAITS_MS[ladderAttempt];
+      recordPlaybackFailure(stage, lastError, {
+        failCount: 0,
+        stopped: false,
+        advancedToNext: false,
+        retryCount,
+        wasPlaying: true,
+        recentSongNames: [],
+        autoRetry: {
+          attempt: ladderAttempt + 1,
+          limit: RISK_CONTROL_RETRY_WAITS_MS.length,
+          waitMs,
+        },
+      });
+      await wait(waitMs);
+      if (generation !== autoRetryGeneration) return;
+      if (attemptSeq !== playSeq || getCurrentSong()?.id !== song.id) {
+        // 用户切歌/暂停/重新点播：计划中的自动重试已不存在。
+        if (clearScheduledAutoRetry(generation)) notify();
+        return;
+      }
+      ladderAttempt += 1;
+      retryCount += 1;
+      markAutoRetryStarted(generation);
+      try {
+        const started = await loadAndPlay(song.id, true, clearFailureOnSuccess);
+        if (generation !== autoRetryGeneration) return;
+        if (!started || getCurrentSong()?.id !== song.id) {
+          if (clearScheduledAutoRetry(generation)) notify();
+          return;
+        }
+        // 成功恢复后不能留下“正在自动重试”的旧进度；流中断路径没有
+        // clearFailureOnSuccess 标记，也必须在同一首歌真正起播后清掉。
+        if (state.lastPlaybackFailure?.autoRetry) {
+          clearStalePlaybackFailure();
+        }
+        settleSuccessfulLoad(song, recordHistoryOnSuccess);
+        return;
+      } catch (retryError) {
+        // loadAndPlay 只在当前代际失败时 reject（过时请求返回 false），
+        // 因此这里的失败必然属于本次自动重试。
+        if (generation !== autoRetryGeneration) return;
+        attemptSeq = playSeq;
+        if (readFailureCause(retryError).kind !== RISK_CONTROL_KIND) {
+          // 后续变成网络/媒体/授权等另一类错误时，继续等 20/60 秒没有依据；
+          // 立即交给各自已有的最终处理（会话级停歌或歌曲级自动跳歌）。
+          if (stage === "stream") {
+            await finalizeStreamFailure(retryError);
+          } else {
+            await finalizeLoadFailure(retryError);
+          }
+          return;
+        }
+        lastError = retryError;
+        noteRiskControlCooldown();
+      }
+    }
+    // 阶梯用完：如实通报最后一次失败（retryCount = 实际自动重试次数）。
+    playFailCount = 0;
+    failStreakSongs = [];
+    recordPlaybackFailure(stage, lastError, {
+      failCount: 0,
+      stopped: false,
+      advancedToNext: false,
+      retryCount,
+      wasPlaying: true,
+      recentSongNames: [],
+    });
+    resetRetryBudget();
   }
 
   /**
@@ -901,6 +1091,19 @@ export function createPlaybackEngine(
   ) {
     const requestSeq = playSeq;
     const kind = readFailureCause(error).kind;
+    if (kind === RISK_CONTROL_KIND && retrySongId === song.id) {
+      // 风控不是“多试一次”能解决的问题，而是需要等上游限制窗口过去：
+      // 走逐次拉长的自动恢复链，期间不切歌、不预取。
+      await recoverFromRiskControl(
+        song,
+        error,
+        requestSeq,
+        clearFailureOnSuccess,
+        true,
+        "load",
+      );
+      return;
+    }
     if (
       kind !== null &&
       RETRYABLE_KINDS.has(kind) &&
@@ -918,6 +1121,19 @@ export function createPlaybackEngine(
         return;
       }
       if (outcome.status === "failed") {
+        if (readFailureCause(outcome.error).kind === RISK_CONTROL_KIND) {
+          // 第一次普通重试若恰好碰上风控，也必须进入同一恢复阶梯；不能因为
+          // 首次失败是 Network/Media 就把它当成普通失败丢掉。
+          await recoverFromRiskControl(
+            song,
+            outcome.error,
+            playSeq,
+            clearFailureOnSuccess,
+            true,
+            "load",
+          );
+          return;
+        }
         await finalizeLoadFailure(outcome.error);
         return;
       }
@@ -966,6 +1182,17 @@ export function createPlaybackEngine(
         return;
       }
       if (outcome.status === "failed") {
+        if (readFailureCause(outcome.error).kind === RISK_CONTROL_KIND) {
+          await recoverFromRiskControl(
+            song,
+            outcome.error,
+            playSeq,
+            false,
+            false,
+            "stream",
+          );
+          return;
+        }
         await finalizeStreamFailure(outcome.error);
         return;
       }
@@ -1093,6 +1320,7 @@ export function createPlaybackEngine(
 
   /** 完全停止并清理当前媒体。 */
   function stopPlayback() {
+    autoRetryGeneration += 1;
     playSeq += 1;
     destroyActiveMedia();
     options.runtime.cancelPreload?.();
@@ -1110,6 +1338,8 @@ export function createPlaybackEngine(
   async function retryFailedPlayback() {
     const failure = state.lastPlaybackFailure;
     if (!failure) return;
+    // 手动重试立即终止旧恢复链；旧等待晚到时不能清掉这轮新通报。
+    autoRetryGeneration += 1;
     // 用户点重试是新的一轮尝试：完整重试预算。
     resetRetryBudget();
     // 失败歌曲仍是当前已装载媒体（切档失败后未换歌）：按失败前的播放/暂停意图重载。
@@ -1143,6 +1373,14 @@ export function createPlaybackEngine(
   /** 清除播放失败通报（用户关闭提示）；不清空连续失败计数。 */
   function dismissPlaybackFailure() {
     if (state.lastPlaybackFailure === null) return;
+    // 关闭进度提示同时停止自动请求；之后只保留用户主动重试。
+    autoRetryGeneration += 1;
+    if (state.lastPlaybackFailure.autoRetry) {
+      playSeq += 1;
+      destroyActiveMedia();
+      state.loading = false;
+      state.playing = false;
+    }
     state.lastPlaybackFailure = null;
     notify();
   }
@@ -1162,6 +1400,7 @@ export function createPlaybackEngine(
   function removeFromQueue(absIdx: number) {
     if (absIdx < 0 || absIdx >= state.queue.length) return;
     const removingCurrent = absIdx === state.index;
+    if (removingCurrent) cancelAutoRetry();
     state.queue = state.queue.filter((_, i) => i !== absIdx);
     // 修正 index：若移除项在当前之前，index-1。
     if (absIdx < state.index) {
@@ -1202,6 +1441,75 @@ export function createPlaybackEngine(
     notify();
   }
 
+  /**
+   * 在队列的指定绝对位置插入一首歌（用于「从队列移除」之后的撤销）。
+   *
+   * 插入位置在当前曲之前/当前曲位置时，当前曲索引整体后移一位，保证
+   * “正在播放的那首歌”不被替换；越界位置会被夹到 [0, length]，因此撤销时
+   * 队列已经变化也不会抛错或插到非法位置。只做队列结构修改，不触发播放。
+   */
+  function insertIntoQueue(absIdx: number, song: Song) {
+    // 非有限索引会让 Math.min/max 变成 NaN：宁可 no-op，也不要把队列指针写坏。
+    if (!Number.isSafeInteger(absIdx)) return;
+    const previousNextSongId = nextQueueSongId();
+    const target = Math.max(0, Math.min(absIdx, state.queue.length));
+    const nextQueue = [...state.queue];
+    nextQueue.splice(target, 0, song);
+    state.queue = nextQueue;
+    if (state.index >= 0 && target <= state.index) {
+      state.index += 1;
+    }
+    // 「清空待播」撤销会逐首插回：下一首没变时没有必要反复重建预取/预热。
+    if (nextQueueSongId() !== previousNextSongId) prefetchNextSongUrl();
+    notify();
+  }
+
+  /** 用给定队列与索引恢复队列结构（队列级撤销用），不改变当前媒体/播放状态。
+   *
+   * 不变量：有已装载媒体时，`queue[index]` 必须是那首正在播放的歌。因此恢复
+   * 后优先把 index 指回 `currentSongId` 在恢复队列里的位置；如果那首歌已不在
+   * 恢复队列里，就停止播放（否则播放条/队列会各说各话）。空队列同样停止媒体。 */
+  function restoreQueueSnapshot(queue: readonly Song[], index: number) {
+    const safeIndex = Number.isSafeInteger(index) ? index : 0;
+    if (queue.length === 0) {
+      state.queue = [];
+      state.index = -1;
+      stopPlayback();
+      notify();
+      return;
+    }
+    state.queue = [...queue];
+    if (state.currentSongId !== null) {
+      // 队列允许 duplicate songId。若快照原索引正好指向当前歌曲，就保留该
+      // occurrence；否则才按 id 查找当前实际播放的那一首。
+      const snapshotIndex = Math.max(
+        0,
+        Math.min(safeIndex, state.queue.length - 1),
+      );
+      const loadedIndex =
+        state.queue[snapshotIndex]?.id === state.currentSongId
+          ? snapshotIndex
+          : state.queue.findIndex((song) => song.id === state.currentSongId);
+      if (loadedIndex < 0) {
+        stopPlayback();
+      } else {
+        state.index = loadedIndex;
+        prefetchNextSongUrl();
+        notify();
+        return;
+      }
+    }
+    // 保留“有队列但没有当前曲”的显式状态。restoreQueueSnapshot 用于撤销
+    // 队列级动作，若快照本来没有当前曲，把 -1 改成 0 会让 UI 凭空显示第一首
+    // 已暂停歌曲，并破坏队列与媒体状态的一致性。
+    state.index =
+      safeIndex < 0
+        ? -1
+        : Math.max(0, Math.min(safeIndex, state.queue.length - 1));
+    prefetchNextSongUrl();
+    notify();
+  }
+
   /** 清空“下一首”列表，保留当前歌曲和已播放部分。 */
   function clearQueue() {
     if (state.index >= 0 && state.index < state.queue.length) {
@@ -1222,6 +1530,7 @@ export function createPlaybackEngine(
 
   async function playList(songs: Song[], startIndex = 0) {
     if (songs.length === 0) return;
+    cancelAutoRetry();
     resetRetryBudget();
     state.queue = [...songs];
     state.index = Math.max(0, Math.min(startIndex, songs.length - 1));
@@ -1231,6 +1540,7 @@ export function createPlaybackEngine(
 
   /** 播放单首歌曲（不替换队列，但加入当前索引的下一位） */
   async function playSong(song: Song) {
+    cancelAutoRetry();
     resetRetryBudget();
     const existIdx = state.queue.findIndex((s) => s.id === song.id);
     if (existIdx >= 0) {
@@ -1248,6 +1558,7 @@ export function createPlaybackEngine(
 
   /** 播放/暂停；待加载请求被取消后再次播放时会重新取当前歌曲 URL。 */
   function togglePlay() {
+    cancelAutoRetry();
     // 显式用户手势开启新的一轮播放尝试：上次被取消的重试预算不再占用。
     resetRetryBudget();
     // loading 且无播放意图只出现在“暂停态切档重载”的取 URL 窗口：这时的
@@ -1277,6 +1588,7 @@ export function createPlaybackEngine(
 
   /** 暂停，同时取消尚未完成的取 URL/装载请求。 */
   function pause() {
+    cancelAutoRetry();
     playSeq += 1;
     playbackRequested = false;
     // 暂停取消了在途的重试等待/装载：预算归零，下次播放从完整重试机会开始。
@@ -1293,6 +1605,7 @@ export function createPlaybackEngine(
    *  autoRecovery=true 仅由失败恢复链内部使用：成功后不得清掉失败通报。 */
   async function next(autoRecovery = false) {
     if (state.queue.length === 0) return;
+    if (!autoRecovery) cancelAutoRetry();
     // 用户手动切歌是新一轮尝试；失败恢复链内部的自动切歌必须保留预算，
     // 否则单曲队列会在“自动重载同一首”里无限重试。
     if (!autoRecovery) resetRetryBudget();
@@ -1322,6 +1635,7 @@ export function createPlaybackEngine(
   /** 上一首 */
   async function prev() {
     if (state.queue.length === 0) return;
+    cancelAutoRetry();
     resetRetryBudget();
 
     // 若已播放 > 3 秒，则"上一首"=回到当前歌曲开头
@@ -1395,6 +1709,7 @@ export function createPlaybackEngine(
 
   function destroy() {
     // 取消所有尚未完成的装载，避免 destroy 之后仍创建/启动新代际媒体。
+    autoRetryGeneration += 1;
     playSeq += 1;
     destroyActiveMedia();
     // 引擎销毁后 pooled 媒体元素不再有人复用：释放预热 source，避免它在
@@ -1403,6 +1718,7 @@ export function createPlaybackEngine(
     songUrlCache.clear();
     songUrlRequests.clear();
     listeners.clear();
+    prefetchCooldownUntil = 0;
     resetRetryBudget();
   }
 
@@ -1425,13 +1741,16 @@ export function createPlaybackEngine(
     setVolume,
     toggleMute,
     removeFromQueue,
+    insertIntoQueue,
     reorderQueue,
+    restoreQueueSnapshot,
     clearQueue,
     getNextUp,
     notifyAuthEpochChanged,
     invalidateSongUrlCache,
     reloadCurrent,
     retryFailedPlayback,
+    cancelAutoRetry,
     dismissPlaybackFailure,
     destroy,
   };

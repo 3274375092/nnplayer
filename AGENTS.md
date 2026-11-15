@@ -15,3 +15,7 @@ This is a single-context repository using a root `CONTEXT.md` and `docs/adr/`. S
 ### Rust style
 
 Rust code under `src-tauri/` follows the Google Rust Style Guide, adapted for this repository. See `docs/agents/rust-style.md`.
+
+### Research
+
+Hard rule: do not write from memory. Check crate versions and APIs, platform behavior (winit / wgpu / cosmic-text, WebView2 / WebKitGTK), algorithms, and unfamiliar errors against official docs, upstream source, and upstream issues before writing, and cite the sources. Conclusions that affect design, dependencies, or public API are recorded in `docs/research/<topic>.md`. See `docs/agents/research.md`.

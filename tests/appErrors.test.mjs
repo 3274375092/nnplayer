@@ -48,6 +48,7 @@ function playbackFailure(overrides = {}) {
     retryCount: 0,
     recentSongNames: [],
     wasPlaying: true,
+    autoRetry: null,
     ...overrides,
   };
 }
@@ -520,6 +521,41 @@ test("未自动跳歌时重试次数同样可见（风控等不切歌的失败�
   );
   assert.match(described.hint, /（已自动重试 1 次）/);
   assert.doesNotMatch(described.hint, /已自动跳到下一首/);
+});
+
+test("风控自动恢复：排定下一次重试时说明第几次与大约多久", () => {
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "RiskControl",
+      message: "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+      retryCount: 1,
+      autoRetry: { attempt: 2, limit: 3, waitMs: 20_000 },
+    }),
+  );
+  assert.equal(described.title, "《晴天》播放被网易云暂时限制");
+  assert.equal(
+    described.hint,
+    "约 20 秒后开始第 2/3 次自动重试，无需手动操作；可以停止自动重试。",
+  );
+  assert.equal(described.retryable, true);
+  assert.doesNotMatch(described.hint, /已自动重试 2 次/);
+  assert.match(described.detail, /网络环境存在风险/);
+});
+
+test("风控自动恢复：正在重试时不说“约 N 秒后”", () => {
+  const described = describePlaybackFailure(
+    playbackFailure({
+      kind: "RiskControl",
+      message: "网易云限制了请求（风控）: 检测到您的网络环境存在风险",
+      retryCount: 1,
+      autoRetry: { attempt: 1, limit: 3, waitMs: 0 },
+    }),
+  );
+  assert.equal(described.title, "《晴天》播放被网易云暂时限制");
+  assert.equal(
+    described.hint,
+    "正在第 1/3 次自动重试，无需手动操作；可以停止自动重试。",
+  );
 });
 
 test("Timeout 的播放失败：标题带歌名 + 加载超时，可重试", () => {

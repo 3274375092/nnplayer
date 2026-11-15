@@ -317,7 +317,7 @@ async fn finalize_login(
     ensure_business_success(resp, &[200, 803], "登录")?;
 
     // 新登录不能混入旧账号 Cookie；只接受本次登录响应下发的会话字段。
-    let merged_cookie = merge_cookie(None, resp)
+    let mut merged_cookie = merge_cookie(None, resp)
         .filter(|cookie| !cookie.trim().is_empty())
         .ok_or_else(|| AppError::Internal("未拿到登录 Cookie".to_string()))?;
 
@@ -329,6 +329,11 @@ async fn finalize_login(
             .map_err(map_ncm_err)?
     };
     ensure_business_success(&account_resp, &[200], "读取用户资料")?;
+    // 首次业务请求可能下发真实 NMTID；它属于会话身份，必须与登录 Cookie
+    // 一起持久化，不能只保留登录接口自己的 Set-Cookie。
+    if let Some(with_device_identity) = merge_cookie(Some(&merged_cookie), &account_resp) {
+        merged_cookie = with_device_identity;
+    }
     let (user_id, nickname, avatar_url) = extract_profile(&account_resp)
         .or_else(|| extract_profile(resp))
         .ok_or(AppError::Unauthorized)?;
@@ -403,7 +408,10 @@ fn extract_profile(resp: &ApiResponse) -> Option<(u64, String, Option<Cow<'_, st
 }
 
 /// 从 ApiResponse.cookie（Set-Cookie 数组）中合并出新的 cookie 字符串。
-fn merge_cookie(prev: Option<&str>, resp: &ApiResponse) -> Option<String> {
+///
+/// 登录链路与业务链路（如取播放地址时服务端刷新 NMTID）共用：保持设备会话
+/// 标识等上游下发 cookie 在一次会话内稳定，而不是被丢弃后逐请求随机生成。
+pub(crate) fn merge_cookie(prev: Option<&str>, resp: &ApiResponse) -> Option<String> {
     use std::collections::HashMap;
 
     let prev_empty = prev.map(str::is_empty).unwrap_or(true);
@@ -516,6 +524,7 @@ pub async fn save_cookie(
             .map_err(map_ncm_err)?
     };
     ensure_business_success(&resp, &[200], "Cookie 登录")?;
+    let merged_cookie = merge_cookie(Some(&payload.cookie), &resp).unwrap_or(payload.cookie);
     let (user_id, nickname, avatar_url) = extract_profile(&resp).ok_or(AppError::Unauthorized)?;
 
     persist_session_meta(
@@ -523,18 +532,18 @@ pub async fn save_cookie(
         &nickname,
         avatar_url.as_deref(),
         LoginMethod::Cookie,
-        &payload.cookie,
+        &merged_cookie,
     )?;
-    if let Err(e) = persist_cookie(&app, &payload.cookie) {
+    if let Err(e) = persist_cookie(&app, &merged_cookie) {
         log::warn!("[login] 写入兼容 Cookie store 失败: {e}");
     }
 
-    state.api.write().await.set_cookie(payload.cookie.clone());
+    state.api.write().await.set_cookie(merged_cookie.clone());
     {
         let mut auth = state.auth.lock().await;
         auth.user_id = Some(user_id);
         auth.nickname = Some(nickname.clone());
-        auth.cookie = Some(payload.cookie);
+        auth.cookie = Some(merged_cookie);
         auth.login_method = Some(LoginMethod::Cookie.to_string());
         auth.avatar_url = avatar_url.clone().map(|c| c.into_owned());
     }
@@ -765,6 +774,20 @@ mod tests {
         assert!(merged.contains("MUSIC_U=new"));
         assert!(merged.contains("__csrf=token"));
         assert!(!merged.contains("Path"));
+    }
+
+    #[test]
+    fn later_response_cookie_updates_device_identity_without_dropping_login() {
+        let resp = response(
+            json!({ "code": 200 }),
+            vec!["NMTID=server-issued; Path=/; HttpOnly"],
+        );
+        let merged = merge_cookie(Some("MUSIC_U=token; __csrf=csrf"), &resp)
+            .expect("cookie should be merged");
+
+        assert!(merged.contains("MUSIC_U=token"), "cookie={merged}");
+        assert!(merged.contains("__csrf=csrf"), "cookie={merged}");
+        assert!(merged.contains("NMTID=server-issued"), "cookie={merged}");
     }
 
     // ============================================================
