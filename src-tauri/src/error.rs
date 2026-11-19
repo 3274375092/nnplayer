@@ -47,7 +47,48 @@ pub enum AppError {
 
 impl From<reqwest::Error> for AppError {
     fn from(error: reqwest::Error) -> Self {
-        Self::Network(error.to_string())
+        Self::Network(request_error_detail(&error).to_string())
+    }
+}
+
+/// 将 HTTP 错误的底层原因转成可展示的技术详情；不把原始 URL 或错误链发给前端。
+fn request_error_detail(error: &reqwest::Error) -> &'static str {
+    use std::error::Error as _;
+    use std::io::{Error, ErrorKind};
+
+    if error.is_timeout() {
+        return "请求超时";
+    }
+
+    let mut sources = error.source();
+    while let Some(cause) = sources {
+        let io_error = cause.downcast_ref::<Error>();
+        // rustls 的错误有时在 io::Error 的 payload 内，而不在 source 链里。
+        if cause.is::<rustls::Error>()
+            || io_error
+                .and_then(Error::get_ref)
+                .is_some_and(|payload| payload.is::<rustls::Error>())
+        {
+            return "TLS 握手或证书校验失败";
+        }
+        if let Some(io_error) = io_error {
+            match io_error.kind() {
+                ErrorKind::ConnectionRefused => return "连接被拒绝",
+                ErrorKind::ConnectionReset => return "连接被重置",
+                ErrorKind::NetworkUnreachable => return "网络不可达",
+                ErrorKind::HostUnreachable => return "目标主机不可达",
+                _ => {}
+            }
+        }
+        sources = cause.source();
+    }
+
+    if error.is_connect() {
+        "未能建立连接"
+    } else if error.is_body() || error.is_decode() {
+        "读取响应失败"
+    } else {
+        "HTTP 请求未完成"
     }
 }
 
@@ -84,7 +125,7 @@ pub type AppResult<T> = Result<T, AppError>;
 pub(crate) fn map_ncm_err(e: ncm_api::NcmError) -> AppError {
     match e {
         ncm_api::NcmError::AuthRequired(_) => AppError::Unauthorized,
-        ncm_api::NcmError::Http(error) => AppError::Network(error.to_string()),
+        ncm_api::NcmError::Http(error) => error.into(),
         ncm_api::NcmError::Timeout(message) => AppError::Network(message),
         ncm_api::NcmError::Json(error) => AppError::Json(error),
         ncm_api::NcmError::InvalidParam(message) => AppError::InvalidParam(message),
@@ -299,6 +340,32 @@ mod tests {
         let v = serialize_err(&e);
         assert_eq!(v["kind"], "Network");
         assert!(v["message"].as_str().unwrap().contains("请求超时"));
+    }
+
+    #[tokio::test]
+    async fn map_http_timeout_keeps_safe_diagnostic() {
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        // 监听端口但不响应，确保请求超时而不是连接被拒绝。
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
+        let addr = listener.local_addr().expect("read loopback address");
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .expect("build test HTTP client");
+        let error = client
+            .get(format!("http://{addr}/test?token=private"))
+            .send()
+            .await
+            .expect_err("listener must not send a response");
+
+        let error = map_ncm_err(ncm_api::NcmError::Http(error));
+        let encoded = serialize_err(&error);
+        assert_eq!(encoded["kind"], "Network");
+        assert_eq!(encoded["message"], "网络请求失败: 请求超时");
     }
 
     // RiskControl → RiskControl：上游 -460 的业务文案必须保真到 message
