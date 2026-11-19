@@ -19,6 +19,7 @@ mod song_downlist;
 mod song_download_url;
 mod song_download_url_v1;
 mod song_dynamic_cover;
+mod song_like;
 mod song_like_check;
 mod song_lyrics_mark;
 mod song_lyrics_mark_add;
@@ -46,6 +47,7 @@ mod search_hot_detail;
 mod search_match;
 mod search_multimatch;
 mod search_suggest;
+mod search_suggest_pc;
 
 // ---- 听歌识曲 ----
 mod audio_match;
@@ -114,6 +116,7 @@ mod album_sublist;
 // ---- 评论相关 ----
 mod comment;
 mod comment_album;
+mod comment_delete;
 mod comment_dj;
 mod comment_event;
 mod comment_floor;
@@ -125,6 +128,7 @@ mod comment_music;
 mod comment_mv;
 mod comment_new;
 mod comment_playlist;
+mod comment_reply;
 mod comment_video;
 
 // ---- 推荐相关 ----
@@ -225,6 +229,11 @@ mod dj_category_excludehot;
 mod dj_category_recommend;
 mod dj_catelist;
 mod dj_detail;
+mod dj_difm_all_style_channel;
+mod dj_difm_channel_subscribe;
+mod dj_difm_channel_unsubscribe;
+mod dj_difm_playing_tracks_list;
+mod dj_difm_subscribe_channels_get;
 mod dj_hot;
 mod dj_paygift;
 mod dj_personalize_recommend;
@@ -396,6 +405,7 @@ mod voice_lyric;
 mod voicelist_detail;
 mod voicelist_list;
 mod voicelist_list_search;
+mod voicelist_my_created;
 mod voicelist_search;
 mod voicelist_trans;
 

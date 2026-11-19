@@ -1,34 +1,45 @@
 /// 中间件配置 - CORS 和限流
 use axum::http::{HeaderValue, Method};
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 /// 创建 CORS 中间件层
 ///
-/// - `origin`: 允许的 Origin，None 表示允许所有
+/// `origin` 支持逗号分隔的来源列表；未配置或单独指定 `*` 时允许所有来源，但不允许凭据。
 pub fn cors_layer(origin: Option<&str>) -> CorsLayer {
-    let layer = CorsLayer::new()
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers(Any)
-        .allow_credentials(false);
+    let layer = CorsLayer::new().allow_methods([
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::DELETE,
+        Method::OPTIONS,
+    ]);
 
-    match origin {
-        Some(o) => {
-            if let Ok(val) = o.parse::<HeaderValue>() {
-                layer
-                    .allow_credentials(true)
-                    .allow_origin(AllowOrigin::exact(val))
-            } else {
-                tracing::warn!("Invalid CORS origin configuration; denying cross-origin requests");
-                layer.allow_origin(AllowOrigin::list(Vec::<HeaderValue>::new()))
+    let Some(origin) = origin.map(str::trim).filter(|origin| *origin != "*") else {
+        return layer.allow_headers(Any).allow_origin(Any);
+    };
+
+    let origins: Option<Vec<HeaderValue>> = origin
+        .split(',')
+        .map(str::trim)
+        .map(|origin| {
+            // HeaderValue 只检查字符；路径、用户信息等都不是序列化的来源。
+            let url = reqwest::Url::parse(origin).ok()?;
+            if url.origin().ascii_serialization() != origin {
+                return None;
             }
+            HeaderValue::from_str(origin).ok()
+        })
+        .collect();
+
+    match origins {
+        Some(origins) => layer
+            .allow_credentials(true)
+            .allow_headers(AllowHeaders::mirror_request())
+            .allow_origin(AllowOrigin::list(origins)),
+        None => {
+            tracing::warn!("Invalid CORS origin configuration; denying cross-origin requests");
+            layer.allow_origin(AllowOrigin::list(Vec::<HeaderValue>::new()))
         }
-        None => layer.allow_origin(Any),
     }
 }
 
@@ -166,4 +177,77 @@ pub async fn rate_limit_middleware(
     }
 
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cors_layer;
+    use axum::body::Body;
+    use axum::http::{header, HeaderMap, Method, Request};
+    use axum::{routing::get, Router};
+    use tower::ServiceExt;
+
+    async fn preflight(config: Option<&str>, origin: &str) -> HeaderMap {
+        let request = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/")
+            .header(header::ORIGIN, origin)
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+            .body(Body::empty())
+            .expect("build CORS preflight request");
+        Router::new()
+            .route("/", get(|| async {}))
+            .layer(cors_layer(config))
+            .oneshot(request)
+            .await
+            .expect("serve preflight")
+            .into_parts()
+            .0
+            .headers
+    }
+
+    #[tokio::test]
+    async fn configured_origins_allow_credentials_only_for_listed_origins() {
+        let allowlist = Some("https://a.example, https://b.example, http://[::1]:1420");
+        for origin in [
+            "https://a.example",
+            "https://b.example",
+            "http://[::1]:1420",
+        ] {
+            let headers = preflight(allowlist, origin).await;
+            assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], origin);
+            assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+            assert_eq!(
+                headers[header::ACCESS_CONTROL_ALLOW_HEADERS],
+                "content-type"
+            );
+        }
+        let headers = preflight(allowlist, "https://unlisted.example").await;
+        assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
+
+    #[tokio::test]
+    async fn standalone_wildcard_does_not_allow_credentials() {
+        for config in [None, Some("*")] {
+            let headers = preflight(config, "https://a.example").await;
+            assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+            assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_allowlist_fails_closed() {
+        for config in [
+            "",
+            "https://a.example, *",
+            "https://a.example, in\nvalid",
+            "https://a.example, not an origin",
+            "https://a.example, https://b.example/path",
+            "https://a.example, https://name@b.example",
+        ] {
+            let headers = preflight(Some(config), "https://a.example").await;
+            assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+        }
+    }
 }
