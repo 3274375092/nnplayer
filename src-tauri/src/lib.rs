@@ -22,6 +22,20 @@ use tauri_plugin_store::StoreExt;
 
 /// 应用入口：装配插件、托盘与全局快捷键，注册全部命令并启动。
 pub fn run() {
+    // WebView2 将该进程变量追加到所有窗口的默认参数（包括动态创建的歌词窗）。
+    #[cfg(windows)]
+    {
+        const ARGS: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+        let mut args = std::env::var_os(ARGS).unwrap_or_default();
+        if !args
+            .to_string_lossy()
+            .split_ascii_whitespace()
+            .any(|arg| arg == "--no-proxy-server")
+        {
+            args.push(" --no-proxy-server");
+            std::env::set_var(ARGS, args);
+        }
+    }
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -44,6 +58,28 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default();
 
+    // 音频和封面由 WebView 直接加载，不经过 reqwest。
+    #[cfg(target_os = "linux")]
+    {
+        builder = builder.plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("direct-webview")
+                .on_webview_ready(|webview| {
+                    use webkit2gtk::{NetworkProxyMode, WebViewExt, WebsiteDataManagerExt};
+                    if let Err(err) = webview.with_webview(|view| {
+                        if let Some(manager) = view.inner().website_data_manager() {
+                            manager.set_network_proxy_settings(NetworkProxyMode::NoProxy, None);
+                        } else {
+                            log::error!(
+                                "WebKit website data manager unavailable; direct mode not applied"
+                            );
+                        }
+                    }) {
+                        log::error!("Cannot apply WebKit direct mode: {err}");
+                    }
+                })
+                .build(),
+        );
+    }
     builder = builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             if window.label() == "main" {
@@ -103,6 +139,7 @@ pub fn run() {
             commands::music::search_suggest,
             commands::music::get_daily_recommend,
             commands::music::get_song_url,
+            commands::update::check_update,
             commands::user::get_user_playlists,
             commands::user::get_playlist_detail,
             commands::lyric::get_lyric,

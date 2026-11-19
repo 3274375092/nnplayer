@@ -155,8 +155,8 @@ async fn extract_merged_query(
     }
 
     // 5. 处理 proxy
-    // 注意：request() 现在会直接拒绝 proxy（改由调用方在构造 Client 时配置），
-    // 因此这里的赋值只会得到一个明确的错误，不会形成 SSRF 出口。
+    // 注意：request() 会拒绝显式代理地址，
+    // 保留该参数以返回明确错误，而不是静默忽略。
     if let Some(proxy) = query.params.remove("proxy") {
         query.proxy = Some(proxy);
     }
@@ -372,6 +372,7 @@ pub fn build_app_with_config(client: ApiClient, config: &ServerConfig) -> Router
 /// 启动 HTTP 服务器
 pub async fn start_server(config: ServerConfig) -> Result<(), String> {
     let http_client = reqwest::Client::builder()
+        .no_proxy()
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(12))
         .build()

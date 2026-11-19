@@ -23,7 +23,8 @@
     "core:webview:allow-webview-show",
     "core:webview:allow-set-webview-focus",
     "window-state:default",
-    "updater:default",
+    "updater:allow-download",
+    "updater:allow-install",
     "process:allow-restart"
   ]
 }

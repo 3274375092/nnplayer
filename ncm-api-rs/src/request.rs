@@ -290,6 +290,11 @@ impl ApiClient {
         data: Value,
         options: RequestOption,
     ) -> Result<ApiResponse> {
+        if options.proxy.is_some() {
+            return Err(NcmError::InvalidParam(
+                "per-request proxies are not supported".into(),
+            ));
+        }
         let mut headers = HeaderMap::new();
 
         // IP 伪装
@@ -593,12 +598,6 @@ impl ApiClient {
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
-
-        if options.proxy.is_some() {
-            return Err(NcmError::Unknown(
-                "proxy is no longer supported, configure proxy in the Client upfront".to_string(),
-            ));
-        }
 
         let response = self
             .client

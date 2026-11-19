@@ -67,7 +67,7 @@ test("checkUpdates 在第一个 await 之前同步置为 checking（堵住 close
   assert.match(body, /await\s+closePendingUpdate\s*\(\s*\)/);
   assert.ok(
     body.search(/await\s+closePendingUpdate\s*\(\s*\)/) <
-      body.search(/await\s+check\s*\(/),
+      body.indexOf('"check_update"'),
     "checkUpdates 应先释放旧句柄再发起 check()",
   );
 });

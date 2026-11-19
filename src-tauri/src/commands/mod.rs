@@ -9,6 +9,7 @@
 pub mod auth;
 pub mod lyric;
 pub mod music;
+pub mod update;
 pub mod user;
 pub mod window_geom;
 

@@ -45,9 +45,10 @@ const SONG_URL_RISK_CONTROL_WINDOW: Duration = Duration::from_secs(4);
 /// 风控熔断期间 `get_song_url` 立即返回的用户可读提示。
 const SONG_URL_RISK_CONTROL_HINT: &str = "网易云暂时限制了请求，请稍候再试";
 
-/// 构建共享的 reqwest Client：标准 UA、cookie 存储与连接/总超时。
+/// 构建共享的 reqwest Client：强制直连，保留标准 UA、cookie 存储与连接/总超时。
 pub(crate) fn build_http_client() -> anyhow::Result<Client> {
     Client::builder()
+        .no_proxy()
         .user_agent(USER_AGENT)
         .cookie_store(true)
         .connect_timeout(Duration::from_secs(5))
@@ -388,11 +389,36 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn build_http_client_succeeds() {
+    // 可在启动此测试的进程中设置不可达的 HTTP_PROXY 并清空 NO_PROXY；
+    // 不在测试内修改全局环境，避免污染并行测试。
+    #[tokio::test]
+    async fn shared_http_client_reaches_local_origin() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
         init_rustls();
-        let result = build_http_client();
-        assert!(result.is_ok());
+        let origin = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test origin");
+        let addr = origin.local_addr().expect("origin address");
+        let serve = tokio::spawn(async move {
+            let (mut stream, _) = origin.accept().await.expect("accept direct request");
+            let mut buf = [0; 2048];
+            let count = stream.read(&mut buf).await.expect("read request");
+            assert!(count > 0, "client closed before sending the request");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\ndirect")
+                .await
+                .expect("respond");
+        });
+        let response = build_http_client()
+            .expect("build client")
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("reach origin");
+        assert_eq!(response.text().await.expect("read response"), "direct");
+        serve.await.expect("serve direct request");
     }
 
     #[tokio::test]

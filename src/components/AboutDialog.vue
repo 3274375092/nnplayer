@@ -209,9 +209,10 @@ async function checkUpdates() {
   updateActionError.value = "";
   await closePendingUpdate();
   try {
-    const { check } = await import("@tauri-apps/plugin-updater");
-    // 10s 超时：网络卡住时不让「正在检查…」无限挂着。
-    const update = await check({ timeout: 10_000 });
+    const { Update } = await import("@tauri-apps/plugin-updater");
+    // 后端只创建直连资源；下载与安装继续复用插件的签名验证和资源管理。
+    const metadata = await invoke<ConstructorParameters<typeof Update>[0] | null>("check_update");
+    const update = metadata ? new Update(metadata) : null;
     if (!update) {
       latestVersion.value = "";
       updateStatus.value = "latest";
